@@ -39,6 +39,9 @@ public partial class BrowserNode : ObservableObject
 
     public BrowserNode(string name) => Name = name;
 
+    /// <summary>UI Automation reads the row label; the default would be the type name.</summary>
+    public override string ToString() => IsFolder ? Name : $"{Artist} - {Title}".TrimStart(' ', '-');
+
     /// <summary>Create a leaf node from a track entry, subscribing to live updates.</summary>
     public static BrowserNode FromTrack(TrackEntry track)
     {

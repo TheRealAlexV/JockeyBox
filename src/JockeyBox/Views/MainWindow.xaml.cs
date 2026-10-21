@@ -44,6 +44,7 @@ public partial class MainWindow : Window
         // Karaoke generation flows that need dialogs.
         _vm.SettingsRequested += () => OpenSettings();
         _vm.EngineInstallRequested += OnEngineInstallRequested;
+        _vm.DownloadsRequested += OpenDownloads;
 
         // Sync TreeView selection to the view model (SelectedItem is read-only
         // in XAML so we wire it in code-behind).
@@ -149,9 +150,29 @@ public partial class MainWindow : Window
 
     private void OnSettingsClick(object sender, RoutedEventArgs e) => OpenSettings();
 
+    private DownloadsWindow? _downloadsWindow;
+
+    /// <summary>One queue window per app run; a second request brings it forward.</summary>
+    private void OpenDownloads()
+    {
+        if (_downloadsWindow is { IsLoaded: true })
+        {
+            if (_downloadsWindow.WindowState == WindowState.Minimized)
+                _downloadsWindow.WindowState = WindowState.Normal;
+            _downloadsWindow.Activate();
+            return;
+        }
+
+        _downloadsWindow = new DownloadsWindow(_vm.Downloads) { Owner = this };
+        _downloadsWindow.Closed += (_, _) => _downloadsWindow = null;
+        _downloadsWindow.Show();
+    }
+
     private void OpenSettings()
     {
-        var dialog = new SettingsWindow(_vm.SettingsRef) { Owner = this };
+        // Library tools work on the rows the main window already scans; hand the
+        // settings dialog a getter rather than a second scan.
+        var dialog = new SettingsWindow(_vm.SettingsRef, () => _vm.Tracks, _vm.PlaylistsRef) { Owner = this };
         if (dialog.ShowDialog() == true)
             _vm.OnSettingsSaved();
     }

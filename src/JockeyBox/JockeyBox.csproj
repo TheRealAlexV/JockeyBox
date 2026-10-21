@@ -8,7 +8,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>JockeyBox</RootNamespace>
     <AssemblyName>JockeyBox</AssemblyName>
-    <Version>1.4.0</Version>
+    <Version>1.5.0</Version>
     <!-- Allows building this Windows-targeted WPF app from Linux/WSL -->
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>

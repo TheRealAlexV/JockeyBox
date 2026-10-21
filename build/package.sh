@@ -7,7 +7,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJ="$ROOT/src/JockeyBox/JockeyBox.csproj"
 PUBLISH="$ROOT/dist/publish"
 OUT="$ROOT/dist/installer"
-VERSION="${1:-1.4.0}"
+VERSION="${1:-1.5.0}"
 
 export DOTNET_ROOT="${DOTNET_ROOT:-$HOME/.dotnet}"
 export PATH="$DOTNET_ROOT:$DOTNET_ROOT/tools:$HOME/.dotnet/tools:$PATH"

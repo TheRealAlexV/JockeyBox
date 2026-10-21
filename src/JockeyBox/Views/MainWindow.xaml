@@ -3,6 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:vm="clr-namespace:JockeyBox.ViewModels"
         xmlns:lib="clr-namespace:JockeyBox.Library"
+        xmlns:views="clr-namespace:JockeyBox.Views"
         Title="JockeyBox" Height="820" Width="1280" MinHeight="640" MinWidth="1000"
         Background="{StaticResource WindowBrush}"
         WindowStartupLocation="CenterScreen">
@@ -10,7 +11,9 @@
     <Window.Resources>
         <!-- ======== Deck card (shared by both decks; accent injected per-deck) ======== -->
         <DataTemplate x:Key="DeckCardTemplate" DataType="{x:Type vm:DeckViewModel}">
-            <Border Style="{StaticResource Card}">
+            <!-- Tighter padding than the shared card: the deck cards sit in a
+                 block that shares vertical space with the browser. -->
+            <Border Style="{StaticResource Card}" Padding="12,6">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
@@ -29,15 +32,15 @@
                     </DockPanel>
 
                     <!-- Track info -->
-                    <StackPanel Grid.Row="1" Margin="0,8,0,10">
-                        <TextBlock Text="{Binding TrackTitle}" FontSize="17" FontWeight="SemiBold"
+                    <StackPanel Grid.Row="1" Margin="0,5,0,6">
+                        <TextBlock Text="{Binding TrackTitle}" FontSize="16" FontWeight="SemiBold"
                                    TextTrimming="CharacterEllipsis"/>
                         <TextBlock Text="{Binding TrackDetail}" Foreground="{StaticResource TextDimBrush}"
-                                   TextTrimming="CharacterEllipsis" Margin="0,2,0,0"/>
+                                   FontSize="11" TextTrimming="CharacterEllipsis" Margin="0,1,0,0"/>
                     </StackPanel>
 
                     <!-- Output device -->
-                    <DockPanel Grid.Row="2" Margin="0,0,0,8">
+                    <DockPanel Grid.Row="2" Margin="0,0,0,5">
                         <TextBlock Text="OUTPUT" Width="60" VerticalAlignment="Center"
                                    FontSize="10" Foreground="{StaticResource TextDimBrush}"/>
                         <ComboBox ItemsSource="{Binding Devices}" SelectedItem="{Binding SelectedDevice}"/>
@@ -75,20 +78,107 @@
                 </Grid>
             </Border>
         </DataTemplate>
+
+        <!-- ======== Browser tabs: dim uppercase headers, accent underline ======== -->
+        <Style x:Key="BrowserTab" TargetType="TabItem">
+            <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TabItem">
+                        <Border x:Name="bd" Background="Transparent" Padding="0,0,20,0">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="Auto"/>
+                                </Grid.RowDefinitions>
+                                <ContentPresenter Grid.Row="0" ContentSource="Header"
+                                                  Margin="0,0,0,6"
+                                                  TextBlock.FontSize="11" TextBlock.FontWeight="Bold"/>
+                                <Border x:Name="underline" Grid.Row="1" Height="2"
+                                        Background="Transparent" CornerRadius="1"/>
+                            </Grid>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+                                <Setter TargetName="underline" Property="Background"
+                                        Value="{StaticResource AccentABrush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- ======== Horizontal splitter between the deck block and the browser ========
+             8px hit area, one hairline, a short centred grip. Same family as the
+             vertical splitters inside the source tab panes. -->
+        <Style x:Key="RowSplitter" TargetType="GridSplitter">
+            <Setter Property="Height" Value="8"/>
+            <Setter Property="HorizontalAlignment" Value="Stretch"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Cursor" Value="SizeNS"/>
+            <Setter Property="ResizeDirection" Value="Rows"/>
+            <Setter Property="ResizeBehavior" Value="PreviousAndNext"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="GridSplitter">
+                        <Grid Background="Transparent">
+                            <Border Height="1" VerticalAlignment="Center"
+                                    Background="{StaticResource BorderBrush}"/>
+                            <Border x:Name="grip" Width="34" Height="2" CornerRadius="1"
+                                    HorizontalAlignment="Center" VerticalAlignment="Center"
+                                    Background="#3A4150"/>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="grip" Property="Background"
+                                        Value="{StaticResource AccentABrush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="BrowserTabControl" TargetType="TabControl">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="ItemContainerStyle" Value="{StaticResource BrowserTab}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="TabControl">
+                        <DockPanel>
+                            <Border DockPanel.Dock="Top" Margin="4,0,0,8"
+                                    BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1">
+                                <TabPanel IsItemsHost="True" Margin="0,0,0,0"/>
+                            </Border>
+                            <ContentPresenter x:Name="PART_SelectedContentHost"
+                                              ContentSource="SelectedContent"/>
+                        </DockPanel>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </Window.Resources>
 
     <Grid Margin="12">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>   <!-- header -->
-            <RowDefinition Height="Auto"/>   <!-- decks -->
-            <RowDefinition Height="58"/>     <!-- waveforms -->
-            <RowDefinition Height="Auto"/>   <!-- transport -->
-            <RowDefinition Height="*"/>      <!-- browser + lyrics -->
+            <RowDefinition Height="3*" MinHeight="268"/>   <!-- decks + waveform + transport -->
+            <RowDefinition Height="8"/>      <!-- splitter: deck block <-> browser -->
+            <RowDefinition Height="4*" MinHeight="240"/>   <!-- browser + lyrics -->
             <RowDefinition Height="Auto"/>   <!-- footer -->
         </Grid.RowDefinitions>
 
         <!-- ================= Header ================= -->
-        <DockPanel Grid.Row="0" Margin="0,0,0,10">
+        <DockPanel Grid.Row="0" Margin="0,0,0,8">
             <TextBlock Text="JOCKEY" FontSize="20" FontWeight="Black"/>
             <TextBlock Text="BOX" FontSize="20" FontWeight="Black" Foreground="{StaticResource AccentABrush}"/>
             <TextBlock Text="{Binding LoadedTrackTitle}" Margin="24,0,0,0" FontSize="14"
@@ -98,8 +188,18 @@
                     Click="OnSettingsClick"/>
         </DockPanel>
 
-        <!-- ================= Decks ================= -->
+        <!-- ================= Deck block: decks / waveform / transport =================
+             One star row shared with the browser through the splitter below; the
+             waveform lane is what grows when the user drags the splitter down. -->
         <Grid Grid.Row="1">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>   <!-- deck cards -->
+                <RowDefinition Height="*" MinHeight="32"/>   <!-- waveforms -->
+                <RowDefinition Height="Auto"/>   <!-- transport -->
+            </Grid.RowDefinitions>
+
+        <!-- ================= Decks ================= -->
+        <Grid Grid.Row="0">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="12"/>
@@ -122,12 +222,12 @@
         </Grid>
 
         <!-- ================= Waveform strip ================= -->
-        <Canvas x:Name="WaveformCanvas" Grid.Row="2" Margin="0,6,0,6"
+        <Canvas x:Name="WaveformCanvas" Grid.Row="1" Margin="0,6,0,6"
                 ClipToBounds="True"
                 SizeChanged="OnWaveformSizeChanged"/>
 
         <!-- ================= Unified transport ================= -->
-        <Border Grid.Row="3" Style="{StaticResource Card}" Margin="0,12,0,12">
+        <Border Grid.Row="2" Style="{StaticResource Card}" Margin="0,0,0,0" Padding="12,8">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
@@ -209,20 +309,53 @@
                             FontSize="10" Padding="6,3" Margin="0,0,0,0"
                             Command="{Binding PlayPauseCommand}"
                             ToolTip="Plays both decks simultaneously. Adjust delay until both speakers/headphones sound in phase. The delay is saved per device."/>
+
+                    <!-- Download queue: compact entry point with an active-count badge -->
+                    <Button Command="{Binding ShowDownloadsCommand}" Margin="8,0,0,0"
+                            FontSize="10" Padding="8,3"
+                            ToolTip="Open the download queue">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#x2B07; Downloads" FontSize="10" FontWeight="Bold"
+                                       VerticalAlignment="Center"/>
+                            <Border Background="{StaticResource AccentBBrush}" CornerRadius="7"
+                                    Padding="5,0" Margin="7,0,0,0" VerticalAlignment="Center"
+                                    ToolTip="Items still in the queue">
+                                <Border.Style>
+                                    <Style TargetType="Border">
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding Downloads.ActiveCount}" Value="0">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Border.Style>
+                                <TextBlock Text="{Binding Downloads.ActiveCount}" FontSize="9"
+                                           FontFamily="Consolas" Foreground="{StaticResource WindowBrush}"
+                                           VerticalAlignment="Center"/>
+                            </Border>
+                        </StackPanel>
+                    </Button>
                 </StackPanel>
             </Grid>
         </Border>
+        </Grid>
+
+        <!-- Splitter: drag up for a bigger browser, down for bigger waveforms -->
+        <GridSplitter Grid.Row="2" Style="{StaticResource RowSplitter}"/>
 
         <!-- ================= Browser + Lyrics ================= -->
-        <Grid Grid.Row="4">
+        <Grid Grid.Row="3">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="3*"/>
                 <ColumnDefinition Width="12"/>
                 <ColumnDefinition Width="2*"/>
             </Grid.ColumnDefinitions>
 
-            <!-- Track browser (tree view) -->
+            <!-- Track browser (tree view) + streaming sources -->
             <Border Grid.Column="0" Style="{StaticResource Card}" Padding="8">
+                <TabControl x:Name="BrowserTabs" Style="{StaticResource BrowserTabControl}">
+                <TabItem Header="LIBRARY">
                 <DockPanel>
                     <DockPanel DockPanel.Dock="Top" Margin="4,0,4,8">
                         <TextBlock Text="TRACK BROWSER" FontSize="11" FontWeight="Bold"
@@ -404,6 +537,16 @@
                         </TreeView>
                     </Grid>
                 </DockPanel>
+                </TabItem>
+
+                <TabItem Header="SPOTIFY">
+                    <views:SpotifyView DataContext="{Binding Spotify}"/>
+                </TabItem>
+
+                <TabItem Header="YOUTUBE">
+                    <views:YouTubeView DataContext="{Binding YouTube}"/>
+                </TabItem>
+                </TabControl>
             </Border>
 
             <!-- Lyrics panel -->
@@ -458,7 +601,7 @@
         </Grid>
 
         <!-- ================= Footer ================= -->
-        <DockPanel Grid.Row="5" Margin="0,12,0,0">
+        <DockPanel Grid.Row="4" Margin="0,8,0,0">
             <Button Content="&#x1F4C1; Folders" Click="OnSettingsButtonClick"
                     ToolTip="Configure the Music and Karaoke folders"/>
             <TextBlock Margin="10,0" VerticalAlignment="Center"

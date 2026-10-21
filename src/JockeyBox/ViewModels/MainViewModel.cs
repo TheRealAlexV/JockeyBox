@@ -1,14 +1,19 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.IO;
 using System.Windows.Data;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using JockeyBox.Audio;
+using JockeyBox.Downloads;
 using JockeyBox.Library;
 using JockeyBox.Lyrics;
+using JockeyBox.Playback;
 using JockeyBox.Separation;
 using JockeyBox.Settings;
+using JockeyBox.Sources;
+using JockeyBox.Tools;
 
 namespace JockeyBox.ViewModels;
 
@@ -27,6 +32,18 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly LyricsService _lyricsService;
     private readonly SeparationService _separation;
     private readonly DispatcherTimer _uiTimer;
+
+    // Source downloads: Spotify/YouTube imports, the shared queue, and the
+    // cache that makes remote tracks playable through the deck engine.
+    private readonly PlaylistStore _playlistStore;
+    private readonly LibraryLedger _ledger;
+    private readonly LibraryIndex _libraryIndex;
+    private readonly StreamCache _streamCache;
+    private readonly DownloadQueue _downloadQueue;
+    private readonly StreamResolver _streamResolver;
+    private readonly DispatcherTimer _rescanDebounce;
+    private readonly DispatcherTimer _autoSyncTimer;
+    private readonly HashSet<string> _pendingAutoKaraoke = new(StringComparer.OrdinalIgnoreCase);
 
     private CancellationTokenSource? _scanCts;
     private CancellationTokenSource? _lyricsCts;
@@ -68,7 +85,58 @@ public partial class MainViewModel : ObservableObject, IDisposable
         MusicDirectory = _settings.MusicDirectory;
         KaraokeDirectory = _settings.KaraokeDirectory;
 
+        // ---- source downloads (Spotify / YouTube) --------------------------
+        _playlistStore = new PlaylistStore();
+        _ledger = new LibraryLedger();
+        _libraryIndex = new LibraryIndex();
+        _streamCache = new StreamCache(_settings.StreamCacheLimitMb);
+        _downloadQueue = new DownloadQueue(_settings, _ledger, _streamCache, _libraryIndex);
+        _streamResolver = new StreamResolver(_downloadQueue, _streamCache, _ledger, _settings,
+            _libraryIndex);
+
+        _downloadQueue.LibraryChanged += () => System.Windows.Application.Current?.Dispatcher
+            .BeginInvoke(ScheduleRescan);
+        _downloadQueue.ItemFinished += OnDownloadFinished;
+
+        // A batch of downloads should trigger one rescan, not one per track.
+        _rescanDebounce = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1500) };
+        _rescanDebounce.Tick += (_, _) =>
+        {
+            _rescanDebounce.Stop();
+            _ = RescanAsync();
+        };
+
+        Spotify = new SpotifyViewModel(_settings, _playlistStore, _downloadQueue, _ledger,
+            new SpotifyOAuthService(_settings), PlaySourceTrackAsync);
+        YouTube = new YouTubeViewModel(_settings, _playlistStore, _downloadQueue, _ledger,
+            PlaySourceTrackAsync);
+        Downloads = new DownloadsViewModel(_settings, _downloadQueue);
+
         // ~30 Hz UI clock for seek bar, deck readouts and lyric highlighting.
+        // Re-read imported playlists on the interval chosen in Settings.
+        _autoSyncTimer = new DispatcherTimer();
+        _autoSyncTimer.Tick += async (_, _) =>
+        {
+            _autoSyncTimer.Stop();
+            try
+            {
+                if (_settings.YouTubeAutoSyncMinutes > 0 && !_downloadQueue.IsRunning)
+                {
+                    await Spotify.SyncPlaylistsCommand.ExecuteAsync(null);
+                    await YouTube.SyncPlaylistsCommand.ExecuteAsync(null);
+                }
+            }
+            catch (Exception ex)
+            {
+                Tools.Log.Error("Auto-sync failed", ex);
+            }
+            finally
+            {
+                ScheduleAutoSync();
+            }
+        };
+        ScheduleAutoSync();
+
         _uiTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(33) };
         _uiTimer.Tick += (_, _) => OnUiTick();
         _uiTimer.Start();
@@ -113,6 +181,22 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     public AppSettings SettingsRef => _settings;
 
+    /// <summary>The live playlist store, so Settings' CSV import writes through it
+    /// instead of a second instance that the tabs would later clobber.</summary>
+    public PlaylistStore PlaylistsRef => _playlistStore;
+
+    /// <summary>Spotify tab view model (playlists + batch download).</summary>
+    public SpotifyViewModel Spotify { get; }
+
+    /// <summary>YouTube tab view model (search, imports, playlists).</summary>
+    public YouTubeViewModel YouTube { get; }
+
+    /// <summary>Download queue view model (progress window).</summary>
+    public DownloadsViewModel Downloads { get; }
+
+    /// <summary>Raised when the user asks for the download queue window.</summary>
+    public event Action? DownloadsRequested;
+
     /// <summary>Raised when an action needs the Settings dialog (e.g. folders unset).</summary>
     public event Action? SettingsRequested;
 
@@ -144,6 +228,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         MusicDirectory = _settings.MusicDirectory;
         KaraokeDirectory = _settings.KaraokeDirectory;
+
+        // A new cache cap must take effect without a restart.
+        if (Math.Abs(_streamCache.LimitBytes - _settings.StreamCacheLimitMb * 1024L * 1024L) > 1)
+        {
+            _streamCache.LimitBytes = _settings.StreamCacheLimitMb * 1024L * 1024L;
+            _streamCache.Evict();
+        }
+
+        ScheduleAutoSync();
         _ = RescanAsync();
     }
 
@@ -164,8 +257,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _scanCts = new CancellationTokenSource();
         var ct = _scanCts.Token;
 
+        // Progress<T> posts to the dispatcher, so the last progress tick can
+        // land *after* the continuation below and overwrite the summary with
+        // "Scanning library… 747/747". Once the scan is done, ignore ticks.
+        var scanFinished = false;
         var progress = new Progress<(int done, int total)>(p =>
-            StatusText = $"Scanning library\u2026 {p.done}/{p.total}");
+        {
+            if (!scanFinished) StatusText = $"Scanning library\u2026 {p.done}/{p.total}";
+        });
 
         try
         {
@@ -173,15 +272,25 @@ public partial class MainViewModel : ObservableObject, IDisposable
             var karaoke = KaraokeDirectory;
             var list = await Task.Run(() => _scanner.Scan(music, karaoke, progress, ct), ct);
             if (ct.IsCancellationRequested) return;
+            scanFinished = true;
 
             _separation.RebindEntries(list);
             Tracks.Clear();
             foreach (var t in list) Tracks.Add(t);
             BuildTree(list);
 
+            // Let downloads and playback see files that were already on disk,
+            // not only the ones this app produced.
+            _libraryIndex.Rebuild(list);
+
+            // A queue restored before the library was known would re-download
+            // tracks that are already here, so resume only once the index is warm.
+            _downloadQueue.RestorePersisted();
+
             var missing = list.Count(t => t.NeedsKaraoke);
             StatusText = $"{list.Count} tracks \u00b7 {missing} need karaoke versions";
             _watcher.Watch(music, karaoke);
+            ApplyPendingAutoKaraoke();
         }
         catch (OperationCanceledException) { /* superseded by a newer scan */ }
         catch (Exception ex)
@@ -282,6 +391,103 @@ public partial class MainViewModel : ObservableObject, IDisposable
         await Task.WhenAll(aTask, bTask);
         WaveformAData = aTask.Result ?? new List<float>();
         WaveformBData = bTask.Result ?? new List<float>();
+    }
+
+    // ---- remote playback (Spotify / YouTube) --------------------------------
+
+    /// <summary>
+    /// Play a remote track: resolve it to a local file (library copy, ledger
+    /// entry, warm cache, or a fresh fetch into the cache), then load it into
+    /// Deck B exactly like a library file so delay/routing/lyrics apply.
+    /// </summary>
+    public async Task PlaySourceTrackAsync(SourceTrack source)
+    {
+        try
+        {
+            StatusText = $"Resolving {source.DisplayName}\u2026";
+            var path = await _streamResolver.ResolveAsync(source, CancellationToken.None);
+            if (string.IsNullOrWhiteSpace(path))
+            {
+                StatusText = $"Could not play {source.DisplayName}.";
+                return;
+            }
+
+            var entry = new TrackEntry
+            {
+                RelativeKey = Path.GetFileNameWithoutExtension(path),
+                RelativePath = DownloadPaths.RelativeTo(_settings, path),
+                MusicPath = path,
+                Title = string.IsNullOrWhiteSpace(source.Title)
+                    ? Path.GetFileNameWithoutExtension(path)
+                    : source.Title,
+                Artist = source.Artist,
+                Album = source.Album,
+                Duration = source.Duration,
+            };
+
+            LoadTrack(entry);
+            if (!IsPlaying) _transport.Play();
+            StatusText = $"Playing {source.DisplayName}";
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Remote playback failed for {source.DisplayName}", ex);
+            StatusText = $"Playback failed: {ex.Message}";
+        }
+    }
+
+    [RelayCommand]
+    private void ShowDownloads() => DownloadsRequested?.Invoke();
+
+    /// <summary>Coalesce several library-change notifications into one rescan.</summary>
+    private void ScheduleRescan()
+    {
+        _rescanDebounce.Stop();
+        _rescanDebounce.Start();
+    }
+
+    /// <summary>
+    /// After a permanent download: remember it for the optional karaoke chain,
+    /// and surface a failure in the status bar.
+    /// </summary>
+    private void OnDownloadFinished(DownloadItem item)
+    {
+        if (item.Kind != DownloadKind.Library) return;
+
+        System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
+        {
+            if (item.State == DownloadState.Failed)
+            {
+                StatusText = $"Download failed: {item.Track.DisplayName} \u2014 {item.Error}";
+                return;
+            }
+
+            if (item.State != DownloadState.Done || item.OutputPath == null) return;
+
+            if (_settings.DownloadAutoKaraoke)
+                _pendingAutoKaraoke.Add(item.OutputPath);
+            else
+                StatusText = $"Downloaded {item.Track.DisplayName}";
+        });
+    }
+
+    /// <summary>Queue karaoke generation for any freshly downloaded tracks.</summary>
+    private void ApplyPendingAutoKaraoke()
+    {
+        if (_pendingAutoKaraoke.Count == 0) return;
+
+        var wanted = _pendingAutoKaraoke.ToList();
+        _pendingAutoKaraoke.Clear();
+        var queued = 0;
+        foreach (var track in Tracks)
+        {
+            if (track.MusicPath == null || !wanted.Contains(track.MusicPath)) continue;
+            if (!track.NeedsKaraoke || !SeparationEngine.IsInstalled) continue;
+            if (_separation.Enqueue(track, null)) queued++;
+        }
+
+        if (queued > 0)
+            StatusText = $"Queued karaoke generation for {queued} downloaded track(s).";
     }
 
     // ---- karaoke generation (vocal removal) --------------------------------
@@ -450,12 +656,25 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _settings.Save();
     }
 
+    /// <summary>(Re)arm the playlist auto-sync timer from the current setting.</summary>
+    private void ScheduleAutoSync()
+    {
+        _autoSyncTimer.Stop();
+        var minutes = _settings.YouTubeAutoSyncMinutes;
+        if (minutes <= 0) return;
+        _autoSyncTimer.Interval = TimeSpan.FromMinutes(minutes);
+        _autoSyncTimer.Start();
+    }
+
     private static string Format(TimeSpan t) => t.TotalHours >= 1
         ? t.ToString(@"h\:mm\:ss") : t.ToString(@"m\:ss");
 
     public void Dispose()
     {
         _uiTimer.Stop();
+        _rescanDebounce.Stop();
+        _autoSyncTimer.Stop();
+        _downloadQueue.Dispose();
         _scanCts?.Cancel();
         _lyricsCts?.Cancel();
         _separation.Dispose();

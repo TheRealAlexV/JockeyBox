@@ -10,7 +10,20 @@ using JockeyBox.Settings;
 namespace JockeyBox.Lyrics;
 
 /// <summary>
-/// Spotify PKCE OAuth flow for lyrics integration.
+/// The user (or Spotify) refused the authorisation request: the app asked for
+/// scopes the client id does not allow, or the user pressed "cancel" on the
+/// consent screen. Distinct from a generic failure so the UI can suggest the
+/// right fix instead of "try again".
+/// </summary>
+public sealed class SpotifyAuthException : Exception
+{
+    public SpotifyAuthException(string message) : base(message) { }
+
+    public SpotifyAuthException(string message, Exception inner) : base(message, inner) { }
+}
+
+/// <summary>
+/// Spotify PKCE OAuth flow for the lyrics and import features.
 ///
 /// Flow:
 ///   1. Generate PKCE code verifier + SHA-256 challenge
@@ -20,14 +33,43 @@ namespace JockeyBox.Lyrics;
 ///   5. Store tokens encrypted (DPAPI) in AppSettings
 ///   6. Auto-refresh when access token expires
 ///
-/// Uses Spotify's public client ID — no app registration needed. The token
+/// Uses Spotify's public client ID by default — no app registration needed —
+/// unless the user supplied their own in settings (required for the playlist
+/// scopes, which the public web-player client does not grant). The token
 /// replaces the old client ID/secret model entirely.
 /// </summary>
 public class SpotifyOAuthService
 {
-    private const string ClientId = "65b25a7ad33747ff9bde6e2443a6f7f2"; // Spotify public web player client
-    private const string RedirectUri = "http://127.0.0.1:5543/callback";
-    private const int RedirectPort = 5543;
+    /// <summary>
+    /// Scopes the lyrics feature needs. Always requested.
+    /// </summary>
+    public const string BaseScopes = "user-read-private";
+
+    /// <summary>
+    /// Scopes the import screens need (reading playlists and Liked Songs).
+    /// Requested together with <see cref="BaseScopes"/> unless the caller opts
+    /// out, and checked afterwards via <see cref="HasPlaylistScopes"/>.
+    /// </summary>
+    public const string PlaylistScopes =
+        "playlist-read-private playlist-read-collaborative user-library-read";
+
+    private const string DefaultClientId = "65b25a7ad33747ff9bde6e2443a6f7f2"; // Spotify public web player client
+
+    /// <summary>
+    /// Loopback port for the OAuth callback. It must match one of the Redirect
+    /// URIs registered on the user's Spotify app exactly, so it is a setting:
+    /// a client id created for another tool usually already has a port.
+    /// </summary>
+    private int RedirectPort =>
+        _settings.SpotifyRedirectPort is > 0 and <= 65535 ? _settings.SpotifyRedirectPort : 8888;
+
+    private string RedirectUri => $"http://127.0.0.1:{RedirectPort}/callback";
+
+    /// <summary>Settings override wins: playlist scopes need a client id that allows them.</summary>
+    private string EffectiveClientId =>
+        string.IsNullOrWhiteSpace(_settings.SpotifyClientIdOverride)
+            ? DefaultClientId
+            : _settings.SpotifyClientIdOverride.Trim();
 
     private readonly AppSettings _settings;
     private readonly HttpClient _http;
@@ -42,6 +84,16 @@ public class SpotifyOAuthService
     public bool IsLoggedIn =>
         !string.IsNullOrWhiteSpace(_settings.SpotifyAccessToken)
         || !string.IsNullOrWhiteSpace(_settings.SpotifyRefreshToken);
+
+    /// <summary>
+    /// True when the last grant included <c>playlist-read-private</c>. Older
+    /// logins (and any grant Spotify narrowed) report false, which the import
+    /// screen turns into a "re-authorise" prompt. Empty/unknown scopes are false.
+    /// </summary>
+    public bool HasPlaylistScopes =>
+        _settings.SpotifyGrantedScopes
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .Contains("playlist-read-private", StringComparer.Ordinal);
 
     /// <summary>Get a valid access token, refreshing if needed.</summary>
     public async Task<string?> GetAccessTokenAsync(CancellationToken ct)
@@ -75,26 +127,41 @@ public class SpotifyOAuthService
     }
 
     /// <summary>
-    /// Run the full interactive OAuth login flow. Returns the access token on
-    /// success; throws on user cancellation or network failure.
+    /// Run the full interactive OAuth login flow, asking for the base and the
+    /// playlist scopes. Returns the access token on success; throws
+    /// <see cref="SpotifyAuthException"/> when Spotify refuses the request and
+    /// <see cref="OperationCanceledException"/> on cancellation or timeout.
     /// </summary>
-    public async Task<string> LoginAsync(CancellationToken ct)
+    public Task<string> LoginAsync(CancellationToken ct) => LoginAsync(includePlaylists: true, ct);
+
+    /// <summary>
+    /// Run the full interactive OAuth login flow. <paramref name="includePlaylists"/>
+    /// adds <see cref="PlaylistScopes"/> to the consent screen (the user can
+    /// still decline individual scopes, hence <see cref="HasPlaylistScopes"/>).
+    /// Returns the access token on success.
+    /// </summary>
+    public async Task<string> LoginAsync(bool includePlaylists, CancellationToken ct)
     {
         var (verifier, challenge) = GeneratePkcePair();
         var state = Guid.NewGuid().ToString("N")[..16];
+        var scopes = includePlaylists ? $"{BaseScopes} {PlaylistScopes}" : BaseScopes;
 
         var authUrl = "https://accounts.spotify.com/authorize?" +
-            $"client_id={ClientId}&response_type=code" +
+            $"client_id={Uri.EscapeDataString(EffectiveClientId)}&response_type=code" +
             $"&redirect_uri={Uri.EscapeDataString(RedirectUri)}" +
             $"&state={state}" +
             $"&code_challenge_method=S256&code_challenge={challenge}" +
-            "&scope=user-read-private";
+            $"&scope={Uri.EscapeDataString(scopes)}";
 
         // Open browser
         OpenBrowser(authUrl);
 
         // Start loopback listener
-        string? code = await ListenForCallbackAsync(state, ct);
+        var (code, error) = await ListenForCallbackAsync(state, ct);
+
+        if (!string.IsNullOrEmpty(error))
+            throw new SpotifyAuthException(DescribeAuthError(error));
+
         if (code == null)
             throw new OperationCanceledException("OAuth callback was cancelled or timed out.");
 
@@ -102,6 +169,21 @@ public class SpotifyOAuthService
         await ExchangeCodeAsync(code, verifier, ct);
         return _settings.SpotifyAccessToken!;
     }
+
+    /// <summary>Turn Spotify's redirect error code into something actionable.</summary>
+    private static string DescribeAuthError(string error) => error switch
+    {
+        "invalid_scope" =>
+            "Spotify refused the requested permissions (invalid_scope). Playlist import needs a client id " +
+            "that allows the playlist and library scopes - set one in Settings, or log in for lyrics only.",
+        "access_denied" =>
+            "Spotify login was cancelled, or access to the requested permissions was denied.",
+        "invalid_client" =>
+            "Spotify did not recognise the client id. Check the client id override in Settings.",
+        "state_mismatch" =>
+            "Spotify's login response did not match this request (state mismatch). Please try again.",
+        _ => $"Spotify authorisation failed ({error}).",
+    };
 
     /// <summary>Log out — forget stored tokens.</summary>
     public void Logout()
@@ -128,7 +210,7 @@ public class SpotifyOAuthService
 
     // ---- loopback HTTP server -------------------------------------------------
 
-    private static async Task<string?> ListenForCallbackAsync(string expectedState, CancellationToken ct)
+    private async Task<(string? Code, string? Error)> ListenForCallbackAsync(string expectedState, CancellationToken ct)
     {
         using var listener = new HttpListener();
         listener.Prefixes.Add($"http://127.0.0.1:{RedirectPort}/callback/");
@@ -168,10 +250,10 @@ public class SpotifyOAuthService
             await context.Response.OutputStream.WriteAsync(buffer, ct);
             context.Response.OutputStream.Close();
 
-            return state == expectedState ? code : null;
+            return state == expectedState ? (code, error) : (null, "state_mismatch");
         }
-        catch (OperationCanceledException) { return null; }
-        catch (HttpListenerException) { return null; }
+        catch (OperationCanceledException) { return (null, null); }
+        catch (HttpListenerException) { return (null, null); }
     }
 
     private static string? ExtractParam(string query, string name)
@@ -194,7 +276,7 @@ public class SpotifyOAuthService
             ["grant_type"] = "authorization_code",
             ["code"] = code,
             ["redirect_uri"] = RedirectUri,
-            ["client_id"] = ClientId,
+            ["client_id"] = EffectiveClientId,
             ["code_verifier"] = verifier,
         });
 
@@ -215,7 +297,7 @@ public class SpotifyOAuthService
         {
             ["grant_type"] = "refresh_token",
             ["refresh_token"] = _settings.SpotifyRefreshToken!,
-            ["client_id"] = ClientId,
+            ["client_id"] = EffectiveClientId,
         });
 
         using var request = new HttpRequestMessage(HttpMethod.Post, "https://accounts.spotify.com/api/token")
@@ -229,6 +311,12 @@ public class SpotifyOAuthService
         await StoreTokensAsync(response, ct);
     }
 
+    /// <summary>
+    /// Persist a token response. The granted <c>scope</c> string is recorded
+    /// verbatim so the UI can tell whether the playlist scopes were actually
+    /// granted; refresh responses usually omit it, in which case the previous
+    /// value is kept.
+    /// </summary>
     private async Task StoreTokensAsync(HttpResponseMessage response, CancellationToken ct)
     {
         using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
@@ -240,6 +328,13 @@ public class SpotifyOAuthService
 
         if (root.TryGetProperty("refresh_token", out var rt))
             _settings.SpotifyRefreshToken = rt.GetString()!;
+
+        if (root.TryGetProperty("scope", out var scope) && scope.ValueKind == JsonValueKind.String)
+        {
+            var granted = scope.GetString();
+            if (!string.IsNullOrWhiteSpace(granted))
+                _settings.SpotifyGrantedScopes = granted;
+        }
 
         _settings.Save();
     }

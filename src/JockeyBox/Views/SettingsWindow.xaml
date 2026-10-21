@@ -1,7 +1,7 @@
 <Window x:Class="JockeyBox.Views.SettingsWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Settings" Height="660" Width="660" ResizeMode="NoResize"
+        Title="Settings" Height="720" Width="660" ResizeMode="NoResize"
         Background="{StaticResource WindowBrush}" WindowStartupLocation="CenterOwner">
     <Grid Margin="16">
         <Grid.RowDefinitions>
@@ -98,12 +98,26 @@
                     <StackPanel Orientation="Horizontal">
                         <Button x:Name="SpotifyLoginButton" Content="Login with Spotify"
                                 Width="160" Click="OnSpotifyLoginClick"/>
-                        <TextBlock x:Name="SpotifyStatus" VerticalAlignment="Center" Margin="10,0,0,0"
-                                   Foreground="{StaticResource TextDimBrush}"/>
+                        <Button x:Name="SpotifySetupButton" Content="Set up playlist access"
+                                Width="170" Margin="8,0,0,0" Click="OnSpotifySetupClick"/>
                     </StackPanel>
+                    <TextBlock x:Name="SpotifyStatus" Margin="0,6,0,0" TextWrapping="Wrap"
+                               Foreground="{StaticResource TextDimBrush}"/>
                     <TextBlock TextWrapping="Wrap" Foreground="{StaticResource TextDimBrush}" Margin="0,4,0,0"
-                               Text="Opens your browser for a one-time Spotify login. No Client ID/Secret needed. Tokens are encrypted at rest."/>
+                               Text="Login opens your browser for a one-time sign-in. Playlist import needs your own Spotify app - use Set up playlist access."/>
                 </StackPanel>
+
+                <Grid Margin="150,0,0,4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="Spotify Client ID (optional)" VerticalAlignment="Center"
+                               ToolTip="Only needed if you run your own Spotify developer app."/>
+                    <TextBox x:Name="SpotifyClientIdBox" Grid.Column="1" Margin="0,4"/>
+                </Grid>
+                <TextBlock TextWrapping="Wrap" Foreground="{StaticResource TextDimBrush}" Margin="300,0,0,14"
+                           Text="Leave empty to use the built-in public client."/>
 
                 <Grid Margin="0,0,0,4">
                     <Grid.ColumnDefinitions>
@@ -117,6 +131,177 @@
 
                 <TextBlock TextWrapping="Wrap" Foreground="{StaticResource TextDimBrush}" Margin="0,2,0,4"
                            Text="Leave empty to use LRCLIB only (free, no setup). A .lrc file next to the audio file always wins."/>
+
+                <!-- ================= DOWNLOADS &amp; YOUTUBE ================= -->
+                <TextBlock Text="DOWNLOADS &amp; YOUTUBE" FontWeight="Bold"
+                           Foreground="{StaticResource AccentABrush}" Margin="0,0,0,10"/>
+
+                <Grid Margin="0,0,0,4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="Folder layout" VerticalAlignment="Center"
+                               ToolTip="How downloaded files are arranged inside the Music folder."/>
+                    <ComboBox x:Name="LayoutPresetBox" Grid.Column="1" Margin="0,4" Width="220"
+                              HorizontalAlignment="Left">
+                        <ComboBoxItem Content="Artist / Album / Track" Tag="artist-album"/>
+                        <ComboBoxItem Content="Artist / Track" Tag="artist"/>
+                        <ComboBoxItem Content="Playlist / Artist - Track" Tag="playlist"/>
+                    </ComboBox>
+                </Grid>
+
+                <Grid Margin="0,0,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="Custom template" VerticalAlignment="Center"
+                               ToolTip="Overrides the folder layout above. Leave empty to use the preset."/>
+                    <TextBox x:Name="LayoutTemplateBox" Grid.Column="1" Margin="0,4"
+                             ToolTip="Example: {artist}/{album}/{track} {title}"/>
+                </Grid>
+                <TextBlock TextWrapping="Wrap" Foreground="{StaticResource TextDimBrush}" Margin="150,0,0,8"
+                           Text="Tokens: {artist} {title} {album} {track} {playlist} {source}"/>
+
+                <Grid Margin="0,0,0,4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="MP3 bitrate" VerticalAlignment="Center"
+                               ToolTip="128-320 kbps transcode to MP3, or keep the original m4a stream."/>
+                    <ComboBox x:Name="BitrateBox" Grid.Column="1" Margin="0,4" Width="170"
+                              HorizontalAlignment="Left">
+                        <ComboBoxItem Content="128 kbps" Tag="128"/>
+                        <ComboBoxItem Content="192 kbps" Tag="192"/>
+                        <ComboBoxItem Content="256 kbps" Tag="256"/>
+                        <ComboBoxItem Content="320 kbps" Tag="320"/>
+                        <ComboBoxItem Content="Copy original (m4a)" Tag="0"/>
+                    </ComboBox>
+                </Grid>
+
+                <Grid Margin="0,0,0,4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="Concurrent downloads" VerticalAlignment="Center"
+                               ToolTip="How many files download at the same time."/>
+                    <ComboBox x:Name="ConcurrencyBox" Grid.Column="1" Margin="0,4" Width="80"
+                              HorizontalAlignment="Left"/>
+                </Grid>
+
+                <CheckBox x:Name="SkipExistingCheck" Margin="150,4,0,4"
+                          Content="Skip tracks already in the library"
+                          Foreground="{StaticResource TextBrush}"/>
+
+                <CheckBox x:Name="AutoKaraokeCheck" Margin="150,0,0,10"
+                          Content="Also generate karaoke versions after a batch"
+                          Foreground="{StaticResource TextBrush}"
+                          ToolTip="Runs the vocal removal engine on every downloaded track once the queue finishes."/>
+
+                <Grid Margin="0,0,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="Browser cookies" VerticalAlignment="Center"
+                               ToolTip="Lets yt-dlp read your browser session to get past YouTube's bot check."/>
+                    <ComboBox x:Name="CookiesBox" Grid.Column="1" Margin="0,4" Width="150"
+                              HorizontalAlignment="Left">
+                        <ComboBoxItem Content="None" Tag=""/>
+                        <ComboBoxItem Content="Chrome" Tag="chrome"/>
+                        <ComboBoxItem Content="Edge" Tag="edge"/>
+                        <ComboBoxItem Content="Firefox" Tag="firefox"/>
+                    </ComboBox>
+                </Grid>
+                <TextBlock TextWrapping="Wrap" Foreground="{StaticResource TextDimBrush}" Margin="150,0,0,10"
+                           Text="YouTube sometimes answers automated downloads with &quot;confirm you're not a bot&quot;. Picking the browser you are signed in with lets yt-dlp reuse that session."/>
+
+                <Grid Margin="0,0,0,14">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="Stream cache size" VerticalAlignment="Center"
+                               ToolTip="Space reserved for throwaway copies of streamed tracks. Cleared from the Downloads window."/>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal">
+                        <ComboBox x:Name="CacheBox" Margin="0,4" Width="120"/>
+                        <TextBlock Text="MB" VerticalAlignment="Center" Margin="6,4,0,0"
+                                   Foreground="{StaticResource TextDimBrush}"/>
+                    </StackPanel>
+                </Grid>
+
+                <Grid Margin="0,0,0,14">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="Auto-sync playlists" VerticalAlignment="Center"
+                               ToolTip="Re-reads imported Spotify and YouTube playlists on a timer and queues tracks added upstream."/>
+                    <ComboBox x:Name="AutoSyncBox" Margin="0,4" Width="120"/>
+                </Grid>
+
+                <!-- ================= TOOLS (YT-DLP & FFMPEG) ================= -->
+                <TextBlock Text="TOOLS (YT-DLP &amp; FFMPEG)" FontWeight="Bold"
+                           Foreground="{StaticResource AccentABrush}" Margin="0,0,0,10"/>
+
+                <Grid Margin="0,0,0,4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="yt-dlp path" VerticalAlignment="Center"
+                               ToolTip="Explicit yt-dlp.exe. Leave empty to use the bundled copy."/>
+                    <TextBox x:Name="YtDlpPathBox" Grid.Column="1" Margin="0,4"/>
+                </Grid>
+
+                <Grid Margin="0,0,0,4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="ffmpeg path" VerticalAlignment="Center"
+                               ToolTip="Explicit ffmpeg.exe. Leave empty to use the bundled copy."/>
+                    <TextBox x:Name="FfmpegPathBox" Grid.Column="1" Margin="0,4"/>
+                </Grid>
+
+                <TextBlock TextWrapping="Wrap" Foreground="{StaticResource TextDimBrush}" Margin="150,0,0,6"
+                           Text="Empty means bundled: the app downloads both tools into %APPDATA%\JockeyBox\tools on first use. Versions are shown in the Downloads window, which also has the install and update buttons."/>
+
+                <StackPanel Orientation="Horizontal" Margin="150,0,0,14">
+                    <Button x:Name="InstallToolsButton" Content="Install tools" Width="110"
+                            Click="OnInstallTools"/>
+                    <Button x:Name="UpdateYtDlpButton" Content="Update yt-dlp" Width="110"
+                            Margin="8,0,0,0" Click="OnUpdateYtDlp"/>
+                    <TextBlock x:Name="ToolsStatusText" VerticalAlignment="Center" Margin="10,0,0,0"
+                               MaxWidth="260" TextTrimming="CharacterEllipsis"
+                               Foreground="{StaticResource TextDimBrush}"/>
+                </StackPanel>
+
+                <!-- ================= LIBRARY TOOLS ================= -->
+                <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0"
+                        Margin="0,0,0,14"/>
+
+                <TextBlock Text="LIBRARY TOOLS" FontSize="11" FontWeight="Bold"
+                           Foreground="{StaticResource AccentABrush}" Margin="0,0,0,8"/>
+
+                <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                    <Button x:Name="FindDuplicatesButton" Content="Find duplicates" Width="130"
+                            FontSize="11" Padding="8,4" Click="OnFindDuplicatesClick"
+                            ToolTip="Groups library files that share an artist and title, or a title"/>
+                    <Button x:Name="ImportCsvButton" Content="Import Exportify CSV&#x2026;" Width="170"
+                            FontSize="11" Padding="8,4" Margin="8,0,0,0" Click="OnImportCsvClick"
+                            ToolTip="Adds the playlist from an Exportify .csv export"/>
+                    <Button x:Name="ExportJsonButton" Content="Export library JSON&#x2026;" Width="170"
+                            FontSize="11" Padding="8,4" Margin="8,0,0,0" Click="OnExportJsonClick"
+                            ToolTip="Writes tracks and playlists to one JSON document"/>
+                </StackPanel>
+
+                <TextBlock x:Name="LibraryToolsStatusText" Margin="0,0,0,14" FontSize="11"
+                           TextWrapping="Wrap" Foreground="{StaticResource TextDimBrush}"
+                           Text="Read-only scan of the loaded library. Audio files are never moved, renamed or deleted."/>
             </StackPanel>
         </ScrollViewer>
 

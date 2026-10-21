@@ -75,6 +75,41 @@ public class AppSettings
     /// <summary>Global visual offset applied to synced lyrics (positive = later).</summary>
     public double LyricsOffsetMs { get; set; }
 
+    // ---- source downloads (Spotify / YouTube) ------------------------------
+    //
+    // The app fetches its own yt-dlp/ffmpeg into %APPDATA%\JockeyBox\tools on
+    // first use; an explicit path here wins over the bundled copy, which wins
+    // over a tool found on PATH.
+
+    /// <summary>Explicit yt-dlp.exe; empty = bundled tools dir, then PATH.</summary>
+    public string YtDlpPath { get; set; } = "";
+    /// <summary>Explicit ffmpeg.exe; empty = bundled tools dir, then PATH.</summary>
+    public string FfmpegPath { get; set; } = "";
+    public string YtDlpVersion { get; set; } = "";
+    public string FfmpegVersion { get; set; } = "";
+
+    /// <summary>artist-album | artist | playlist</summary>
+    public string DownloadLayoutPreset { get; set; } = "artist-album";
+    /// <summary>Optional custom template; empty = use the preset.</summary>
+    public string DownloadLayoutTemplate { get; set; } = "";
+    public int DownloadBitrateKbps { get; set; } = 320;
+    public int DownloadConcurrency { get; set; } = 2;
+    public bool DownloadSkipExisting { get; set; } = true;
+    public bool DownloadAutoKaraoke { get; set; }
+    /// <summary>chrome | edge | firefox | "" (none) - passed to yt-dlp --cookies-from-browser.</summary>
+    public string DownloadCookiesBrowser { get; set; } = "";
+    /// <summary>LRU cap for streamed source audio.</summary>
+    public int StreamCacheLimitMb { get; set; } = 2048;
+
+    /// <summary>Space separated scopes Spotify actually granted on the last login.</summary>
+    public string SpotifyGrantedScopes { get; set; } = "";
+    public string SpotifyClientIdOverride { get; set; } = "";
+    /// <summary>Loopback port for the OAuth callback; must match a Redirect URI on that app.</summary>
+    public int SpotifyRedirectPort { get; set; } = 8888;
+    /// <summary>0 = automatic playlist sync disabled.</summary>
+    public int YouTubeAutoSyncMinutes { get; set; }
+    public int YouTubeSearchResults { get; set; } = 25;
+
     // ---------------------------------------------------------------
 
     private static readonly byte[] Entropy = Encoding.UTF8.GetBytes("JockeyBox.v1");

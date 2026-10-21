@@ -42,6 +42,9 @@ Built with **.NET 8 / WPF / NAudio** - compiled on WSL, runs on Windows 10/11.
      (optional — only if you have it running with an SP_DC cookie)
   4. [LRCLIB](https://lrclib.net) — free, zero configuration
   Line-synced lyrics scroll and highlight against the master playback clock.
+- **Spotify and YouTube** - browse Spotify playlists and Liked Songs, search and
+  import YouTube videos, playlists and channels, download into the Music folder
+  with a layout preset, or play a remote track straight from the stream cache.
 
 ## Layout
 
@@ -74,13 +77,125 @@ backing vocals; BS-Roformer for maximum quality), the output format
 (FLAC/MP3/WAV), an explicit python.exe, and an optional NVIDIA CUDA build of
 the engine (~3 GB, requires CUDA 12 + cuDNN 9).
 
+## Spotify and YouTube
+
+Two remote sources sit next to the local library. Spotify supplies playlist
+metadata only; the audio for a Spotify track is found on YouTube. Downloads
+land in the Music folder and follow the layout rules below, so they pair with
+their karaoke version by relative path like any other file.
+
+### Spotify playlists
+
+Settings → **Login with Spotify** opens the browser and completes a PKCE
+authorisation against a loopback redirect (`http://127.0.0.1:8888/callback`).
+Tokens are stored encrypted (DPAPI) in `settings.json` and refresh on their
+own.
+
+- The built-in client ID is Spotify's public web-player client and logs you in
+  with no setup. It does not grant the playlist scopes, so the import screen
+  needs your own app: create one at developer.spotify.com, add the redirect URI
+  above, and paste its client ID into Settings → **Spotify Client ID
+  (optional)**.
+- Scopes requested: `user-read-private`, plus `playlist-read-private`,
+  `playlist-read-collaborative` and `user-library-read` for the import screens.
+  A login from before those were granted shows a "Grant playlist access"
+  prompt.
+- **Liked Songs** appears as a synthetic playlist with a track count.
+- **Download all** queues the tracks of the selected playlist that are not in
+  the library yet and leaves the rest alone; it says so when there is nothing
+  to do. The **Download** button on a row queues a single track.
+- A track is matched by artist and title against the download ledger, so a file
+  you already own, or one downloaded earlier, is marked in-library and is not
+  fetched again. The **Skip tracks already in the library** setting applies the
+  same check to the queue in general.
+- Downloaded playlists are remembered. **Sync playlists** re-reads them and
+  queues only the tracks added since the last run.
+
+### YouTube
+
+The YouTube tab searches through yt-dlp and lists title, channel and duration.
+Play, Download and + Add to playlist act on the selected row. Playlists are
+kept by JockeyBox, so adding a video to one changes nothing on YouTube.
+
+A URL pasted into the search box and sent through **Import** is treated as an
+import:
+
+- a video URL adds that one track to the selected playlist
+- a playlist URL imports every entry into a new playlist named after it
+- a channel URL reads the channel's uploads and stops at 500 entries
+
+Audio is resolved by yt-dlp as the best available stream and converted to MP3
+by ffmpeg, or kept as the original m4a when the bitrate is set to copy. Neither
+binary has to be installed by hand: on first use JockeyBox downloads yt-dlp and
+the ffmpeg essentials build into `%APPDATA%\JockeyBox\tools`. Settings → Tools
+takes explicit paths when you would rather use your own copies, and the
+Downloads window has **Install tools** and **Update yt-dlp** buttons.
+
+If YouTube answers with **"Sign in to confirm you're not a bot"**, set
+Settings → **Browser cookies** to the browser you are signed into YouTube with.
+yt-dlp then reads that browser's session.
+
+### Playing before downloading
+
+Clicking a Spotify or YouTube track that is not in the library does not require
+a download first. The resolver looks for the track in this order: a file
+already attached to it, the library index, the download ledger, a warm stream
+cache entry, and finally a fresh best-audio fetch. The fetch runs through the
+same download queue as a stream item and lands in the stream cache instead of
+the library.
+
+The cached file is opened by Deck B like any local file, so device routing,
+per-deck delay and lyrics behave as they do for a library track. Nothing is
+tagged or written into the Music folder until you press Download.
+
+The cache is capped at the **Stream cache size** setting in megabytes (2048 by
+default) and evicts the least recently used files when it fills. **Clear stream
+cache** in the Downloads window empties it.
+
+### Download layout
+
+A preset, or a custom template that overrides it, decides where a downloaded
+file goes:
+
+- **Artist / Album / Track** - `Artist\Album\NN Title.mp3`
+- **Artist / Track** - `Artist\Title.mp3`
+- **Playlist / Artist - Track** - `Playlist\Artist - Title.mp3`
+
+A custom template such as `{artist}/{album}/{track} {title}` takes the same
+tokens: `{artist}`, `{title}`, `{album}`, `{track}`, `{playlist}` and
+`{source}`. Slashes become folders, `.mp3` is appended when the last segment
+has no extension, and a name that is already taken gets a ` (2)` suffix instead
+of overwriting the file. Missing values fall back to `Unknown Artist`,
+`Unknown Album` and `Downloads`.
+
+The Karaoke folder mirrors the relative path the download produced, so the
+pairing rules above apply to downloaded tracks too.
+
+### Settings
+
+- **MP3 bitrate** - 128, 192, 256 or 320 kbps, or copy the original m4a stream
+- **Concurrent downloads** - how many files are fetched at once
+- **Browser cookies** - Chrome, Edge or Firefox, for the YouTube bot check
+- **Stream cache size** - space reserved for streamed tracks, in MB
+- **Skip tracks already in the library** - leaves existing files alone
+- **Also generate karaoke versions after a batch** - runs the vocal removal
+  engine on new downloads once the queue drains
+- **yt-dlp path / ffmpeg path** - optional, overrides the managed copies
+
+### Legal and etiquette
+
+JockeyBox downloads audio from YouTube only, through yt-dlp. Spotify is
+contacted strictly for playlist metadata through the official Web API and its
+audio streams are never touched. Whether you have the right to keep a given
+track is on you, and the terms of service of both platforms apply.
+
 ## Building (on WSL)
 
 Requires the .NET 8 SDK on WSL (`https://dot.net/v1/dotnet-install.sh --channel 8.0`).
 
 ```bash
 build/build.sh        # -> dist/portable/JockeyBox.exe  (single-file portable)
-build/package.sh 1.4.0  # -> dist/installer/JockeyBox-win-Setup.exe (Velopack)
+build/package.sh 1.5.0  # -> dist/installer/JockeyBox-win-Setup.exe (Velopack)
 ```
 
 Both cross-compile for win-x64 from Linux via `EnableWindowsTargeting`.
