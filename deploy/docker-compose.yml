@@ -1,0 +1,17 @@
+# Self-hosted Spotify Lyrics API (akashrchandran/spotify-lyrics-api)
+#
+# 1. Get your SP_DC cookie:
+#    - Log in to open.spotify.com in a browser
+#    - DevTools (F12) -> Application -> Cookies -> https://open.spotify.com -> sp_dc
+# 2. Put it in a .env file next to this compose file:  SP_DC=AQB...
+# 3. docker compose up -d
+# 4. In JockeyBox Settings, set "Lyrics API base URL" to http://<host>:8091
+services:
+  spotify-lyrics-api:
+    image: akashrchandran/spotify-lyrics-api:latest
+    container_name: spotify-lyrics-api
+    ports:
+      - "8091:8080"
+    environment:
+      - SP_DC=${SP_DC}
+    restart: unless-stopped

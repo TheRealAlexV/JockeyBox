@@ -1,0 +1,128 @@
+<Window x:Class="JockeyBox.Views.SettingsWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Settings" Height="660" Width="660" ResizeMode="NoResize"
+        Background="{StaticResource WindowBrush}" WindowStartupLocation="CenterOwner">
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <ScrollViewer Grid.Row="0" VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+
+                <!-- ================= LIBRARY FOLDERS ================= -->
+                <TextBlock Text="LIBRARY FOLDERS" FontWeight="Bold"
+                           Foreground="{StaticResource AccentABrush}" Margin="0,0,0,10"/>
+
+                <Grid Margin="0,0,0,4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="Music folder" VerticalAlignment="Center"
+                               ToolTip="Your full library (originals with vocals) - plays on Deck B"/>
+                    <TextBox x:Name="MusicDirBox" Grid.Column="1" Margin="0,4"/>
+                    <Button Grid.Column="2" Content="Browse&#x2026;" Width="80" Margin="6,4,0,4" Click="OnBrowseMusic"/>
+                </Grid>
+
+                <Grid Margin="0,0,0,4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="Karaoke folder" VerticalAlignment="Center"
+                               ToolTip="Mirrors the Music folder structure with generated instrumentals - plays on Deck A"/>
+                    <TextBox x:Name="KaraokeDirBox" Grid.Column="1" Margin="0,4"/>
+                    <Button Grid.Column="2" Content="Browse&#x2026;" Width="80" Margin="6,4,0,4" Click="OnBrowseKaraoke"/>
+                </Grid>
+
+                <TextBlock TextWrapping="Wrap" Foreground="{StaticResource TextDimBrush}" Margin="0,2,0,14"
+                           Text="Generated karaoke tracks are written into the Karaoke folder using the same relative path as the source file."/>
+
+                <!-- ================= VOCAL REMOVAL ENGINE ================= -->
+                <TextBlock Text="VOCAL REMOVAL ENGINE (UVR)" FontWeight="Bold"
+                           Foreground="{StaticResource AccentABrush}" Margin="0,0,0,10"/>
+
+                <Grid Margin="0,0,0,4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="Output format" VerticalAlignment="Center"
+                               ToolTip="FLAC (lossless) and WAV work out of the box; MP3 additionally requires ffmpeg on PATH."/>
+                    <ComboBox x:Name="FormatBox" Grid.Column="1" Margin="0,4" Width="140" HorizontalAlignment="Left"/>
+                </Grid>
+
+                <Grid Margin="0,0,0,4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="Python (optional)" VerticalAlignment="Center"
+                               ToolTip="Explicit python.exe used to build the engine environment. Leave empty to auto-detect."/>
+                    <TextBox x:Name="PythonBox" Grid.Column="1" Margin="0,4"/>
+                </Grid>
+
+                <CheckBox x:Name="GpuCheck" Margin="150,4,0,4" Content="Use NVIDIA GPU (CUDA) build"
+                          Foreground="{StaticResource TextBrush}"
+                          ToolTip="Much faster, but the install is ~3 GB and requires NVIDIA CUDA 12 with cuDNN 9 installed."/>
+
+                <StackPanel Orientation="Horizontal" Margin="150,4,0,4">
+                    <Button x:Name="InstallEngineButton" Content="Install / Reinstall Engine&#x2026;" Width="200" Click="OnInstallEngine"/>
+                    <TextBlock x:Name="EngineStateText" VerticalAlignment="Center" Margin="10,0,0,0"
+                               Foreground="{StaticResource TextDimBrush}"/>
+                </StackPanel>
+
+                <TextBlock TextWrapping="Wrap" Foreground="{StaticResource TextDimBrush}" Margin="0,2,0,14"
+                           Text="The engine runs Ultimate Vocal Remover models through audio-separator in a private Python environment (%APPDATA%\JockeyBox). Requires Python 3.10-3.13 installed on this PC."/>
+
+                <!-- ================= LYRICS ================= -->
+                <TextBlock Text="LYRICS INTEGRATION" FontWeight="Bold"
+                           Foreground="{StaticResource AccentABrush}" Margin="0,0,0,10"/>
+
+                <Grid Margin="0,0,0,4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="Lyrics API URL (optional)" VerticalAlignment="Center"
+                               ToolTip="Self-hosted spotify-lyrics-api (with SP_DC cookie). Optional — OAuth login below works without it."/>
+                    <TextBox x:Name="ApiUrlBox" Grid.Column="1" Margin="0,4"/>
+                </Grid>
+
+                <StackPanel Margin="150,0,0,4">
+                    <StackPanel Orientation="Horizontal">
+                        <Button x:Name="SpotifyLoginButton" Content="Login with Spotify"
+                                Width="160" Click="OnSpotifyLoginClick"/>
+                        <TextBlock x:Name="SpotifyStatus" VerticalAlignment="Center" Margin="10,0,0,0"
+                                   Foreground="{StaticResource TextDimBrush}"/>
+                    </StackPanel>
+                    <TextBlock TextWrapping="Wrap" Foreground="{StaticResource TextDimBrush}" Margin="0,4,0,0"
+                               Text="Opens your browser for a one-time Spotify login. No Client ID/Secret needed. Tokens are encrypted at rest."/>
+                </StackPanel>
+
+                <Grid Margin="0,0,0,4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="Lyrics offset (ms)" VerticalAlignment="Center"
+                               ToolTip="Shifts lyric highlighting relative to the master clock. Positive = lyrics later."/>
+                    <TextBox x:Name="OffsetBox" Grid.Column="1" Margin="0,4" Width="120" HorizontalAlignment="Left"/>
+                </Grid>
+
+                <TextBlock TextWrapping="Wrap" Foreground="{StaticResource TextDimBrush}" Margin="0,2,0,4"
+                           Text="Leave empty to use LRCLIB only (free, no setup). A .lrc file next to the audio file always wins."/>
+            </StackPanel>
+        </ScrollViewer>
+
+        <StackPanel Grid.Row="1" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+            <Button Content="Cancel" Width="90" Margin="0,0,8,0" Click="OnCancel"/>
+            <Button Content="Save" Width="90" Click="OnSave"/>
+        </StackPanel>
+    </Grid>
+</Window>

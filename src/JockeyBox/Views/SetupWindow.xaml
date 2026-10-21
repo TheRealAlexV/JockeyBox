@@ -1,0 +1,40 @@
+<Window x:Class="JockeyBox.Views.SetupWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Vocal Removal Engine Setup"
+        Width="720" Height="480"
+        WindowStartupLocation="CenterOwner"
+        Background="{StaticResource WindowBrush}"
+        Foreground="{StaticResource TextBrush}">
+    <Grid Margin="16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="0" Margin="0,0,0,10">
+            <TextBlock Text="INSTALLING VOCAL REMOVAL ENGINE" FontWeight="Bold"
+                       Foreground="{StaticResource AccentABrush}"/>
+            <TextBlock x:Name="PhaseText" Margin="0,6,0,0" TextWrapping="Wrap"
+                       Text="Setting up a private Python environment with audio-separator (UVR models)."
+                       Foreground="{StaticResource TextDimBrush}"/>
+        </StackPanel>
+
+        <Border Grid.Row="1" Background="{StaticResource PanelAltBrush}"
+                BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="4">
+            <ScrollViewer x:Name="LogScroll" VerticalScrollBarVisibility="Auto" Padding="8">
+                <TextBox x:Name="LogBox" IsReadOnly="True" TextWrapping="Wrap"
+                         BorderThickness="0" Background="Transparent"
+                         Foreground="{StaticResource TextBrush}"
+                         FontFamily="Consolas" FontSize="11"/>
+            </ScrollViewer>
+        </Border>
+
+        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+            <ProgressBar x:Name="Spinner" Width="160" Height="10" IsIndeterminate="True"
+                         Margin="0,0,12,0" VerticalAlignment="Center"/>
+            <Button x:Name="CloseButton" Content="Cancel" Width="90" Click="OnCloseClick"/>
+        </StackPanel>
+    </Grid>
+</Window>

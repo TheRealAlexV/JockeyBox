@@ -1,0 +1,16 @@
+# Build output
+dist/
+bin/
+obj/
+*.user
+*.suo
+.vs/
+
+# Local secrets / deployment state
+.env
+deploy/.env
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/

@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>JockeyBox</RootNamespace>
+    <AssemblyName>JockeyBox</AssemblyName>
+    <Version>1.4.0</Version>
+    <!-- Allows building this Windows-targeted WPF app from Linux/WSL -->
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Audio engine: WASAPI multi-device output, sample providers, resampling -->
+    <PackageReference Include="NAudio" Version="2.2.1" />
+    <!-- ID3 / metadata reading (mp3, flac, m4a, ...) -->
+    <PackageReference Include="TagLibSharp" Version="2.3.0" />
+    <!-- MVVM helpers (ObservableObject, RelayCommand) -->
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.2.2" />
+    <!-- Installer/update framework (Setup.exe built from WSL via vpk) -->
+    <PackageReference Include="Velopack" Version="0.0.1298" />
+    <!-- DPAPI (CurrentUser) encryption for stored credentials -->
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+  </ItemGroup>
+
+</Project>
