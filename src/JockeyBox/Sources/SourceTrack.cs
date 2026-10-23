@@ -51,18 +51,92 @@ public partial class SourceTrack : ObservableObject
     /// <summary>Name of the playlist this track was imported from - used by the playlist layout preset.</summary>
     public string? PlaylistName { get; set; }
 
+    /// <summary>
+    /// Library identity of an app-owned playlist row: <see cref="Library.TrackEntry.RelativeKey"/>
+    /// (music-folder relative path, extension stripped) normalised through
+    /// <see cref="NormalizeLocalKey"/>. This is what internal playlist membership
+    /// keys on, so re-downloading a file under a new name falls back to the
+    /// ledger path and then to an artist/title lookup rather than losing the row.
+    /// Null for imported rows, whose identity stays <see cref="Id"/>.
+    /// </summary>
+    public string? LocalKey
+    {
+        get => _localKey;
+        set => _localKey = NormalizeLocalKey(value) is { Length: > 0 } key ? key : null;
+    }
+
+    private string? _localKey;
+
+    /// <summary>
+    /// Canonical form of a library key: trimmed, '\' folded to '/', lower case,
+    /// trailing audio extension dropped. Both the store and the browser compare
+    /// membership through this, so a key written on another platform - or for the
+    /// same song re-downloaded as .m4a - still matches
+    /// <see cref="Library.TrackEntry.RelativeKey"/>, which is extension-stripped.
+    /// </summary>
+    public static string NormalizeLocalKey(string? key) => StripAudioExtension(
+        (key ?? "").Trim().Replace('\\', '/').ToLowerInvariant());
+
+    private static readonly string[] AudioExtensions =
+    {
+        ".mp3", ".m4a", ".flac", ".wav", ".aac", ".ogg", ".opus", ".wma", ".aiff", ".aif", ".alac",
+    };
+
+    private static string StripAudioExtension(string key)
+    {
+        var slash = key.LastIndexOf('/');
+        var dot = key.LastIndexOf('.');
+        if (dot <= slash + 1) return key; // no extension on the last segment
+
+        var extension = key[dot..];
+        foreach (var known in AudioExtensions)
+        {
+            if (string.Equals(extension, known, StringComparison.Ordinal)) return key[..dot];
+        }
+
+        return key;
+    }
+
+    /// <summary>
+    /// Give an app-owned row an id when it has none. The id is only a handle for
+    /// the store, the queue and the ledger - <see cref="LocalKey"/> is the
+    /// identity.
+    /// </summary>
+    public string EnsureId()
+    {
+        if (string.IsNullOrWhiteSpace(Id)) Id = "manual:" + Guid.NewGuid().ToString("N");
+        return Id;
+    }
+
+    /// <summary>
+    /// Not persisted: this is live queue state, not playlist membership. A saved
+    /// "Downloading"/"Queued" survives a crash or a preview download and renders
+    /// a row that spins forever; <see cref="PlaylistStore"/> re-derives the state
+    /// from the library on load instead.
+    /// </summary>
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(StateGlyph), nameof(IsBusy))]
+    [JsonIgnore]
+    [NotifyPropertyChangedFor(nameof(StateGlyph), nameof(IsBusy), nameof(IsTransferring), nameof(ProgressText))]
     private SourceTrackState _state = SourceTrackState.New;
 
     /// <summary>0-100 while <see cref="Source"/> is being fetched.</summary>
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(ProgressText))]
+    [NotifyPropertyChangedFor(nameof(ProgressText), nameof(StateGlyph), nameof(IsTransferring))]
     private double _progress;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(StateGlyph), nameof(IsBusy))]
     private string? _libraryPath;
+
+    /// <summary>
+    /// Stream-cache file (preview playback) - evictable, not a library copy, so
+    /// it gets its own glyph and is never reported as downloaded. Not persisted
+    /// for the same reason <see cref="State"/> is not.
+    /// </summary>
+    [ObservableProperty]
+    [JsonIgnore]
+    [NotifyPropertyChangedFor(nameof(StateGlyph), nameof(HasPreview))]
+    private string? _previewPath;
 
     [ObservableProperty]
     private string? _error;
@@ -85,23 +159,54 @@ public partial class SourceTrack : ObservableObject
     /// <summary>Fallback display string for controls that render items without a template.</summary>
     public override string ToString() => DisplayName;
 
+    /// <summary>
+    /// Row glyph. "✓" means exactly one thing: a permanent library file exists
+    /// (<see cref="LibraryPath"/>). A cache-only preview shows "▶", so a played
+    /// preview can never look like a download.
+    /// </summary>
     [JsonIgnore]
     public string StateGlyph => State switch
     {
         SourceTrackState.Queued => "\u2193",
-        SourceTrackState.Downloading => "\u22ef",
+        // "⋯" only while the row is genuinely busy AND the worker reports
+        // progress. A stale Downloading at 0% is a queue bug (DownloadQueue now
+        // restores the prior state), not evidence of work - it renders as
+        // unknown instead of spinning forever.
+        SourceTrackState.Downloading when IsTransferring => "\u22ef",
+        SourceTrackState.Downloading => "\u00b7",
         SourceTrackState.InLibrary => "\u2713",
         SourceTrackState.Failed => "\u2716",
-        _ => "\u25cf",
+        // "▶" = streamed once, file lives in the evictable stream cache only;
+        // "●" = untouched. Only a real library file earns "✓".
+        _ => HasPreview ? "\u25b6" : "\u25cf",
     };
 
     [JsonIgnore]
-    public string ProgressText => State == SourceTrackState.Downloading
-        ? $"{Progress:0}%"
-        : State == SourceTrackState.InLibrary ? "in library" : "";
+    public string ProgressText => State switch
+    {
+        SourceTrackState.InLibrary => "in library",
+        // Silence beats "0%": a queued or stale-busy row must not claim progress.
+        SourceTrackState.Downloading when IsTransferring => $"{Progress:0}%",
+        _ => "",
+    };
 
+    /// <summary>
+    /// The queue owns this row right now. Renders as "busy" only together with
+    /// real progress (see <see cref="IsTransferring"/>).
+    /// </summary>
     [JsonIgnore]
     public bool IsBusy => State is SourceTrackState.Queued or SourceTrackState.Downloading;
+
+    /// <summary>
+    /// Busy <em>and</em> the worker has reported progress: the only state in
+    /// which "⋯" and a percentage may be shown. Anything else is stale.
+    /// </summary>
+    [JsonIgnore]
+    public bool IsTransferring => IsBusy && Progress > 0;
+
+    /// <summary>True when a stream-cache preview file exists for this track.</summary>
+    [JsonIgnore]
+    public bool HasPreview => !string.IsNullOrWhiteSpace(PreviewPath);
 
     /// <summary>Copy this track into another playlist without dragging its live state along.</summary>
     public SourceTrack Clone() => new()
@@ -116,7 +221,9 @@ public partial class SourceTrack : ObservableObject
         DurationMs = DurationMs,
         VideoId = VideoId,
         PlaylistName = PlaylistName,
+        LocalKey = LocalKey,
         State = State,
         LibraryPath = LibraryPath,
+        PreviewPath = PreviewPath,
     };
 }

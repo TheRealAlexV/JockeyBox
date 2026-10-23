@@ -34,6 +34,8 @@ public class SpotifyLyricsApiProvider : ILyricsProvider
         _oauth = new SpotifyOAuthService(settings);
     }
 
+    public string Id => "spotify-api";
+
     public string Name => "Spotify Lyrics API";
 
     private bool IsConfigured =>
@@ -179,6 +181,6 @@ public class SpotifyLyricsApiProvider : ILyricsProvider
         }
 
         if (parsed.Count == 0) return null;
-        return new LyricsDocument { Synced = synced, Lines = parsed, Source = Name };
+        return new LyricsDocument { Synced = synced, Lines = parsed, Source = Name, SourceId = Id };
     }
 }

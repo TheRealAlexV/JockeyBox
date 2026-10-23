@@ -2,6 +2,7 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:views="clr-namespace:JockeyBox.Views"
+             Unloaded="OnViewUnloaded"
              Background="Transparent">
 
     <UserControl.Resources>
@@ -73,6 +74,31 @@
             </Setter>
         </Style>
 
+        <!-- Version row: two lines, so it sizes to content instead of the 26px table row. -->
+        <Style x:Key="VersionRow" TargetType="ListViewItem">
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListViewItem">
+                        <Border x:Name="bd" Background="Transparent" Padding="7,2"
+                                BorderBrush="Transparent" BorderThickness="2,0,0,0" MinHeight="30">
+                            <ContentPresenter VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="{StaticResource HoverBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="{StaticResource SelectionBrush}"/>
+                                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource AccentABrush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <!-- Flat icon-ish action buttons in the header / table. -->
         <Style x:Key="QuietButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
             <Setter Property="FontSize" Value="11"/>
@@ -90,6 +116,41 @@
                     <Setter Property="IsEnabled" Value="False"/>
                 </DataTrigger>
             </Style.Triggers>
+        </Style>
+
+        <!-- Tiny in-row button (find versions): takes its own item as the parameter. -->
+        <Style x:Key="RowMiniButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="Width" Value="18"/>
+            <Setter Property="Height" Value="18"/>
+            <Setter Property="FontSize" Value="10"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="ToolTipService.InitialShowDelay" Value="400"/>
+        </Style>
+
+        <!-- Same, for the version-pick buttons. -->
+        <Style x:Key="VersionButton" TargetType="Button" BasedOn="{StaticResource RowMiniButton}">
+            <Setter Property="Width" Value="20"/>
+            <Setter Property="Height" Value="20"/>
+            <Setter Property="FontSize" Value="11"/>
+        </Style>
+
+        <!-- The preview action, spelled out: a bare play glyph was invisible next to the row. -->
+        <Style x:Key="PreviewButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="Height" Value="18"/>
+            <Setter Property="FontSize" Value="9"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Padding" Value="7,0"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Foreground" Value="{StaticResource AccentBBrush}"/>
+            <Setter Property="Background" Value="{StaticResource PanelAltBrush}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Content" Value="PREVIEW"/>
+            <Setter Property="ToolTip" Value="Streams instantly, nothing is saved"/>
+            <Setter Property="ToolTipService.InitialShowDelay" Value="250"/>
         </Style>
 
         <!-- Card holding one pane. -->
@@ -157,7 +218,7 @@
                         ToolTip="Reload your Spotify playlists and their track lists"/>
                 <Button Content="&#x2B07; Download all" Command="{Binding DownloadAllCommand}"
                         Style="{StaticResource QuietButton}"
-                        ToolTip="Queue every track in the selected playlist that is not already in the library"/>
+                        ToolTip="Download every track in the selected playlist that is not already in the library"/>
             </StackPanel>
         </Grid>
 
@@ -252,7 +313,10 @@
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
 
@@ -294,10 +358,12 @@
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
                         <TextBlock Grid.Column="0" Text="FILTER" Style="{StaticResource SectionLabel}"
                                    Margin="0,0,6,0"/>
-                        <TextBox Grid.Column="1" Height="24" FontSize="11" VerticalContentAlignment="Center"
+                        <TextBox Grid.Column="1" FontSize="11" VerticalContentAlignment="Center"
                                  Text="{Binding FilterText, UpdateSourceTrigger=PropertyChanged}"
                                  ToolTip="Filter the track list by title, artist or album"/>
                         <Button Grid.Column="2" Content="&#x25B6;" Style="{StaticResource RowActionButton}"
@@ -307,11 +373,53 @@
                         <Button Grid.Column="3" Content="&#x2B07;" Style="{StaticResource RowActionButton}"
                                 Margin="4,0,0,0"
                                 Command="{Binding DownloadSelectedCommand}"
-                                ToolTip="Queue the selected track"/>
+                                ToolTip="Download the selected track"/>
+                        <Button Grid.Column="4" Content="&#x2193;&#x25B6;" Style="{StaticResource RowActionButton}"
+                                Margin="4,0,0,0"
+                                Command="{Binding DownloadAndPlaySelectedCommand}"
+                                ToolTip="Download the selected track and play the stream while it downloads"/>
+                        <Button Grid.Column="5" Content="&#x21C4;" Style="{StaticResource RowActionButton}"
+                                Margin="4,0,0,0"
+                                Command="{Binding FindVersionsCommand}"
+                                ToolTip="Find YouTube versions of the selected track before downloading it"/>
                     </Grid>
 
+                    <!-- Playlist editing strip. Writes need playlist-modify-*: when the
+                         grant is read-only these are disabled and Re-authorize shows
+                         instead. WrapPanel keeps it on one line until the pane is narrow. -->
+                    <WrapPanel Grid.Row="2" Margin="0,5,0,0" VerticalAlignment="Center">
+                        <TextBlock Text="EDIT" Style="{StaticResource SectionLabel}" Margin="0,0,8,0"/>
+                        <TextBox Width="150" Height="24" FontSize="11" Margin="0,0,4,0"
+                                 VerticalContentAlignment="Center"
+                                 Text="{Binding NewPlaylistName, UpdateSourceTrigger=PropertyChanged}"
+                                 ToolTip="Name for a new private Spotify playlist">
+                            <TextBox.InputBindings>
+                                <KeyBinding Key="Enter" Command="{Binding CreateSpotifyPlaylistCommand}"/>
+                            </TextBox.InputBindings>
+                        </TextBox>
+                        <Button Content="+ New playlist" Style="{StaticResource QuietButton}"
+                                Margin="0,0,4,0"
+                                Command="{Binding CreateSpotifyPlaylistCommand}"
+                                ToolTip="{Binding WriteTooltip}"
+                                ToolTipService.ShowOnDisabled="True"/>
+                        <Button Content="Add selected" Style="{StaticResource QuietButton}"
+                                Margin="0,0,4,0"
+                                Command="{Binding AddSelectedToSpotifyPlaylistCommand}"
+                                ToolTip="{Binding WriteTooltip}"
+                                ToolTipService.ShowOnDisabled="True"/>
+                        <Button Content="Remove selected" Style="{StaticResource QuietButton}"
+                                Margin="0,0,4,0"
+                                Command="{Binding RemoveSelectedFromSpotifyPlaylistCommand}"
+                                ToolTip="{Binding WriteTooltip}"
+                                ToolTipService.ShowOnDisabled="True"/>
+                        <Button Content="Re-authorize" Style="{StaticResource QuietButton}"
+                                Command="{Binding ReauthorizeSpotifyCommand}"
+                                Visibility="{Binding ShowReauthorize, Converter={StaticResource BoolToVisibility}}"
+                                ToolTip="Open Spotify's consent screen again to grant playlist editing"/>
+                    </WrapPanel>
+
                     <!-- Table -->
-                    <Grid Grid.Row="2" Margin="0,4,0,0">
+                    <Grid Grid.Row="3" Margin="0,4,0,0">
                         <ListView x:Name="TrackList" ItemsSource="{Binding TracksView}"
                                   SelectedItem="{Binding SelectedTrack}"
                                   ItemContainerStyle="{StaticResource TrackRow}"
@@ -327,8 +435,23 @@
                                     <MenuItem Header="Play"
                                               Command="{Binding PlacementTarget.DataContext.PlaySelectedCommand,
                                                   RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                    <MenuItem Header="Add to queue"
+                                              Command="{Binding PlacementTarget.DataContext.AddToQueueCommand,
+                                                  RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
                                     <MenuItem Header="Download"
                                               Command="{Binding PlacementTarget.DataContext.DownloadSelectedCommand,
+                                                  RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                    <MenuItem Header="Preview (stream)"
+                                              Command="{Binding PlacementTarget.DataContext.PreviewTrackCommand,
+                                                  RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                    <MenuItem Header="Download &amp; play"
+                                              Command="{Binding PlacementTarget.DataContext.DownloadAndPlaySelectedCommand,
+                                                  RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                    <MenuItem Header="Find versions on YouTube"
+                                              Command="{Binding PlacementTarget.DataContext.FindVersionsCommand,
+                                                  RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                    <MenuItem Header="Open on YouTube"
+                                              Command="{Binding PlacementTarget.DataContext.OpenSelectedOnYouTubeCommand,
                                                   RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
                                 </ContextMenu>
                             </ListView.ContextMenu>
@@ -340,6 +463,8 @@
                                             <ColumnDefinition Width="78"/>
                                             <ColumnDefinition Width="78"/>
                                             <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="18"/>
                                             <ColumnDefinition Width="16"/>
                                         </Grid.ColumnDefinitions>
                                         <StackPanel Grid.Column="0" VerticalAlignment="Center">
@@ -373,7 +498,17 @@
                                                    FontFamily="Consolas" FontSize="10.5"
                                                    VerticalAlignment="Center" Margin="6,0,4,0"
                                                    Foreground="{StaticResource TextDimBrush}"/>
-                                        <TextBlock Grid.Column="4" Text="{Binding StateGlyph}" FontSize="10"
+                                        <Button Grid.Column="4" Style="{StaticResource PreviewButton}"
+                                                Command="{Binding DataContext.PreviewTrackCommand,
+                                                    RelativeSource={RelativeSource AncestorType=ListView}}"
+                                                CommandParameter="{Binding}"/>
+                                        <Button Grid.Column="5" Content="&#x21C4;" Style="{StaticResource RowMiniButton}"
+                                                VerticalAlignment="Center" Margin="0,0,2,0"
+                                                Command="{Binding DataContext.FindVersionsCommand,
+                                                    RelativeSource={RelativeSource AncestorType=ListView}}"
+                                                CommandParameter="{Binding}"
+                                                ToolTip="Find YouTube versions of this track"/>
+                                        <TextBlock Grid.Column="6" Text="{Binding StateGlyph}" FontSize="10"
                                                    HorizontalAlignment="Center" VerticalAlignment="Center">
                                             <TextBlock.Style>
                                                 <Style TargetType="TextBlock">
@@ -435,7 +570,7 @@
                             <StackPanel MaxWidth="330" VerticalAlignment="Center" HorizontalAlignment="Center">
                                 <TextBlock Text="Connect your Spotify account" FontSize="15" FontWeight="SemiBold"
                                            TextAlignment="Center"/>
-                                <TextBlock Text="Pick a playlist, queue it, and JockeyBox keeps it in your library. Tracks you already own are skipped."
+                                <TextBlock Text="Pick a playlist, download it, and JockeyBox keeps it in your library. Tracks you already own are skipped."
                                            FontSize="12" TextWrapping="Wrap" TextAlignment="Center"
                                            Foreground="{StaticResource TextDimBrush}" Margin="0,6,0,12"/>
                                 <Button Content="{Binding ConnectLabel}" Command="{Binding ConnectCommand}"
@@ -447,8 +582,93 @@
                         </Border>
                     </Grid>
 
+                    <!-- Versions picker: choose which upload becomes the library file -->
+                    <Border Grid.Row="4" Margin="0,5,0,0"
+                            Background="{StaticResource PanelBrush}"
+                            BorderBrush="{StaticResource AccentBBrush}" BorderThickness="1"
+                            CornerRadius="4" Padding="6,4"
+                            Visibility="{Binding IsVersionsVisible, Converter={StaticResource BoolToVisibility}}">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <Grid Grid.Row="0" Height="16">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0" Text="{Binding VersionsHeader}"
+                                           Style="{StaticResource MetaText}" FontSize="10"
+                                           ToolTip="{Binding VersionsHeader}"/>
+                                <TextBlock Grid.Column="1" Text="Searching&#x2026;" FontSize="10"
+                                           Foreground="{StaticResource AccentBBrush}"
+                                           VerticalAlignment="Center" Margin="0,0,6,0"
+                                           Visibility="{Binding IsFindingVersions, Converter={StaticResource BoolToVisibility}}"/>
+                                <Button Grid.Column="2" Content="&#x2715;" Style="{StaticResource RowMiniButton}"
+                                        Width="16" Height="16"
+                                        Command="{Binding CloseVersionsCommand}"
+                                        ToolTip="Close the version list"/>
+                            </Grid>
+
+                            <ListView Grid.Row="1" ItemsSource="{Binding Versions}"
+                                      ItemContainerStyle="{StaticResource VersionRow}"
+                                      Background="Transparent" BorderThickness="0"
+                                      MaxHeight="132" Margin="0,2,0,0"
+                                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                      VirtualizingPanel.IsVirtualizing="True"
+                                      VirtualizingPanel.VirtualizationMode="Standard">
+                                <ListView.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                                <TextBlock Text="{Binding Title}" FontSize="11.5"
+                                                           TextTrimming="CharacterEllipsis"
+                                                           ToolTip="{Binding Title}"/>
+                                                <TextBlock Text="{Binding DetailText}" FontSize="10"
+                                                           Foreground="{StaticResource TextDimBrush}"
+                                                           TextTrimming="CharacterEllipsis"
+                                                           ToolTip="{Binding DetailText}"/>
+                                            </StackPanel>
+                                            <Button Grid.Column="1" Content="Download this"
+                                                    Style="{StaticResource VersionButton}" Width="Auto"
+                                                    Padding="7,0" FontSize="10.5" Margin="6,0,4,0"
+                                                    Foreground="{StaticResource TextBrush}"
+                                                    Command="{Binding DataContext.DownloadVersionCommand,
+                                                        RelativeSource={RelativeSource AncestorType=ListView}}"
+                                                    CommandParameter="{Binding}"
+                                                    ToolTip="Download this upload into the library as the Spotify track"/>
+                                            <Button Grid.Column="2" Style="{StaticResource PreviewButton}"
+                                                    Margin="0,0,4,0"
+                                                    Command="{Binding DataContext.PreviewVersionCommand,
+                                                        RelativeSource={RelativeSource AncestorType=ListView}}"
+                                                    CommandParameter="{Binding}"/>
+                                            <Button Grid.Column="3" Content="&#x2197;"
+                                                    Style="{StaticResource VersionButton}"
+                                                    Command="{Binding DataContext.OpenVersionOnYouTubeCommand,
+                                                        RelativeSource={RelativeSource AncestorType=ListView}}"
+                                                    CommandParameter="{Binding}"
+                                                    ToolTip="Open this upload on YouTube"/>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ListView.ItemTemplate>
+                            </ListView>
+                        </Grid>
+                    </Border>
+
+                    <!-- Preview strip: position / seek / play-pause -->
+                    <views:PreviewBar Grid.Row="5" DataContext="{Binding Preview}"/>
+
                     <!-- Status line (the disconnected card already carries the status) -->
-                    <TextBlock Grid.Row="3" Text="{Binding StatusText}" Height="16" Margin="0,4,2,0"
+                    <TextBlock Grid.Row="6" Text="{Binding StatusText}" Height="16" Margin="0,4,2,0"
                                ToolTip="{Binding StatusText}">
                         <TextBlock.Style>
                             <Style TargetType="TextBlock" BasedOn="{StaticResource MetaText}">

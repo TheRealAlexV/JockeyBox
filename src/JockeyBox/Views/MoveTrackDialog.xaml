@@ -1,0 +1,100 @@
+<Window x:Class="JockeyBox.Views.MoveTrackDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Move track" Width="620" SizeToContent="Height"
+        ResizeMode="NoResize" WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
+        Background="{StaticResource WindowBrush}" Foreground="{StaticResource TextBrush}">
+
+    <Window.Resources>
+        <!-- Pink accent: the dialog's primary action. Same as the other dialogs. -->
+        <Style x:Key="PrimaryButton" TargetType="Button"
+               BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="Background" Value="{StaticResource AccentBBrush}"/>
+            <Setter Property="Foreground" Value="#12141A"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Padding" Value="18,6"/>
+            <Setter Property="MinWidth" Value="110"/>
+        </Style>
+
+        <Style x:Key="FieldLabel" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="10"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+            <Setter Property="Margin" Value="0,0,0,2"/>
+        </Style>
+    </Window.Resources>
+
+    <Border Style="{StaticResource Card}" Margin="16" Padding="18">
+        <StackPanel>
+            <TextBlock Text="Move track" FontSize="16" FontWeight="SemiBold"
+                       Foreground="{StaticResource TextBrush}" Margin="0,0,0,12"/>
+
+            <TextBlock Text="CURRENT LOCATION" Style="{StaticResource FieldLabel}"/>
+            <TextBlock x:Name="CurrentPathLine" Foreground="{StaticResource TextBrush}"
+                       TextTrimming="CharacterEllipsis" Margin="0,0,0,14"/>
+
+            <TextBlock Text="FOLDER (RELATIVE TO THE LIBRARY ROOT)" Style="{StaticResource FieldLabel}"/>
+            <TextBox x:Name="FolderBox" Margin="0,2,0,0" TextChanged="OnFolderChanged"/>
+            <TextBlock Text="Folders are created when needed. Leave empty to move the file to the root."
+                       FontSize="11" Foreground="{StaticResource TextDimBrush}"
+                       TextWrapping="Wrap" Margin="0,6,0,0"/>
+
+            <Border Background="{StaticResource PanelBrush}"
+                    BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                    CornerRadius="4" Margin="0,14,0,0" Padding="12">
+                <StackPanel>
+                    <TextBlock Text="ARTIST \ ALBUM \ TITLE" Style="{StaticResource FieldLabel}"
+                               Margin="0,0,0,6"/>
+
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="1.2*"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="1.4*"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="ARTIST"
+                                   Style="{StaticResource FieldLabel}" Margin="0,0,8,2"/>
+                        <TextBlock Grid.Row="0" Grid.Column="1" Text="ALBUM"
+                                   Style="{StaticResource FieldLabel}" Margin="0,0,8,2"/>
+                        <TextBlock Grid.Row="0" Grid.Column="2" Text="TITLE"
+                                   Style="{StaticResource FieldLabel}" Margin="0,0,0,2"/>
+
+                        <TextBox x:Name="ArtistBox" Grid.Row="1" Grid.Column="0" Margin="0,0,8,0"
+                                 TextChanged="OnPresetFieldChanged"/>
+                        <TextBox x:Name="AlbumBox" Grid.Row="1" Grid.Column="1" Margin="0,0,8,0"
+                                 TextChanged="OnPresetFieldChanged"/>
+                        <TextBox x:Name="TitleBox" Grid.Row="1" Grid.Column="2"
+                                 TextChanged="OnPresetFieldChanged"/>
+                    </Grid>
+
+                    <Grid Margin="0,10,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" VerticalAlignment="Center"
+                                   TextWrapping="Wrap" FontSize="11"
+                                   Foreground="{StaticResource TextDimBrush}"
+                                   Text="A blank album drops the album folder; a blank title keeps the current name."/>
+                        <Button Grid.Column="1" Content="Use artist \ album \ title"
+                                Click="OnUsePreset" Margin="10,0,0,0" Padding="12,6"/>
+                    </Grid>
+                </StackPanel>
+            </Border>
+
+            <TextBlock x:Name="ValidationLine" TextWrapping="Wrap" MinHeight="18"
+                       Margin="0,10,0,0" Foreground="{StaticResource AccentBBrush}"/>
+
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+                <Button Content="Cancel" IsCancel="True" MinWidth="90" Margin="0,0,8,0"/>
+                <Button x:Name="OkButton" Content="OK" IsDefault="True" Click="OnOk"
+                        Style="{StaticResource PrimaryButton}"/>
+            </StackPanel>
+        </StackPanel>
+    </Border>
+</Window>

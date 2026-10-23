@@ -46,12 +46,22 @@ public class SpotifyOAuthService
     public const string BaseScopes = "user-read-private";
 
     /// <summary>
-    /// Scopes the import screens need (reading playlists and Liked Songs).
-    /// Requested together with <see cref="BaseScopes"/> unless the caller opts
-    /// out, and checked afterwards via <see cref="HasPlaylistScopes"/>.
+    /// Scopes the write path needs (creating a playlist, adding and removing its
+    /// tracks). Kept separate so <see cref="HasPlaylistWriteScopes"/> can tell a
+    /// read-only grant from one that can also edit.
+    /// </summary>
+    public const string PlaylistWriteScopes =
+        "playlist-modify-private playlist-modify-public";
+
+    /// <summary>
+    /// Scopes the import screens need (reading playlists and Liked Songs) plus
+    /// the write scopes. Requested together with <see cref="BaseScopes"/> unless
+    /// the caller opts out, and checked afterwards via
+    /// <see cref="HasPlaylistScopes"/> / <see cref="HasPlaylistWriteScopes"/>.
     /// </summary>
     public const string PlaylistScopes =
-        "playlist-read-private playlist-read-collaborative user-library-read";
+        "playlist-read-private playlist-read-collaborative user-library-read "
+        + PlaylistWriteScopes;
 
     private const string DefaultClientId = "65b25a7ad33747ff9bde6e2443a6f7f2"; // Spotify public web player client
 
@@ -95,6 +105,23 @@ public class SpotifyOAuthService
             .Split(' ', StringSplitOptions.RemoveEmptyEntries)
             .Contains("playlist-read-private", StringComparer.Ordinal);
 
+    /// <summary>
+    /// True when the last grant included one of the playlist write scopes. Grants
+    /// made before playlist editing existed are read-only, so this reports false
+    /// and the Spotify tab offers a re-authorisation instead of the write commands.
+    /// </summary>
+    public bool HasPlaylistWriteScopes =>
+        _settings.SpotifyGrantedScopes
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries)
+            .Any(scope => string.Equals(scope, "playlist-modify-private", StringComparison.Ordinal)
+                       || string.Equals(scope, "playlist-modify-public", StringComparison.Ordinal));
+
+    /// <summary>
+    /// The single test the UI needs before offering a write command: signed in,
+    /// but without playlist editing rights - so a fresh consent is required.
+    /// </summary>
+    public bool RequiresWriteLogin => IsLoggedIn && !HasPlaylistWriteScopes;
+
     /// <summary>Get a valid access token, refreshing if needed.</summary>
     public async Task<string?> GetAccessTokenAsync(CancellationToken ct)
     {
@@ -132,15 +159,19 @@ public class SpotifyOAuthService
     /// <see cref="SpotifyAuthException"/> when Spotify refuses the request and
     /// <see cref="OperationCanceledException"/> on cancellation or timeout.
     /// </summary>
-    public Task<string> LoginAsync(CancellationToken ct) => LoginAsync(includePlaylists: true, ct);
+    public Task<string> LoginAsync(CancellationToken ct, bool forceConsent = false) =>
+        LoginAsync(includePlaylists: true, ct, forceConsent);
 
     /// <summary>
     /// Run the full interactive OAuth login flow. <paramref name="includePlaylists"/>
     /// adds <see cref="PlaylistScopes"/> to the consent screen (the user can
     /// still decline individual scopes, hence <see cref="HasPlaylistScopes"/>).
+    /// <paramref name="forceConsent"/> sends <c>show_dialog=true</c>, which makes
+    /// Spotify show the consent screen again even for an already-approved app -
+    /// the only way to pick up the write scopes after a read-only grant.
     /// Returns the access token on success.
     /// </summary>
-    public async Task<string> LoginAsync(bool includePlaylists, CancellationToken ct)
+    public async Task<string> LoginAsync(bool includePlaylists, CancellationToken ct, bool forceConsent = false)
     {
         var (verifier, challenge) = GeneratePkcePair();
         var state = Guid.NewGuid().ToString("N")[..16];
@@ -151,7 +182,8 @@ public class SpotifyOAuthService
             $"&redirect_uri={Uri.EscapeDataString(RedirectUri)}" +
             $"&state={state}" +
             $"&code_challenge_method=S256&code_challenge={challenge}" +
-            $"&scope={Uri.EscapeDataString(scopes)}";
+            $"&scope={Uri.EscapeDataString(scopes)}" +
+            (forceConsent ? "&show_dialog=true" : "");
 
         // Open browser
         OpenBrowser(authUrl);
@@ -174,8 +206,8 @@ public class SpotifyOAuthService
     private static string DescribeAuthError(string error) => error switch
     {
         "invalid_scope" =>
-            "Spotify refused the requested permissions (invalid_scope). Playlist import needs a client id " +
-            "that allows the playlist and library scopes - set one in Settings, or log in for lyrics only.",
+            "Spotify refused the requested permissions (invalid_scope). Playlist import and editing need a " +
+            "client id that allows the playlist and library scopes - set one in Settings, or log in for lyrics only.",
         "access_denied" =>
             "Spotify login was cancelled, or access to the requested permissions was denied.",
         "invalid_client" =>

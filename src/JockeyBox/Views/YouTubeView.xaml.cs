@@ -21,6 +21,13 @@ public partial class YouTubeView : UserControl
 
     private YouTubeViewModel? Vm => DataContext as YouTubeViewModel;
 
+    /// <summary>
+    /// Leaving the tab (switch or close) stops the streamed preview: the audio
+    /// belongs to this pane, and nothing should keep playing from a tab the
+    /// user has left.
+    /// </summary>
+    private void OnViewUnloaded(object sender, RoutedEventArgs e) => Vm?.StopPreview();
+
     private void OnSearchKeyDown(object sender, KeyEventArgs e)
     {
         if (e.Key != Key.Enter) return;

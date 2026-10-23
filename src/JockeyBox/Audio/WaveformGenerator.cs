@@ -10,7 +10,7 @@ namespace JockeyBox.Audio;
 public class WaveformGenerator
 {
     /// <summary>Number of points the waveform is reduced to.</summary>
-    public const int TargetPointCount = 2000;
+    public const int TargetPointCount = 1000;
 
     /// <summary>
     /// Generate a peak-amplitude waveform from an audio file. Null if the

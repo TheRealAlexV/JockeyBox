@@ -69,6 +69,29 @@ public class TagCache
     }
 
     /// <summary>
+    /// Re-key the cached tags of a file that was renamed or moved, so the next
+    /// scan keeps its BPM/duration instead of re-reading the media. Returns false
+    /// when nothing was cached for <paramref name="oldPath"/> (or the paths are
+    /// equal), which makes the call idempotent. Saves once when it moved a row.
+    /// </summary>
+    public bool Repoint(string oldPath, string newPath)
+    {
+        if (string.IsNullOrWhiteSpace(oldPath) || string.IsNullOrWhiteSpace(newPath)) return false;
+
+        lock (_lock)
+        {
+            if (!_entries.TryGetValue(oldPath, out var tags)) return false;
+            if (string.Equals(oldPath, newPath, StringComparison.OrdinalIgnoreCase)) return false;
+
+            _entries.Remove(oldPath);
+            _entries[newPath] = tags;
+        }
+
+        Save();
+        return true;
+    }
+
+    /// <summary>
     /// Get tags for a file, reading them with TagLib# only when the file is new
     /// or has changed since the cached read.
     /// </summary>

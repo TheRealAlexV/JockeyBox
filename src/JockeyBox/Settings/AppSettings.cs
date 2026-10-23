@@ -7,19 +7,50 @@ using System.Text.Json.Serialization;
 namespace JockeyBox.Settings;
 
 /// <summary>
+/// How the lyrics panel follows playback: one line at a time (<see cref="Line"/>),
+/// or word by word with the bouncing ball (<see cref="Word"/>).
+/// Persisted as a number in settings.json.
+/// </summary>
+public enum LyricsFollowMode
+{
+    Line = 0,
+    Word = 1,
+}
+
+/// <summary>
+/// How the library browser groups tracks: by tag-derived artist/album
+/// (<see cref="ArtistAlbum"/>), or by the folder layout on disk
+/// (<see cref="Path"/>). Persisted as a number in settings.json.
+/// </summary>
+public enum LibraryLayout
+{
+    ArtistAlbum = 0,
+    Path = 1,
+}
+
+/// <summary>
 /// User settings, persisted as JSON in %APPDATA%\JockeyBox\settings.json.
 /// The Spotify client secret is encrypted at rest with DPAPI (current user
 /// scope) - it never touches disk in plaintext.
 /// </summary>
 public class AppSettings
 {
-    // Library: the Music folder is the source of truth; the Karaoke folder
-    // mirrors its directory/file structure with generated instrumentals.
+    // Library: one tree of music files. The karaoke version of a track sits
+    // beside it as "Song.karaoke.ext" (Library.KaraokeNaming); KaraokeDirectory
+    // is only the legacy split root and is normalised to the music root when it
+    // is unset or points at the same folder.
     public string MusicDirectory { get; set; } = "";
     public string KaraokeDirectory { get; set; } = "";
 
     /// <summary>Legacy (pre-1.1) single root that contained \Original + \Karaoke.</summary>
     public string RootDirectory { get; set; } = "";
+
+    /// <summary>
+    /// Browser tree layout. Missing or undefined values (older settings files,
+    /// hand edits) fall back to <see cref="LibraryLayout.ArtistAlbum"/> in
+    /// <see cref="Load"/>.
+    /// </summary>
+    public LibraryLayout LibraryLayout { get; set; } = LibraryLayout.ArtistAlbum;
 
     // Per-deck audio routing / sync
     public string? DeckADeviceId { get; set; }
@@ -72,8 +103,147 @@ public class AppSettings
     [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? LegacyPlaintextSecret { get; set; }
 
-    /// <summary>Global visual offset applied to synced lyrics (positive = later).</summary>
+    /// <summary>
+    /// Global visual offset applied to synced lyrics, in milliseconds.
+    /// <para>Semantic contract: <b>positive = lyrics appear LATER</b> (delayed).</para>
+    /// </summary>
+    /// <remarks>
+    /// The lyric highlighter compares a line's timestamp against the playback
+    /// position, so the offset has to be applied negated:
+    /// <c>lyric.Time &lt;= position + EffectiveOffset</c>. Adding this property
+    /// directly to the position inverts the contract (positive would make lyrics
+    /// early), which is what the pre-1.2 highlighter did. Do not change this
+    /// property's sign; add <see cref="EffectiveOffset"/> instead.
+    /// </remarks>
     public double LyricsOffsetMs { get; set; }
+
+    /// <summary>
+    /// <see cref="LyricsOffsetMs"/> already negated for the "add to playback
+    /// position" idiom: <c>position + EffectiveOffset</c>. Positive setting
+    /// (later lyrics) produces a negative <see cref="TimeSpan"/>.
+    /// </summary>
+    public TimeSpan EffectiveOffset => TimeSpan.FromMilliseconds(-LyricsOffsetMs);
+
+    /// <summary>
+    /// Upper bound for lyric offsets (global and per track), in milliseconds.
+    /// </summary>
+    public const double MaxLyricsOffsetMs = 10_000;
+
+    /// <summary>
+    /// Per-track lyric offsets in milliseconds, keyed by
+    /// <c>TrackEntry.RelativeKey</c>. Positive = lyrics later, same contract as
+    /// <see cref="LyricsOffsetMs"/>. A missing key falls back to the global value.
+    /// </summary>
+    public Dictionary<string, double> LyricsOffsetByTrack { get; set; } = new();
+
+    /// <summary>
+    /// Per-track preferred lyrics provider id, keyed by
+    /// <c>TrackEntry.RelativeKey</c> (values: "lrc", "spotify-color",
+    /// "spotify-api", "lrclib"). Missing key = use the default chain.
+    /// </summary>
+    public Dictionary<string, string> LyricsSourceByTrack { get; set; } = new();
+
+    /// <summary>
+    /// Line or word-by-word lyric highlight. Global (not per track); an
+    /// out-of-range value read from disk is normalised to <see cref="Line"/> by
+    /// <see cref="Load"/>.
+    /// </summary>
+    public LyricsFollowMode LyricsFollowMode { get; set; } = LyricsFollowMode.Line;
+
+    /// <summary>
+    /// Offset for a track in milliseconds; unknown/empty key falls back to the
+    /// global <see cref="LyricsOffsetMs"/>. Positive = lyrics later.
+    /// </summary>
+    public double GetLyricsOffset(string? trackKey)
+    {
+        if (!string.IsNullOrEmpty(trackKey)
+            && LyricsOffsetByTrack != null
+            && LyricsOffsetByTrack.TryGetValue(trackKey, out var ms))
+            return ms;
+
+        return LyricsOffsetMs;
+    }
+
+    /// <summary>
+    /// Per-track offset negated for <c>position +</c> (see <see cref="EffectiveOffset"/>).
+    /// </summary>
+    public TimeSpan GetEffectiveOffset(string? trackKey) =>
+        TimeSpan.FromMilliseconds(-GetLyricsOffset(trackKey));
+
+    /// <summary>
+    /// Store a per-track offset (clamped to +/-<see cref="MaxLyricsOffsetMs"/>).
+    /// An empty key writes the global value instead.
+    /// </summary>
+    public void SetLyricsOffset(string? trackKey, double ms)
+    {
+        ms = Math.Clamp(ms, -MaxLyricsOffsetMs, MaxLyricsOffsetMs);
+        if (string.IsNullOrEmpty(trackKey))
+        {
+            LyricsOffsetMs = ms;
+            return;
+        }
+
+        (LyricsOffsetByTrack ??= new())[trackKey] = ms;
+    }
+
+    /// <summary>Preferred provider id for a track, or null when none is stored.</summary>
+    public string? GetLyricsSource(string? trackKey)
+    {
+        if (string.IsNullOrEmpty(trackKey) || LyricsSourceByTrack == null) return null;
+        return LyricsSourceByTrack.TryGetValue(trackKey, out var id) && !string.IsNullOrWhiteSpace(id)
+            ? id
+            : null;
+    }
+
+    /// <summary>Remember a provider id for a track; null/blank clears the entry.</summary>
+    public void SetLyricsSource(string? trackKey, string? sourceId)
+    {
+        if (string.IsNullOrEmpty(trackKey)) return;
+
+        LyricsSourceByTrack ??= new();
+        if (string.IsNullOrWhiteSpace(sourceId)) LyricsSourceByTrack.Remove(trackKey);
+        else LyricsSourceByTrack[trackKey] = sourceId.Trim();
+    }
+
+    /// <summary>
+    /// Move per-track lyrics settings from one library key to another after a
+    /// rename/move. The new key wins when both exist (the moved file is the one
+    /// the user is looking at). Returns how many entries moved; nothing is saved
+    /// here — the caller owns persistence, like the rest of the media path
+    /// repointing.
+    /// </summary>
+    public int RepointLyricsKey(string? oldKey, string? newKey)
+    {
+        if (string.IsNullOrWhiteSpace(oldKey) || string.IsNullOrWhiteSpace(newKey)) return 0;
+
+        var from = oldKey.Trim();
+        var to = newKey.Trim();
+        if (string.Equals(from, to, StringComparison.Ordinal)) return 0;
+
+        var moved = 0;
+        moved += RepointValue(LyricsOffsetByTrack, from, to);
+        moved += RepointValue(LyricsSourceByTrack, from, to);
+        return moved;
+    }
+
+    private static int RepointValue<T>(Dictionary<string, T>? map, string from, string to)
+    {
+        if (map == null || map.Count == 0) return 0;
+
+        var keys = map.Keys
+            .Where(key => string.Equals(key, from, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        if (keys.Count == 0) return 0;
+
+        foreach (var key in keys)
+        {
+            var value = map[key];
+            map.Remove(key);
+            map[to] = value;
+        }
+
+        return keys.Count;
+    }
 
     // ---- source downloads (Spotify / YouTube) ------------------------------
     //
@@ -141,12 +311,66 @@ public class AppSettings
         }
         settings.LegacyPlaintextSecret = null;
 
+        // Older/hand-edited files may omit these or contain an explicit null.
+        settings.LyricsOffsetByTrack ??= new();
+        settings.LyricsSourceByTrack ??= new();
+
+        // Unknown/removed follow modes (e.g. from a newer build or a hand-edited
+        // file) must not leave an undefined enum value behind.
+        if (!Enum.IsDefined(settings.LyricsFollowMode))
+            settings.LyricsFollowMode = LyricsFollowMode.Line;
+
+        // Same for a layout name this build no longer knows.
+        if (!Enum.IsDefined(settings.LibraryLayout))
+            settings.LibraryLayout = LibraryLayout.ArtistAlbum;
+
         // Unprotect OAuth access token
         if (!string.IsNullOrEmpty(settings.SpotifyAccessTokenProtected))
             settings.SpotifyAccessToken = Unprotect(settings.SpotifyAccessTokenProtected);
 
         settings.MigrateLegacyRoot();
+        settings.NormalizeKaraokeRoot();
         return settings;
+    }
+
+    /// <summary>
+    /// Read a blank karaoke root as "the same folder as the music", and a
+    /// differently spelled path that points at the music root as that root's
+    /// form. The merged library then has one root everywhere - the scan skips the
+    /// second pass, and callers that still ask for <see cref="KaraokeDirectory"/>
+    /// (the settings dialog, the separation gate, legacy path mapping) get the
+    /// folder that actually holds the files.
+    ///
+    /// A genuinely different folder is kept: an app updated before the migration
+    /// runs must still see the old split layout.
+    /// </summary>
+    public void NormalizeKaraokeRoot()
+    {
+        if (string.IsNullOrWhiteSpace(MusicDirectory)) return;
+
+        if (string.IsNullOrWhiteSpace(KaraokeDirectory))
+        {
+            KaraokeDirectory = MusicDirectory;
+            return;
+        }
+
+        if (SameDirectory(KaraokeDirectory, MusicDirectory)) KaraokeDirectory = MusicDirectory;
+    }
+
+    /// <summary>True when two folder settings name the same place (tolerating "\" vs "/" and a trailing separator).</summary>
+    private static bool SameDirectory(string a, string b)
+    {
+        try
+        {
+            return string.Equals(
+                Path.GetFullPath(a.Trim()).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                Path.GetFullPath(b.Trim()).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return string.Equals(a.Trim(), b.Trim(), StringComparison.OrdinalIgnoreCase);
+        }
     }
 
     /// <summary>

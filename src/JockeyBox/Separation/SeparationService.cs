@@ -1,6 +1,7 @@
 using System.IO;
 using System.Threading.Channels;
 using System.Windows.Threading;
+using JockeyBox.Downloads;
 using JockeyBox.Library;
 using JockeyBox.Settings;
 
@@ -57,11 +58,14 @@ public class SeparationService : IDisposable
     /// <paramref name="modelOverride"/> uses a specific model instead of the default.</summary>
     public bool Enqueue(TrackEntry track, string? modelOverride = null)
     {
-        if (track.MusicPath == null || string.IsNullOrWhiteSpace(_settings.KaraokeDirectory))
-            return false;
+        if (track.MusicPath == null) return false;
 
-        var outputPath = Path.Combine(_settings.KaraokeDirectory,
-            track.RelativeKey + "." + _settings.SeparationOutputFormat.ToLowerInvariant());
+        // The instrumental is written beside its original ("Song.karaoke.flac"),
+        // so no second root is involved; KaraokeOutputPath keeps the legacy
+        // mirror mapping as the fallback when the music folder is unknown.
+        var outputPath = DownloadPaths.KaraokeOutputPath(
+            _settings, track.MusicPath, _settings.SeparationOutputFormat, track.RelativeKey);
+        if (outputPath.Length == 0) return false;
 
         Job job;
         lock (_lock)

@@ -2,6 +2,7 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:views="clr-namespace:JockeyBox.Views"
+             Unloaded="OnViewUnloaded"
              Background="Transparent">
 
     <UserControl.Resources>
@@ -148,6 +149,35 @@
             </Setter>
         </Style>
 
+        <!-- Small per-result action inside a media row; the row itself stays selectable. -->
+        <Style x:Key="RowMiniButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="Width" Value="20"/>
+            <Setter Property="Height" Value="18"/>
+            <Setter Property="FontSize" Value="10"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Margin" Value="2,0,0,0"/>
+        </Style>
+
+        <!-- The preview action, spelled out: a bare play glyph was invisible next to the row. -->
+        <Style x:Key="PreviewButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="Height" Value="18"/>
+            <Setter Property="FontSize" Value="9"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Padding" Value="7,0"/>
+            <Setter Property="Margin" Value="6,0,0,0"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Foreground" Value="{StaticResource AccentBBrush}"/>
+            <Setter Property="Background" Value="{StaticResource PanelAltBrush}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Content" Value="PREVIEW"/>
+            <Setter Property="ToolTip" Value="Streams instantly, nothing is saved"/>
+            <Setter Property="ToolTipService.InitialShowDelay" Value="250"/>
+        </Style>
+
         <!-- Card holding one pane. -->
         <Style x:Key="PaneCard" TargetType="Border">
             <Setter Property="Background" Value="{StaticResource PanelAltBrush}"/>
@@ -187,12 +217,82 @@
 
     <Grid Margin="0,2,0,0">
         <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
+        <!-- ================= YouTube account / write strip =================
+             Compact, one row above the panes: sign-in, remote playlist creation,
+             and the two per-track writes. Every button's tooltip explains why it
+             is disabled when it is. -->
+        <Grid Grid.Row="0" Height="26" Margin="0,0,0,6">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
+            <TextBlock Grid.Column="0" Text="{Binding YouTubeAccountText}"
+                       FontSize="10.5" VerticalAlignment="Center"
+                       TextTrimming="CharacterEllipsis" Margin="0,0,10,0"
+                       ToolTip="The Google account YouTube writes will use. Credentials live in %APPDATA%\JockeyBox\youtube-oauth.json.">
+                <TextBlock.Style>
+                    <Style TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+                        <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsYouTubeConnected}" Value="True">
+                                <Setter Property="Foreground" Value="{StaticResource AccentABrush}"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </TextBlock.Style>
+            </TextBlock>
+
+            <Button Grid.Column="1" Content="{Binding YouTubeConnectLabel}"
+                    Style="{StaticResource ToolButton}" Margin="0,0,6,0"
+                    Command="{Binding ConnectYouTubeCommand}"
+                    ToolTip="Sign in with Google, or change the connected channel"/>
+
+            <Button Grid.Column="2" Content="Import my playlists"
+                    Style="{StaticResource ToolButton}" Margin="0,0,6,0"
+                    Command="{Binding ImportMyPlaylistsCommand}"
+                    ToolTip="{Binding ImportMyPlaylistsHint}"/>
+
+            <Button Grid.Column="3" Content="Add to YouTube"
+                    Style="{StaticResource ToolButton}" Margin="0,0,6,0"
+                    Command="{Binding AddSelectedToYouTubeCommand}"
+                    ToolTip="{Binding AddToYouTubeHint}"/>
+
+            <Button Grid.Column="4" Content="Remove from YouTube"
+                    Style="{StaticResource ToolButton}" Margin="0,0,10,0"
+                    Command="{Binding RemoveFromYouTubeCommand}"
+                    ToolTip="{Binding RemoveFromYouTubeHint}"/>
+
+            <TextBox Grid.Column="5" Width="118" Height="24" Padding="6,2" FontSize="11"
+                     VerticalContentAlignment="Center"
+                     Text="{Binding RemotePlaylistName, UpdateSourceTrigger=PropertyChanged}"
+                     ToolTip="Name for a new playlist created on your YouTube channel"/>
+
+            <ComboBox Grid.Column="6" Width="82" Height="24" FontSize="11" Margin="6,0,0,0"
+                      ItemsSource="{Binding PrivacyOptions}"
+                      SelectedItem="{Binding SelectedRemotePrivacy}"
+                      ToolTip="Privacy of the new YouTube playlist"/>
+
+            <Button Grid.Column="7" Content="+ Remote"
+                    Style="{StaticResource ToolButton}" Margin="6,0,0,0"
+                    Command="{Binding CreateRemotePlaylistCommand}"
+                    ToolTip="{Binding CreateRemoteHint}"/>
+        </Grid>
+
         <!-- ================= Two panes, both full height ================= -->
-        <Grid Grid.Row="0">
+        <Grid Grid.Row="1">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="1.05*" MinWidth="240"/>
                 <ColumnDefinition Width="8"/>
@@ -207,6 +307,7 @@
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
 
@@ -230,7 +331,7 @@
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBox Grid.Column="0" Height="24" FontSize="12" VerticalContentAlignment="Center"
+                        <TextBox Grid.Column="0" FontSize="12" VerticalContentAlignment="Center"
                                  Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
                                  KeyDown="OnSearchKeyDown"
                                  ToolTip="Search YouTube by title, artist or a phrase"/>
@@ -253,7 +354,7 @@
                         </Grid.ColumnDefinitions>
                         <TextBlock Grid.Column="0" Text="URL" Style="{StaticResource SectionLabel}"
                                    Margin="0,0,8,0"/>
-                        <TextBox Grid.Column="1" Height="24" FontSize="11" VerticalContentAlignment="Center"
+                        <TextBox Grid.Column="1" FontSize="11" VerticalContentAlignment="Center"
                                  Text="{Binding ImportUrl, UpdateSourceTrigger=PropertyChanged}"
                                  KeyDown="OnImportKeyDown"
                                  ToolTip="Paste a YouTube video or playlist link"/>
@@ -280,8 +381,20 @@
                                     <MenuItem Header="Play"
                                               Command="{Binding PlacementTarget.DataContext.PlayResultCommand,
                                                   RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                    <MenuItem Header="Add to queue"
+                                              Command="{Binding PlacementTarget.DataContext.AddResultToQueueCommand,
+                                                  RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                    <MenuItem Header="Preview (stream)"
+                                              Command="{Binding PlacementTarget.DataContext.PreviewResultCommand,
+                                                  RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
                                     <MenuItem Header="Download"
                                               Command="{Binding PlacementTarget.DataContext.DownloadResultCommand,
+                                                  RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                    <MenuItem Header="Download &amp; play"
+                                              Command="{Binding PlacementTarget.DataContext.DownloadAndPlayResultCommand,
+                                                  RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                    <MenuItem Header="Open on YouTube"
+                                              Command="{Binding PlacementTarget.DataContext.OpenResultOnYouTubeCommand,
                                                   RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
                                     <MenuItem Header="Add to playlist"
                                               Command="{Binding PlacementTarget.DataContext.AddResultToPlaylistCommand,
@@ -316,8 +429,23 @@
                                                            Visibility="{Binding IsLive, Converter={StaticResource BoolToVisibility}}"/>
                                             </StackPanel>
                                         </StackPanel>
-                                        <TextBlock Grid.Column="1" Text="&#x25B6;" FontSize="9" Margin="8,0,0,0"
-                                                   VerticalAlignment="Center" Foreground="{StaticResource TextDimBrush}"/>
+                                        <StackPanel Grid.Column="1" Orientation="Horizontal"
+                                                    VerticalAlignment="Center" Margin="8,0,0,0">
+                                            <Button Style="{StaticResource PreviewButton}"
+                                                    Command="{Binding DataContext.PreviewEntryCommand,
+                                                        RelativeSource={RelativeSource AncestorType=ListBox}}"
+                                                    CommandParameter="{Binding}"/>
+                                            <Button Content="&#x2B07;" Style="{StaticResource RowMiniButton}"
+                                                    Command="{Binding DataContext.DownloadEntryCommand,
+                                                        RelativeSource={RelativeSource AncestorType=ListBox}}"
+                                                    CommandParameter="{Binding}"
+                                                    ToolTip="Download this result into the selected playlist"/>
+                                            <Button Content="&#x2197;" Style="{StaticResource RowMiniButton}"
+                                                    Command="{Binding DataContext.OpenEntryOnYouTubeCommand,
+                                                        RelativeSource={RelativeSource AncestorType=ListBox}}"
+                                                    CommandParameter="{Binding}"
+                                                    ToolTip="Open this result on YouTube in your browser"/>
+                                        </StackPanel>
                                     </Grid>
                                 </DataTemplate>
                             </ListBox.ItemTemplate>
@@ -344,8 +472,11 @@
                         </TextBlock>
                     </Grid>
 
+                    <!-- Preview strip: position / seek / play-pause for what the deck is playing -->
+                    <views:PreviewBar Grid.Row="4" DataContext="{Binding Preview}"/>
+
                     <!-- Actions on the selected result, inline with its name -->
-                    <Grid Grid.Row="4" Height="22" Margin="0,4,0,0">
+                    <Grid Grid.Row="5" Height="22" Margin="0,4,0,0">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="*"/>
@@ -357,6 +488,9 @@
                             <Button Content="&#x2B07;" Style="{StaticResource ResultIconButton}"
                                     Command="{Binding DownloadResultCommand}"
                                     ToolTip="Download the selected result into the library"/>
+                            <Button Content="&#x2193;&#x25B6;" Style="{StaticResource ResultIconButton}"
+                                    Command="{Binding DownloadAndPlayResultCommand}"
+                                    ToolTip="Download the selected result and play the stream while it downloads"/>
                             <Button Content="+" Style="{StaticResource ResultIconButton}"
                                     Command="{Binding AddResultToPlaylistCommand}"
                                     ToolTip="Add the selected result to the selected playlist"/>
@@ -382,13 +516,48 @@
                         <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
 
-                    <!-- Section head + counts -->
+                    <!-- Section head + counts + cache age + refresh.
+                         The rail is the channel's playlists when connected, so it
+                         also says how old that list is: a dim "updated N min ago"
+                         is stale data made visible instead of a blocking spinner. -->
                     <Grid Grid.Row="0" Height="14">
-                        <TextBlock Text="PLAYLIST" Style="{StaticResource SectionLabel}"/>
-                        <TextBlock Text="{Binding CountsText}" FontFamily="Consolas" FontSize="10.5"
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="PLAYLIST" Style="{StaticResource SectionLabel}"/>
+                        <TextBlock Grid.Column="1" Text="{Binding CountsText}" FontFamily="Consolas" FontSize="10.5"
+                                   Margin="8,0,0,0"
                                    Foreground="{StaticResource TextDimBrush}"
                                    VerticalAlignment="Center" HorizontalAlignment="Right"
                                    TextTrimming="CharacterEllipsis" ToolTip="{Binding CountsText}"/>
+                        <TextBlock Grid.Column="2" Text="{Binding RemoteStampText}" FontSize="9"
+                                   Margin="6,0,0,0" VerticalAlignment="Center"
+                                   Foreground="{StaticResource TextDimBrush}"
+                                   Opacity="{Binding RemoteStampOpacity}"
+                                   ToolTip="When this playlist list was read from YouTube. The rail keeps the last-known list (5 min) instead of spending quota on every tab switch; ↻ forces a fresh read.">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock"
+                                       BasedOn="{StaticResource {x:Type TextBlock}}">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsYouTubeConnected}" Value="True">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                        <Button Grid.Column="3" Content="&#x21BB;" FontSize="10" Padding="4,0" Height="14"
+                                MinWidth="18" Margin="6,0,0,0" VerticalAlignment="Center"
+                                Command="{Binding RefreshRemoteCommand}"
+                                ToolTip="{Binding ImportMyPlaylistsHint}"
+                                Background="Transparent" BorderBrush="Transparent"
+                                Foreground="{StaticResource TextDimBrush}"
+                                Visibility="{Binding IsYouTubeConnected,
+                                             Converter={StaticResource BoolToVisibility}}"/>
                     </Grid>
 
                     <!-- Playlist picker + filter + manage disclosure -->
@@ -398,20 +567,124 @@
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <ComboBox Grid.Column="0" Height="24" FontSize="11" VerticalContentAlignment="Center"
-                                  ItemsSource="{Binding Playlists}"
-                                  SelectedItem="{Binding SelectedPlaylist}" DisplayMemberPath="Name"
-                                  ToolTip="{Binding SelectedPlaylist.Name}"/>
-                        <TextBlock Grid.Column="1" Text="FILTER" Style="{StaticResource SectionLabel}"
+                        <ComboBox Grid.Column="0" FontSize="11" VerticalContentAlignment="Center"
+                                  HorizontalContentAlignment="Stretch"
+                                  ItemsSource="{Binding RailView}"
+                                  IsSynchronizedWithCurrentItem="False"
+                                  SelectedItem="{Binding SelectedRail}"
+                                  ToolTip="{Binding SelectedRail.ToolTip}"
+                                  MaxDropDownHeight="420">
+                            <ComboBox.Style>
+                                <Style TargetType="ComboBox" BasedOn="{StaticResource {x:Type ComboBox}}">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding HasPlaylists}" Value="False">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </ComboBox.Style>
+                            <!-- Two groups, in this order: the playlists on the
+                                 signed-in channel (YouTube's order), then the local
+                                 imports the channel does not have. Nothing is hidden:
+                                 a list that is only here stays here, just labelled. -->
+                            <ComboBox.GroupStyle>
+                                <GroupStyle>
+                                    <GroupStyle.HeaderTemplate>
+                                        <DataTemplate>
+                                            <TextBlock Text="{Binding Name}" FontSize="9"
+                                                       FontFamily="Consolas"
+                                                       Foreground="{StaticResource TextDimBrush}"
+                                                       Margin="2,5,0,2"/>
+                                        </DataTemplate>
+                                    </GroupStyle.HeaderTemplate>
+                                </GroupStyle>
+                            </ComboBox.GroupStyle>
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="{Binding Title}" FontSize="11"
+                                                   VerticalAlignment="Center"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   ToolTip="{Binding ToolTip}"/>
+                                        <!-- Item count for a channel playlist, or the
+                                             source marker for a local one. -->
+                                        <TextBlock Grid.Column="1" Text="{Binding CountText}"
+                                                   FontSize="9" Margin="6,0,0,0"
+                                                   FontFamily="Consolas"
+                                                   VerticalAlignment="Center"
+                                                   Foreground="{StaticResource TextDimBrush}"/>
+                                    </Grid>
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                        <!-- Empty rail: the picker collapses, this hint takes its cell. -->
+                        <TextBlock Grid.Column="0"
+                                   FontSize="10.5" Foreground="{StaticResource TextDimBrush}"
+                                   VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                                   IsHitTestVisible="False">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock"
+                                       BasedOn="{StaticResource {x:Type TextBlock}}">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Setter Property="Text"
+                                            Value="No playlists yet &#x2014; Connect YouTube, or import a playlist URL"/>
+                                    <Setter Property="ToolTip"
+                                            Value="Connecting YouTube lists your channel's playlists here. You can also paste a playlist URL in the import strip, or create a local one with + in the manage strip (&#x22EF;)."/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding HasPlaylists}" Value="False">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding IsYouTubeConnected}" Value="False">
+                                            <Setter Property="Text"
+                                                    Value="Not connected &#x2014; local imports only. Connect YouTube to list your playlists"/>
+                                            <Setter Property="ToolTip"
+                                                    Value="With no Google account this rail lists only the playlists imported into JockeyBox. Connect YouTube to see your channel's own playlists and to write to them."/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                        <!-- Write status of the selected rail row: only a playlist that
+                             also exists on the signed-in channel can receive writes. -->
+                        <TextBlock Grid.Column="1" FontSize="9" Margin="8,0,0,0"
+                                   VerticalAlignment="Center" IsHitTestVisible="True">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock"
+                                       BasedOn="{StaticResource {x:Type TextBlock}}">
+                                    <Setter Property="Text" Value="Local only"/>
+                                    <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+                                    <Setter Property="ToolTip"
+                                            Value="This playlist lives only in JockeyBox. Add to YouTube / Remove from YouTube need one that also exists on your channel - create it with + Remote, or Import my playlists."/>
+                                    <Style.Triggers>
+                                        <!-- No rail row selected: no write status to report. -->
+                                        <DataTrigger Binding="{Binding SelectedPlaylist}" Value="{x:Null}">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding IsSelectedPlaylistRemote}" Value="True">
+                                            <Setter Property="Text" Value="On YouTube &#x2713;"/>
+                                            <Setter Property="Foreground" Value="{StaticResource AccentABrush}"/>
+                                            <Setter Property="ToolTip"
+                                                    Value="This playlist exists on your YouTube channel, so Add to YouTube and Remove from YouTube write straight to it."/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                        <TextBlock Grid.Column="2" Text="FILTER" Style="{StaticResource SectionLabel}"
                                    Margin="8,0,4,0"/>
-                        <TextBox Grid.Column="2" Width="88" Height="24" FontSize="11"
+                        <TextBox Grid.Column="3" Width="88" FontSize="11"
                                  VerticalContentAlignment="Center"
                                  Text="{Binding PlaylistFilter, UpdateSourceTrigger=PropertyChanged}"
                                  ToolTip="Filter playlist tracks by title or artist"/>
-                        <ToggleButton Grid.Column="3" x:Name="ManageToggle" Content="&#x22EF;"
+                        <ToggleButton Grid.Column="4" x:Name="ManageToggle" Content="&#x22EF;"
                                       Style="{StaticResource StripToggle}" Margin="6,0,0,0"
-                                      ToolTip="New, rename, delete, download the playlist"/>
+                                      ToolTip="New, rename, delete, download - these make and edit local playlists; + Remote creates one on YouTube"/>
                     </Grid>
 
                     <!-- Playlist manage strip, hidden until asked for -->
@@ -425,7 +698,7 @@
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBox Grid.Column="0" Height="22" FontSize="11" VerticalContentAlignment="Center"
+                        <TextBox Grid.Column="0" Height="22" MinHeight="22" Padding="6,2" FontSize="11" VerticalContentAlignment="Center"
                                  Text="{Binding NewPlaylistName, UpdateSourceTrigger=PropertyChanged}"
                                  ToolTip="Name for a new playlist, or the new name when renaming"/>
                         <Button Grid.Column="1" Content="+" Style="{StaticResource IconButton}" Height="22"
@@ -442,7 +715,7 @@
                         <Button Grid.Column="4" Content="&#x2B07;" Style="{StaticResource PlaylistIconButton}"
                                 Height="22" Width="22" Margin="4,0,0,0"
                                 Command="{Binding DownloadPlaylistCommand}"
-                                ToolTip="Queue every track in this playlist that is not in the library yet"/>
+                                ToolTip="Download every track in this playlist that is not in the library yet"/>
                     </Grid>
 
                     <ListView Grid.Row="3" x:Name="PlaylistTracksList" ItemsSource="{Binding PlaylistTracksView}"
@@ -461,11 +734,29 @@
                                 <MenuItem Header="Play"
                                           Command="{Binding PlacementTarget.DataContext.PlayPlaylistTrackCommand,
                                               RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                <MenuItem Header="Add to queue"
+                                          Command="{Binding PlacementTarget.DataContext.AddToQueueCommand,
+                                              RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                          CommandParameter="{Binding PlacementTarget.SelectedItem,
+                                              RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                <MenuItem Header="Preview (stream)"
+                                          Command="{Binding PlacementTarget.DataContext.PreviewPlaylistTrackCommand,
+                                              RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
                                 <MenuItem Header="Download"
                                           Command="{Binding PlacementTarget.DataContext.DownloadPlaylistTrackCommand,
                                               RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                <MenuItem Header="Download &amp; play"
+                                          Command="{Binding PlacementTarget.DataContext.DownloadAndPlayPlaylistTrackCommand,
+                                              RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
                                 <MenuItem Header="Remove from playlist"
                                           Command="{Binding PlacementTarget.DataContext.RemoveTrackCommand,
+                                              RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                <Separator/>
+                                <MenuItem Header="Add to YouTube"
+                                          Command="{Binding PlacementTarget.DataContext.AddSelectedToYouTubeCommand,
+                                              RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                <MenuItem Header="Remove from YouTube"
+                                          Command="{Binding PlacementTarget.DataContext.RemoveFromYouTubeCommand,
                                               RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
                             </ContextMenu>
                         </ListView.ContextMenu>
@@ -475,6 +766,7 @@
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*"/>
                                         <ColumnDefinition Width="86"/>
+                                        <ColumnDefinition Width="Auto"/>
                                         <ColumnDefinition Width="Auto"/>
                                         <ColumnDefinition Width="16"/>
                                     </Grid.ColumnDefinitions>
@@ -489,7 +781,12 @@
                                     <TextBlock Grid.Column="2" Text="{Binding DurationText}"
                                                FontFamily="Consolas" FontSize="10.5" VerticalAlignment="Center"
                                                Foreground="{StaticResource TextDimBrush}" Margin="6,0,4,0"/>
-                                    <TextBlock Grid.Column="3" Text="{Binding StateGlyph}" FontSize="10"
+                                    <Button Grid.Column="3" Style="{StaticResource PreviewButton}"
+                                            Margin="0,0,2,0"
+                                            Command="{Binding DataContext.PreviewPlaylistTrackCommand,
+                                                RelativeSource={RelativeSource AncestorType=ListView}}"
+                                            CommandParameter="{Binding}"/>
+                                    <TextBlock Grid.Column="4" Text="{Binding StateGlyph}" FontSize="10"
                                                HorizontalAlignment="Center" VerticalAlignment="Center">
                                         <TextBlock.Style>
                                             <Style TargetType="TextBlock">
@@ -530,6 +827,9 @@
                                         <MultiDataTrigger.Conditions>
                                             <Condition Binding="{Binding PlaylistTracksView.IsEmpty}" Value="True"/>
                                             <Condition Binding="{Binding IsImporting}" Value="False"/>
+                                            <!-- With no rail row there is no "here" yet; the
+                                                 picker's own hint says what to do instead. -->
+                                            <Condition Binding="{Binding HasPlaylists}" Value="True"/>
                                         </MultiDataTrigger.Conditions>
                                         <Setter Property="Visibility" Value="Visible"/>
                                     </MultiDataTrigger>
@@ -570,20 +870,26 @@
         </Grid>
 
         <!-- ============ Status ============ -->
-        <Grid Grid.Row="1" Height="16" Margin="2,4,2,0">
+        <Grid Grid.Row="2" Height="16" Margin="2,4,2,0">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
             <TextBlock Grid.Column="0" Text="{Binding StatusText}" FontSize="10.5"
                        Foreground="{StaticResource TextDimBrush}" TextTrimming="CharacterEllipsis"
                        VerticalAlignment="Center" ToolTip="{Binding StatusText}"/>
-            <TextBlock Grid.Column="1" Text="Importing&#x2026;" FontSize="10.5"
+            <TextBlock Grid.Column="1" Text="YouTube&#x2026;" FontSize="10.5"
+                       Foreground="{StaticResource AccentABrush}" Margin="8,0,0,0"
+                       VerticalAlignment="Center"
+                       ToolTip="A YouTube Data API request is running"
+                       Visibility="{Binding IsYouTubeBusy, Converter={StaticResource BoolToVisibility}}"/>
+            <TextBlock Grid.Column="2" Text="Importing&#x2026;" FontSize="10.5"
                        Foreground="{StaticResource AccentBBrush}" Margin="8,0,0,0"
                        VerticalAlignment="Center"
                        Visibility="{Binding IsImporting, Converter={StaticResource BoolToVisibility}}"/>
-            <TextBlock Grid.Column="2" Text="Working&#x2026;" FontSize="10.5"
+            <TextBlock Grid.Column="3" Text="Working&#x2026;" FontSize="10.5"
                        Foreground="{StaticResource AccentABrush}" Margin="8,0,0,0"
                        VerticalAlignment="Center"
                        Visibility="{Binding IsBusy, Converter={StaticResource BoolToVisibility}}"/>

@@ -14,6 +14,8 @@
     <SolidColorBrush x:Key="HoverBrush" Color="#262B35"/>
     <SolidColorBrush x:Key="PressedBrush" Color="#303642"/>
     <SolidColorBrush x:Key="SelectionBrush" Color="#2E4A5A"/>
+    <!-- Destructive actions: delete-track menu items, future danger buttons. -->
+    <SolidColorBrush x:Key="DangerBrush" Color="#FF5C5C"/>
 
     <!-- Default per-deck accent; overridden per deck card -->
     <SolidColorBrush x:Key="DeckAccent" Color="#00C8FF"/>
@@ -88,21 +90,49 @@
     </Style>
 
     <!-- ============ TextBox ============ -->
+    <!-- Height is derived from the font, never fixed: the field grows with its
+         text so the whole line box (ascent + descent + line gap) fits inside
+         the padding. Segoe UI is ~1.33 em tall, so 12 px text needs ~16 px:
+         16 + 6 + 6 (padding) + 1 + 1 (border) = 30 px - MinHeight 32 is a
+         floor, not a cap, so a larger FontSize simply makes the box taller.
+         Padding sits on the Border (not as a Margin on the host) so the text
+         viewport, caret and scrollbars all share one content box, and the
+         host follows VerticalContentAlignment so single-line text is centred
+         instead of hugging the top of the field. -->
     <Style TargetType="TextBox">
         <Setter Property="Background" Value="{StaticResource PanelAltBrush}"/>
         <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
         <Setter Property="CaretBrush" Value="{StaticResource TextBrush}"/>
         <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
         <Setter Property="BorderThickness" Value="1"/>
-        <Setter Property="Padding" Value="6,4"/>
+        <Setter Property="Padding" Value="8,6"/>
+        <Setter Property="MinHeight" Value="32"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
+        <Setter Property="HorizontalScrollBarVisibility" Value="Hidden"/>
+        <Setter Property="VerticalScrollBarVisibility" Value="Hidden"/>
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="TextBox">
                     <Border Background="{TemplateBinding Background}"
                             BorderBrush="{TemplateBinding BorderBrush}"
-                            BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="4">
-                        <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}"/>
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            CornerRadius="4" Padding="{TemplateBinding Padding}">
+                        <ScrollViewer x:Name="PART_ContentHost" Focusable="False"
+                                      VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                      HorizontalScrollBarVisibility="{TemplateBinding HorizontalScrollBarVisibility}"
+                                      VerticalScrollBarVisibility="{TemplateBinding VerticalScrollBarVisibility}"/>
                     </Border>
+                    <ControlTemplate.Triggers>
+                        <!-- Multi-line fields fill the box and scroll instead of clipping. -->
+                        <Trigger Property="AcceptsReturn" Value="True">
+                            <Setter Property="VerticalContentAlignment" Value="Stretch"/>
+                            <Setter Property="VerticalScrollBarVisibility" Value="Auto"/>
+                            <Setter Property="MinHeight" Value="72"/>
+                        </Trigger>
+                        <Trigger Property="TextWrapping" Value="Wrap">
+                            <Setter Property="VerticalContentAlignment" Value="Stretch"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
                 </ControlTemplate>
             </Setter.Value>
         </Setter>
@@ -128,14 +158,17 @@
         </Setter>
     </Style>
 
+    <!-- Dropdown rows: 8,6 keeps descenders (g, y, p) clear of the item edge
+         at the default 12 px font (16 px line box + 12 px padding = 28 px). -->
     <Style TargetType="ComboBoxItem">
         <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
-        <Setter Property="Padding" Value="8,5"/>
+        <Setter Property="Padding" Value="8,6"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ComboBoxItem">
                     <Border x:Name="bd" Background="Transparent" Padding="{TemplateBinding Padding}">
-                        <ContentPresenter/>
+                        <ContentPresenter VerticalAlignment="{TemplateBinding VerticalContentAlignment}"/>
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsHighlighted" Value="True">
@@ -149,27 +182,37 @@
 
     <Style TargetType="ComboBox">
         <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
-        <Setter Property="Height" Value="30"/>
+        <!-- No fixed Height: the closed box is MinHeight-driven exactly like a
+             TextBox, so it grows with its font instead of cropping the text. -->
+        <Setter Property="Padding" Value="8,6"/>
+        <Setter Property="MinHeight" Value="32"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ComboBox">
                     <Grid>
-                        <ToggleButton Style="{StaticResource ComboToggle}" Focusable="False"
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <!-- reserved lane for the drop-down arrow -->
+                            <ColumnDefinition Width="18"/>
+                        </Grid.ColumnDefinitions>
+                        <ToggleButton Grid.ColumnSpan="2" Style="{StaticResource ComboToggle}" Focusable="False"
                                       IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}"
                                       ClickMode="Press"/>
-                        <ContentPresenter Margin="8,0,24,0" VerticalAlignment="Center"
+                        <ContentPresenter Grid.Column="0" Margin="{TemplateBinding Padding}"
+                                          VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
                                           IsHitTestVisible="False"
                                           Content="{TemplateBinding SelectionBoxItem}"
                                           ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
                                           ContentTemplateSelector="{TemplateBinding ItemTemplateSelector}"
                                           ContentStringFormat="{TemplateBinding SelectionBoxItemStringFormat}"/>
-                        <Popup IsOpen="{TemplateBinding IsDropDownOpen}" Placement="Bottom"
+                        <Popup Grid.ColumnSpan="2" IsOpen="{TemplateBinding IsDropDownOpen}" Placement="Bottom"
                                AllowsTransparency="True" Focusable="False" PopupAnimation="Fade">
                             <Border Background="{StaticResource PanelAltBrush}"
                                     BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
                                     CornerRadius="4" MinWidth="{TemplateBinding ActualWidth}"
                                     MaxHeight="{TemplateBinding MaxDropDownHeight}">
-                                <ScrollViewer>
+                                <ScrollViewer VerticalScrollBarVisibility="Auto">
                                     <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Contained"/>
                                 </ScrollViewer>
                             </Border>

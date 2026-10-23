@@ -73,6 +73,17 @@ public partial class DownloadItem : ObservableObject
     /// <summary>Final file path once the download succeeded.</summary>
     public string? OutputPath { get; set; }
 
+    /// <summary>
+    /// The track's state before the queue first touched it (New, Failed, ...).
+    /// Restored when a stream preview completes or a download is cancelled or
+    /// fails, so a row never stays at <see cref="SourceTrackState.Downloading"/>
+    /// - that stale state is what rendered "⋯ 0%" forever.
+    /// </summary>
+    public SourceTrackState PriorState { get; set; } = SourceTrackState.New;
+
+    /// <summary>True for a permanent library download, false for a cache-only preview.</summary>
+    public bool IsLibraryDownload => Kind == DownloadKind.Library;
+
     /// <summary>How many times this item has been attempted (drives the retry limit).</summary>
     public int Attempts { get; set; }
 

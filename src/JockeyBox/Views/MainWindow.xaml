@@ -8,32 +8,62 @@
         Background="{StaticResource WindowBrush}"
         WindowStartupLocation="CenterScreen">
 
+    <Window.InputBindings>
+        <KeyBinding Key="Q" Modifiers="Control" Command="{Binding AddToQueueCommand}"/>
+        <KeyBinding Key="Right" Modifiers="Control+Shift" Command="{Binding PlayNextCommand}"/>
+        <KeyBinding Key="Left" Modifiers="Control+Shift" Command="{Binding PlayPreviousCommand}"/>
+    </Window.InputBindings>
+
     <Window.Resources>
-        <!-- ======== Deck card (shared by both decks; accent injected per-deck) ======== -->
+        <!-- ======== Deck card (shared by both decks; accent injected per-deck) ========
+             A deck is a self-contained player: its own playhead, seek, volume,
+             output device and waveform, plus the karaoke sub-stem bar when the
+             loaded track has a karaoke partner. -->
         <DataTemplate x:Key="DeckCardTemplate" DataType="{x:Type vm:DeckViewModel}">
-            <!-- Tighter padding than the shared card: the deck cards sit in a
-                 block that shares vertical space with the browser. -->
             <Border Style="{StaticResource Card}" Padding="12,6">
                 <Grid>
                     <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>   <!-- header -->
+                        <RowDefinition Height="Auto"/>   <!-- track -->
+                        <RowDefinition Height="Auto"/>   <!-- output device -->
+                        <RowDefinition Height="Auto"/>   <!-- volume -->
+                        <RowDefinition Height="Auto"/>   <!-- transport + seek -->
+                        <RowDefinition Height="Auto"/>   <!-- deck waveform -->
+                        <RowDefinition Height="Auto"/>   <!-- karaoke sub-stem -->
                     </Grid.RowDefinitions>
 
-                    <!-- Header: deck name + local time readout -->
+                    <!-- Header: deck name, active marker, local time readout -->
                     <DockPanel Grid.Row="0">
                         <TextBlock Text="{Binding Title}" FontSize="13" FontWeight="Bold"
-                                   Foreground="{DynamicResource DeckAccent}"/>
+                                   Foreground="{DynamicResource DeckAccent}" VerticalAlignment="Center"/>
+                        <Button DockPanel.Dock="Right" Margin="8,0,0,0"
+                                Command="{Binding ActivateCommand}"
+                                ToolTip="Route the shared seek bar and the lyrics clock to this deck">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                    <Setter Property="Content" Value="SET ACTIVE"/>
+                                    <Setter Property="FontSize" Value="9"/>
+                                    <Setter Property="Padding" Value="6,2"/>
+                                    <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsActive}" Value="True">
+                                            <Setter Property="Content" Value="ACTIVE"/>
+                                            <Setter Property="Foreground" Value="{DynamicResource DeckAccent}"/>
+                                            <Setter Property="BorderBrush" Value="{DynamicResource DeckAccent}"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
                         <TextBlock DockPanel.Dock="Right" Text="{Binding TimeReadout}"
                                    HorizontalAlignment="Right" FontFamily="Consolas"
+                                   VerticalAlignment="Center" Margin="8,0"
                                    Foreground="{StaticResource TextDimBrush}"/>
                     </DockPanel>
 
                     <!-- Track info -->
                     <StackPanel Grid.Row="1" Margin="0,5,0,6">
-                        <TextBlock Text="{Binding TrackTitle}" FontSize="16" FontWeight="SemiBold"
+                        <TextBlock Text="{Binding TrackTitle}" FontSize="15" FontWeight="SemiBold"
                                    TextTrimming="CharacterEllipsis"/>
                         <TextBlock Text="{Binding TrackDetail}" Foreground="{StaticResource TextDimBrush}"
                                    FontSize="11" TextTrimming="CharacterEllipsis" Margin="0,1,0,0"/>
@@ -46,35 +76,98 @@
                         <ComboBox ItemsSource="{Binding Devices}" SelectedItem="{Binding SelectedDevice}"/>
                     </DockPanel>
 
-                    <!-- Delay + volume -->
-                    <Grid Grid.Row="3">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="*"/>
-                        </Grid.ColumnDefinitions>
+                    <!-- Volume -->
+                    <DockPanel Grid.Row="3">
+                        <TextBlock Text="VOL" Width="60" VerticalAlignment="Center" FontSize="10"
+                                   Foreground="{StaticResource TextDimBrush}"/>
+                        <Slider Minimum="0" Maximum="1.2"
+                                TickFrequency="0.1" IsSnapToTickEnabled="True"
+                                Value="{Binding Volume}"/>
+                    </DockPanel>
 
-                        <TextBlock Grid.Column="0" Text="DELAY MS" Width="60" VerticalAlignment="Center"
-                                   FontSize="10" Foreground="{StaticResource TextDimBrush}"/>
-                        <StackPanel Grid.Column="1" Orientation="Horizontal">
-                            <RepeatButton Style="{StaticResource NudgeButton}" Content="&#x2212;"
-                                          Delay="400" Interval="150"
-                                          Command="{Binding NudgeDelayCommand}" CommandParameter="-5"/>
-                            <TextBox Width="64" Margin="4,0" TextAlignment="Center"
-                                     Text="{Binding DelayMs, UpdateSourceTrigger=LostFocus, StringFormat=F0}"/>
-                            <RepeatButton Style="{StaticResource NudgeButton}" Content="+"
-                                          Delay="400" Interval="150"
-                                          Command="{Binding NudgeDelayCommand}" CommandParameter="5"/>
-                        </StackPanel>
+                    <!-- Transport: this deck's play/pause and its own seek bar -->
+                    <DockPanel Grid.Row="4" Margin="0,2,0,0">
+                        <Button DockPanel.Dock="Left" Width="34" Height="26" Padding="0"
+                                Style="{StaticResource TransportButton}"
+                                Content="{Binding PlayGlyph}"
+                                Command="{Binding PlayPauseCommand}"
+                                ToolTip="Play/pause this deck"/>
+                        <Slider Margin="8,0,0,0" VerticalAlignment="Center"
+                                Minimum="0" Maximum="{Binding DurationSeconds}"
+                                Value="{Binding PositionSeconds, Mode=TwoWay}"
+                                PreviewMouseLeftButtonDown="OnDeckSeekStart"
+                                PreviewMouseLeftButtonUp="OnDeckSeekEnd"
+                                LostMouseCapture="OnDeckSeekLostCapture"/>
+                    </DockPanel>
 
-                        <DockPanel Grid.Column="2" Margin="16,0,0,0">
-                            <TextBlock Text="VOL" VerticalAlignment="Center" FontSize="10"
-                                       Foreground="{StaticResource TextDimBrush}" Margin="0,0,8,0"/>
-                            <Slider Minimum="0" Maximum="1.2"
-                                    TickFrequency="0.1" IsSnapToTickEnabled="True"
-                                    Value="{Binding Volume}" />
-                        </DockPanel>
-                    </Grid>
+                    <!-- Deck waveform (half the old shared strip height) -->
+                    <Canvas Grid.Row="5" Height="40" Margin="0,4,0,0" ClipToBounds="True"
+                            Tag="primary"
+                            Loaded="OnDeckWaveformLoaded"
+                            SizeChanged="OnDeckWaveformSizeChanged"/>
+
+                    <!-- Karaoke sub-stem bar: gain, delay trim, seek and its own
+                         waveform, laid out on the same width as the deck's one so
+                         the peaks line up visually underneath. -->
+                    <Border Grid.Row="6" Margin="0,6,0,0" Padding="0,5,0,0"
+                            BorderBrush="{DynamicResource DeckAccent}" BorderThickness="0,1,0,0"
+                            Visibility="{Binding HasKaraoke, Converter={StaticResource BoolToVisibility}}">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <DockPanel Grid.Row="0" LastChildFill="False">
+                                <TextBlock Text="KARAOKE" FontSize="9" FontWeight="Bold"
+                                           Foreground="{DynamicResource DeckAccent}"
+                                           VerticalAlignment="Center"/>
+                                <Button DockPanel.Dock="Left" Width="26" Height="20" Margin="8,0,0,0"
+                                        Padding="0" FontSize="11"
+                                        Style="{StaticResource TransportButton}"
+                                        Content="{Binding PlayGlyph}"
+                                        Command="{Binding PlayPauseCommand}"
+                                        ToolTip="Play/pause this deck (the karaoke stem follows the deck playhead)"/>
+                                <TextBlock Text="GAIN" FontSize="9" Margin="10,0,6,0"
+                                           Foreground="{StaticResource TextDimBrush}"
+                                           VerticalAlignment="Center"/>
+                                <Slider DockPanel.Dock="Left" Width="90" VerticalAlignment="Center"
+                                        Minimum="0" Maximum="1"
+                                        Value="{Binding KaraokeGain}"
+                                        ToolTip="0 = original only, 0.5 = both, 1 = karaoke only"/>
+                                <TextBlock Text="DELAY MS" FontSize="9" Margin="12,0,6,0"
+                                           Foreground="{StaticResource TextDimBrush}"
+                                           VerticalAlignment="Center"/>
+                                <RepeatButton DockPanel.Dock="Left" Width="20" Height="18" FontSize="10"
+                                              Style="{StaticResource NudgeButton}"
+                                              Delay="400" Interval="150"
+                                              Command="{Binding NudgeDelayCommand}" CommandParameter="-5"/>
+                                <TextBox DockPanel.Dock="Left" Width="56" Margin="3,0"
+                                         TextAlignment="Center" FontSize="11"
+                                         MinHeight="24" Padding="6,3"
+                                         Text="{Binding DelayMs, UpdateSourceTrigger=LostFocus, StringFormat=F0}"/>
+                                <RepeatButton DockPanel.Dock="Left" Width="20" Height="18" FontSize="10"
+                                              Style="{StaticResource NudgeButton}"
+                                              Delay="400" Interval="150"
+                                              Command="{Binding NudgeDelayCommand}" CommandParameter="5"/>
+                            </DockPanel>
+
+                            <!-- Karaoke seek: bound to the deck playhead, so both stems move together. -->
+                            <Slider Grid.Row="1" Margin="0,3,0,0" VerticalAlignment="Center"
+                                    Minimum="0" Maximum="{Binding DurationSeconds}"
+                                    Value="{Binding PositionSeconds, Mode=TwoWay}"
+                                    PreviewMouseLeftButtonDown="OnDeckSeekStart"
+                                    PreviewMouseLeftButtonUp="OnDeckSeekEnd"
+                                    LostMouseCapture="OnDeckSeekLostCapture"/>
+
+                            <!-- Karaoke waveform: same width and x-scale as the deck's. -->
+                            <Canvas Grid.Row="2" Height="40" Margin="0,4,0,0" ClipToBounds="True"
+                                    Tag="karaoke"
+                                    Loaded="OnDeckWaveformLoaded"
+                                    SizeChanged="OnDeckWaveformSizeChanged"/>
+                        </Grid>
+                    </Border>
                 </Grid>
             </Border>
         </DataTemplate>
@@ -147,6 +240,71 @@
             </Setter>
         </Style>
 
+        <!-- ======== Queue row: same dense line as the source track tables ========
+             Played rows stay in the list, faded, and the row playing now gets the
+             accent bar on the left. -->
+        <Style x:Key="QueueRow" TargetType="ListViewItem">
+            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+            <!-- Context menu acts on the clicked row, so it carries the row's owner
+                 (the queue VM) in Tag: a ContextMenu lives outside the ListView's
+                 visual tree, so AncestorType=ListView finds nothing from inside it. -->
+            <Setter Property="Tag"
+                    Value="{Binding DataContext, RelativeSource={RelativeSource AncestorType=ListView}}"/>
+            <Setter Property="ContextMenu">
+                <Setter.Value>
+                    <ContextMenu>
+                        <MenuItem Header="Send to deck A"
+                                  Command="{Binding PlacementTarget.Tag.SendToDeckACommand,
+                                      RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                  CommandParameter="{Binding PlacementTarget.DataContext,
+                                      RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                        <MenuItem Header="Send to deck B"
+                                  Command="{Binding PlacementTarget.Tag.SendToDeckBCommand,
+                                      RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                  CommandParameter="{Binding PlacementTarget.DataContext,
+                                      RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                        <Separator/>
+                        <MenuItem Header="Play now"
+                                  Command="{Binding PlacementTarget.Tag.PlayNowFromQueueCommand,
+                                      RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                  CommandParameter="{Binding PlacementTarget.DataContext,
+                                      RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                        <MenuItem Header="Remove from queue"
+                                  Command="{Binding PlacementTarget.Tag.RemoveFromQueueCommand,
+                                      RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                  CommandParameter="{Binding PlacementTarget.DataContext,
+                                      RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                    </ContextMenu>
+                </Setter.Value>
+            </Setter>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ListViewItem">
+                        <Border x:Name="bd" Background="Transparent" Padding="8,0"
+                                BorderBrush="Transparent" BorderThickness="2,0,0,0" MinHeight="26">
+                            <ContentPresenter VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="{StaticResource HoverBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="{StaticResource SelectionBrush}"/>
+                                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource AccentABrush}"/>
+                            </Trigger>
+                            <DataTrigger Binding="{Binding IsCurrent}" Value="True">
+                                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource AccentABrush}"/>
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding IsPlayed}" Value="True">
+                                <Setter Property="Opacity" Value="0.45"/>
+                            </DataTrigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <Style x:Key="BrowserTabControl" TargetType="TabControl">
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="BorderThickness" Value="0"/>
@@ -188,18 +346,19 @@
                     Click="OnSettingsClick"/>
         </DockPanel>
 
-        <!-- ================= Deck block: decks / waveform / transport =================
-             One star row shared with the browser through the splitter below; the
-             waveform lane is what grows when the user drags the splitter down. -->
+        <!-- ================= Deck block: decks / crossfader / transport =================
+             Each deck card owns its waveform and its karaoke sub-stem, so the block
+             keeps its share of the window and the splitter balances it against the
+             browser below. -->
         <Grid Grid.Row="1">
             <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>   <!-- deck cards -->
-                <RowDefinition Height="*" MinHeight="32"/>   <!-- waveforms -->
+                <RowDefinition Height="*"/>      <!-- deck cards -->
+                <RowDefinition Height="Auto"/>   <!-- crossfader -->
                 <RowDefinition Height="Auto"/>   <!-- transport -->
             </Grid.RowDefinitions>
 
         <!-- ================= Decks ================= -->
-        <Grid Grid.Row="0">
+        <Grid Grid.Row="0" VerticalAlignment="Top">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="12"/>
@@ -221,13 +380,25 @@
             </ContentControl>
         </Grid>
 
-        <!-- ================= Waveform strip ================= -->
-        <Canvas x:Name="WaveformCanvas" Grid.Row="1" Margin="0,6,0,6"
-                ClipToBounds="True"
-                SizeChanged="OnWaveformSizeChanged"/>
+        <!-- ================= Crossfader =================
+             One fader, equal-power curve: centre plays both decks at -3 dB, the
+             ends isolate A and B. Per-deck volume still multiplies in. -->
+        <Border Grid.Row="1" Style="{StaticResource Card}" Padding="12,4" Margin="0,6,0,0">
+            <DockPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                <TextBlock Text="A" FontSize="12" FontWeight="Bold" VerticalAlignment="Center"
+                           Foreground="{StaticResource AccentABrush}" Margin="0,0,10,0"/>
+                <Slider Width="340" VerticalAlignment="Center" Minimum="0" Maximum="1"
+                        SmallChange="0.01" LargeChange="0.1"
+                        Value="{Binding Crossfader, Mode=TwoWay}"
+                        ToolTip="Crossfader: left = deck A, centre = both, right = deck B"/>
+                <TextBlock Text="B" FontSize="12" FontWeight="Bold" VerticalAlignment="Center"
+                           Foreground="{StaticResource AccentBBrush}" Margin="10,0,0,0"/>
+            </DockPanel>
+        </Border>
 
-        <!-- ================= Unified transport ================= -->
-        <Border Grid.Row="2" Style="{StaticResource Card}" Margin="0,0,0,0" Padding="12,8">
+        <!-- ================= Unified transport =================
+             These act on the active deck (the deck the lyrics clock follows). -->
+        <Border Grid.Row="2" Style="{StaticResource Card}" Margin="0,6,0,0" Padding="12,8">
             <Grid>
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto"/>
@@ -240,20 +411,20 @@
                 <!-- Transport buttons -->
                 <StackPanel Grid.Column="0" Orientation="Horizontal">
                     <Button Style="{StaticResource TransportButton}" Content="&#x23EA;"
-                            ToolTip="Rewind 10s" Command="{Binding RewindCommand}"/>
+                            ToolTip="Rewind 10s on the active deck" Command="{Binding RewindCommand}"/>
                     <Button x:Name="PlayButton" Style="{StaticResource TransportButton}" Width="64"
                             Margin="6,0" FontSize="20" Command="{Binding PlayPauseCommand}"/>
                     <Button Style="{StaticResource TransportButton}" Content="&#x23F9;"
-                            ToolTip="Stop" Command="{Binding StopCommand}"/>
+                            ToolTip="Stop the active deck" Command="{Binding StopCommand}"/>
                     <Button Style="{StaticResource TransportButton}" Content="&#x23E9;" Margin="6,0,0,0"
-                            ToolTip="Fast forward 10s" Command="{Binding FastForwardCommand}"/>
+                            ToolTip="Fast forward 10s on the active deck" Command="{Binding FastForwardCommand}"/>
                 </StackPanel>
 
                 <!-- Position readout -->
                 <TextBlock Grid.Column="1" Text="{Binding PositionText}" FontFamily="Consolas"
                            FontSize="16" VerticalAlignment="Center" Margin="18,0,10,0"/>
 
-                <!-- Linked seek bar -->
+                <!-- Active deck seek bar -->
                 <Slider x:Name="SeekBar" Grid.Column="2" VerticalAlignment="Center"
                         Minimum="0" Maximum="{Binding DurationSeconds}"
                         Value="{Binding PositionSeconds, Mode=TwoWay}"/>
@@ -262,56 +433,43 @@
                            FontSize="16" VerticalAlignment="Center" Margin="10,0,18,0"
                            Foreground="{StaticResource TextDimBrush}"/>
 
-                <!-- Deck delay controls (per-deck, color-coded) -->
+                <!-- Deck activation + download queue -->
                 <StackPanel Grid.Column="4" Orientation="Horizontal" VerticalAlignment="Center">
-                    <!-- Deck A delay -->
-                    <Border BorderBrush="{StaticResource AccentABrush}" BorderThickness="0,0,0,2"
-                            Padding="4,2" Margin="0,0,8,0">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="A DELAY" FontSize="9" Foreground="{StaticResource TextDimBrush}"
-                                       VerticalAlignment="Center" Margin="0,0,4,0"/>
-                            <RepeatButton Style="{StaticResource NudgeButton}" Content="&#x2212;"
-                                          Width="20" Height="18" FontSize="10"
-                                          Delay="400" Interval="150"
-                                          Command="{Binding DeckA.NudgeDelayCommand}" CommandParameter="-5"/>
-                            <TextBox Width="56" Margin="2,0" TextAlignment="Center" FontSize="11"
-                                     Text="{Binding DeckA.DelayMs, UpdateSourceTrigger=LostFocus, StringFormat=F0}"/>
-                            <RepeatButton Style="{StaticResource NudgeButton}" Content="+"
-                                          Width="20" Height="18" FontSize="10"
-                                          Delay="400" Interval="150"
-                                          Command="{Binding DeckA.NudgeDelayCommand}" CommandParameter="5"/>
-                            <TextBlock Text="ms" FontSize="9" Foreground="{StaticResource TextDimBrush}"
-                                       VerticalAlignment="Center" Margin="2,0,0,0"/>
-                        </StackPanel>
-                    </Border>
-                    <!-- Deck B delay -->
-                    <Border BorderBrush="{StaticResource AccentBBrush}" BorderThickness="0,0,0,2"
-                            Padding="4,2" Margin="0,0,8,0">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="B DELAY" FontSize="9" Foreground="{StaticResource TextDimBrush}"
-                                       VerticalAlignment="Center" Margin="0,0,4,0"/>
-                            <RepeatButton Style="{StaticResource NudgeButton}" Content="&#x2212;"
-                                          Width="20" Height="18" FontSize="10"
-                                          Delay="400" Interval="150"
-                                          Command="{Binding DeckB.NudgeDelayCommand}" CommandParameter="-5"/>
-                            <TextBox Width="56" Margin="2,0" TextAlignment="Center" FontSize="11"
-                                     Text="{Binding DeckB.DelayMs, UpdateSourceTrigger=LostFocus, StringFormat=F0}"/>
-                            <RepeatButton Style="{StaticResource NudgeButton}" Content="+"
-                                          Width="20" Height="18" FontSize="10"
-                                          Delay="400" Interval="150"
-                                          Command="{Binding DeckB.NudgeDelayCommand}" CommandParameter="5"/>
-                            <TextBlock Text="ms" FontSize="9" Foreground="{StaticResource TextDimBrush}"
-                                       VerticalAlignment="Center" Margin="2,0,0,0"/>
-                        </StackPanel>
-                    </Border>
-                    <!-- Latency calibration: plays both decks so you can hear the sync alignment -->
-                    <Button Content="&#x1F509; Sync Test"
-                            FontSize="10" Padding="6,3" Margin="0,0,0,0"
-                            Command="{Binding PlayPauseCommand}"
-                            ToolTip="Plays both decks simultaneously. Adjust delay until both speakers/headphones sound in phase. The delay is saved per device."/>
+                    <Button Content="A" FontSize="10" Padding="8,3" Margin="0,0,4,0"
+                            Command="{Binding ActivateDeckACommand}"
+                            ToolTip="Make deck A the active deck (seek bar + lyrics clock)">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                <Setter Property="FontSize" Value="10"/>
+                                <Setter Property="Padding" Value="8,3"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsDeckAActive}" Value="True">
+                                        <Setter Property="Foreground" Value="{StaticResource AccentABrush}"/>
+                                        <Setter Property="BorderBrush" Value="{StaticResource AccentABrush}"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                    <Button Content="B" Margin="0,0,8,0"
+                            Command="{Binding ActivateDeckBCommand}"
+                            ToolTip="Make deck B the active deck (seek bar + lyrics clock)">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                <Setter Property="FontSize" Value="10"/>
+                                <Setter Property="Padding" Value="8,3"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsDeckBActive}" Value="True">
+                                        <Setter Property="Foreground" Value="{StaticResource AccentBBrush}"/>
+                                        <Setter Property="BorderBrush" Value="{StaticResource AccentBBrush}"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
 
                     <!-- Download queue: compact entry point with an active-count badge -->
-                    <Button Command="{Binding ShowDownloadsCommand}" Margin="8,0,0,0"
+                    <Button Command="{Binding ShowDownloadsCommand}"
                             FontSize="10" Padding="8,3"
                             ToolTip="Open the download queue">
                         <StackPanel Orientation="Horizontal">
@@ -341,7 +499,7 @@
         </Border>
         </Grid>
 
-        <!-- Splitter: drag up for a bigger browser, down for bigger waveforms -->
+        <!-- Splitter: balances the deck block against the browser -->
         <GridSplitter Grid.Row="2" Style="{StaticResource RowSplitter}"/>
 
         <!-- ================= Browser + Lyrics ================= -->
@@ -360,16 +518,205 @@
                     <DockPanel DockPanel.Dock="Top" Margin="4,0,4,8">
                         <TextBlock Text="TRACK BROWSER" FontSize="11" FontWeight="Bold"
                                    Foreground="{StaticResource TextDimBrush}" VerticalAlignment="Center"/>
+                        <Button Content="ARTIST" Margin="12,0,0,0"
+                                FontSize="10" Padding="6,3"
+                                ToolTip="Group tracks by tagged artist and album"
+                                Command="{Binding ShowArtistAlbumLayoutCommand}">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                    <Setter Property="FontSize" Value="10"/>
+                                    <Setter Property="Padding" Value="6,3"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsArtistAlbumLayout}" Value="True">
+                                            <Setter Property="Background" Value="{StaticResource SelectionBrush}"/>
+                                            <Setter Property="Foreground" Value="{StaticResource AccentABrush}"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
+                        <Button Content="PATH" Margin="4,0,0,0"
+                                FontSize="10" Padding="6,3"
+                                ToolTip="Group tracks by their folder path"
+                                Command="{Binding ShowPathLayoutCommand}">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                    <Setter Property="FontSize" Value="10"/>
+                                    <Setter Property="Padding" Value="6,3"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsPathLayout}" Value="True">
+                                            <Setter Property="Background" Value="{StaticResource SelectionBrush}"/>
+                                            <Setter Property="Foreground" Value="{StaticResource AccentABrush}"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                        </Button>
                         <Button DockPanel.Dock="Right" Content="Load &#x25B6;" Margin="8,0,0,0"
                                 Command="{Binding LoadSelectedTreeTrackCommand}"/>
                         <Button x:Name="ExpandButton" DockPanel.Dock="Right"
                                 Content="&#x2B07; Expand all" Margin="4,0,0,0"
                                 FontSize="10" Padding="6,3" Click="OnExpandAllClick"/>
+                        <Button DockPanel.Dock="Right" Content="+ Queue" Margin="4,0,0,0"
+                                FontSize="10" Padding="6,3"
+                                ToolTip="Add the selected track to the playback queue (Ctrl+Q)"
+                                Command="{Binding AddToQueueCommand}"/>
                         <TextBox Margin="12,0,0,0" Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
-                                 ToolTip="Search title / artist / path"/>
+                                 ToolTip="Search title / artist / album / path"/>
                     </DockPanel>
 
                     <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="190"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+
+                        <!-- Playlist rail. Wraps the existing tree grid, so the
+                             tab's own layout is untouched. -->
+                        <Border Grid.Column="0" Background="{StaticResource PanelAltBrush}"
+                                BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,1,0"
+                                Padding="2,0,2,0">
+                            <DockPanel>
+                                <TextBlock DockPanel.Dock="Top" Text="PLAYLISTS" FontSize="10" FontWeight="Bold"
+                                           Foreground="{StaticResource TextDimBrush}" Margin="4,4,0,4"/>
+
+                                <!-- + New (inline name, same pattern as the YouTube manage strip) -->
+                                <Button DockPanel.Dock="Top" Content="+ New" HorizontalAlignment="Left"
+                                        FontSize="10" Padding="5,2" Margin="2,0,2,4"
+                                        ToolTip="Create an app-owned playlist"
+                                        Command="{Binding BeginCreatePlaylistCommand}"
+                                        Visibility="{Binding IsNotCreatingPlaylist, Converter={StaticResource BoolToVisibility}}"/>
+
+                                <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="2,0,2,4"
+                                            Visibility="{Binding IsCreatingPlaylist, Converter={StaticResource BoolToVisibility}}">
+                                    <TextBox Width="104" FontSize="11"
+                                             Text="{Binding NewPlaylistName, UpdateSourceTrigger=PropertyChanged}">
+                                        <TextBox.InputBindings>
+                                            <KeyBinding Key="Enter" Command="{Binding CommitCreatePlaylistCommand}"/>
+                                            <KeyBinding Key="Escape" Command="{Binding CancelCreatePlaylistCommand}"/>
+                                        </TextBox.InputBindings>
+                                    </TextBox>
+                                    <Button Content="&#x2713;" FontSize="10" Padding="4,1" Margin="3,0,0,0"
+                                            ToolTip="Create" Command="{Binding CommitCreatePlaylistCommand}"/>
+                                    <Button Content="&#x2715;" FontSize="10" Padding="4,1" Margin="2,0,0,0"
+                                            ToolTip="Cancel" Command="{Binding CancelCreatePlaylistCommand}"/>
+                                </StackPanel>
+
+                                <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" FontSize="10" Margin="4,0,6,4"
+                                           Text="No playlists yet. Use + New to make one from library tracks, or right-click a track and choose Add to playlist."
+                                           Foreground="{StaticResource TextDimBrush}"
+                                           Visibility="{Binding HasNoInternalPlaylists, Converter={StaticResource BoolToVisibility}}"/>
+
+                                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                    <ItemsControl ItemsSource="{Binding PlaylistRail}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <StackPanel>
+                                                    <!-- Normal row -->
+                                                    <Button HorizontalContentAlignment="Stretch" Padding="4,3"
+                                                            Visibility="{Binding IsNotEditing, Converter={StaticResource BoolToVisibility}}"
+                                                            Command="{Binding DataContext.SelectPlaylistCommand,
+                                                                      RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                            CommandParameter="{Binding}">
+                                                        <Button.Style>
+                                                            <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                                                <Setter Property="Background" Value="Transparent"/>
+                                                                <Setter Property="BorderThickness" Value="0"/>
+                                                                <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                                                <Setter Property="Padding" Value="4,3"/>
+                                                                <Style.Triggers>
+                                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                                        <Setter Property="Background" Value="{StaticResource HoverBrush}"/>
+                                                                    </Trigger>
+                                                                    <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                                                                        <Setter Property="Background" Value="{StaticResource SelectionBrush}"/>
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </Button.Style>
+                                                        <Grid>
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="*"/>
+                                                                <ColumnDefinition Width="Auto"/>
+                                                                <ColumnDefinition Width="Auto"/>
+                                                            </Grid.ColumnDefinitions>
+                                                            <TextBlock Text="{Binding Title}" FontSize="11"
+                                                                       TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
+                                                                       Foreground="{StaticResource TextBrush}"/>
+                                                            <TextBlock Grid.Column="1" Text="{Binding CountText}" FontSize="10"
+                                                                       Margin="6,0,0,0" VerticalAlignment="Center"
+                                                                       Foreground="{StaticResource TextDimBrush}"/>
+                                                            <StackPanel Grid.Column="2" Orientation="Horizontal"
+                                                                        Visibility="{Binding IsInternal, Converter={StaticResource BoolToVisibility}}">
+                                                                <Button Content="&#x270E;" FontSize="9" Padding="3,0" Margin="4,0,0,0"
+                                                                        ToolTip="Rename playlist"
+                                                                        Command="{Binding DataContext.BeginRenamePlaylistCommand,
+                                                                                  RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                                        CommandParameter="{Binding}"/>
+                                                                <Button Content="&#x2715;" FontSize="9" Padding="3,0" Margin="1,0,0,0"
+                                                                        ToolTip="Delete playlist"
+                                                                        Command="{Binding DataContext.BeginDeletePlaylistCommand,
+                                                                                  RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                                        CommandParameter="{Binding}"/>
+                                                            </StackPanel>
+                                                        </Grid>
+                                                    </Button>
+
+                                                    <!-- Inline rename -->
+                                                    <StackPanel Orientation="Horizontal" Margin="2,0,2,0"
+                                                                Visibility="{Binding IsEditing, Converter={StaticResource BoolToVisibility}}">
+                                                        <TextBox Width="104" FontSize="11"
+                                                                 Text="{Binding EditName, UpdateSourceTrigger=PropertyChanged}">
+                                                            <TextBox.InputBindings>
+                                                                <KeyBinding Key="Enter"
+                                                                            Command="{Binding DataContext.CommitRenamePlaylistCommand,
+                                                                                      RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                                            CommandParameter="{Binding}"/>
+                                                                <KeyBinding Key="Escape"
+                                                                            Command="{Binding DataContext.CancelRenamePlaylistCommand,
+                                                                                      RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                                            CommandParameter="{Binding}"/>
+                                                            </TextBox.InputBindings>
+                                                        </TextBox>
+                                                        <Button Content="&#x2713;" FontSize="10" Padding="4,1" Margin="3,0,0,0"
+                                                                ToolTip="Rename"
+                                                                Command="{Binding DataContext.CommitRenamePlaylistCommand,
+                                                                          RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                                CommandParameter="{Binding}"/>
+                                                        <Button Content="&#x2715;" FontSize="10" Padding="4,1" Margin="2,0,0,0"
+                                                                ToolTip="Cancel"
+                                                                Command="{Binding DataContext.CancelRenamePlaylistCommand,
+                                                                          RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                                CommandParameter="{Binding}"/>
+                                                    </StackPanel>
+
+                                                    <!-- Delete confirmation (internal playlists only) -->
+                                                    <Border Margin="2,0,2,3" Padding="4,2"
+                                                            Background="{StaticResource PanelBrush}"
+                                                            BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                                                            Visibility="{Binding IsConfirmingDelete, Converter={StaticResource BoolToVisibility}}">
+                                                        <StackPanel Orientation="Horizontal">
+                                                            <TextBlock Text="Delete?" FontSize="10" VerticalAlignment="Center"
+                                                                       Foreground="{StaticResource TextBrush}"/>
+                                                            <Button Content="Yes" FontSize="10" Padding="5,1" Margin="6,0,0,0"
+                                                                    Command="{Binding DataContext.CommitDeletePlaylistCommand,
+                                                                              RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                                    CommandParameter="{Binding}"/>
+                                                            <Button Content="No" FontSize="10" Padding="5,1" Margin="3,0,0,0"
+                                                                    Command="{Binding DataContext.CancelDeletePlaylistCommand,
+                                                                              RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                                    CommandParameter="{Binding}"/>
+                                                        </StackPanel>
+                                                    </Border>
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </ScrollViewer>
+                            </DockPanel>
+                        </Border>
+
+                        <Grid Grid.Column="1">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
@@ -402,139 +749,188 @@
                             </Grid>
                         </Border>
 
-                        <!-- Tree -->
-                        <TreeView x:Name="TrackTree" Grid.Row="1"
-                                  ItemsSource="{Binding BrowserRoots}"
-                                  Background="{StaticResource PanelBrush}"
-                                  BorderThickness="0"
-                                  MouseDoubleClick="OnTrackDoubleClick"
-                                  PreviewMouseRightButtonDown="OnTrackRightClick">
-                            <TreeView.Resources>
-                                <HierarchicalDataTemplate DataType="{x:Type lib:BrowserNode}"
-                                                          ItemsSource="{Binding Children}">
-                                    <Grid x:Name="RowGrid">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="240" SharedSizeGroup="ColTitle"/>
-                                            <ColumnDefinition Width="170" SharedSizeGroup="ColArtist"/>
-                                            <ColumnDefinition Width="52" SharedSizeGroup="ColBPM"/>
-                                            <ColumnDefinition Width="60" SharedSizeGroup="ColTime"/>
-                                            <ColumnDefinition Width="90" SharedSizeGroup="ColKaraoke"/>
-                                            <ColumnDefinition Width="*" SharedSizeGroup="ColPath"/>
-                                        </Grid.ColumnDefinitions>
-                                        <TextBlock Grid.Column="0" Text="{Binding Title}" Padding="6,4"
-                                                   TextTrimming="CharacterEllipsis"
-                                                   Foreground="{StaticResource TextBrush}"/>
-                                        <TextBlock Grid.Column="1" Text="{Binding Artist}" Padding="6,4"
-                                                   TextTrimming="CharacterEllipsis"
-                                                   Foreground="{StaticResource TextDimBrush}"/>
-                                        <TextBlock Grid.Column="2" Text="{Binding BpmText}" Padding="6,4"
-                                                   Foreground="{StaticResource TextDimBrush}"/>
-                                        <TextBlock Grid.Column="3" Text="{Binding DurationText}" Padding="6,4"
-                                                   Foreground="{StaticResource TextDimBrush}"/>
-                                        <TextBlock Grid.Column="4" Text="{Binding KaraokeStatus}" Padding="6,4"
-                                                   Foreground="{StaticResource TextDimBrush}"/>
-                                        <TextBlock Grid.Column="5" Text="{Binding RelativePath}" Padding="6,4"
-                                                   TextTrimming="CharacterEllipsis"
-                                                   Foreground="{StaticResource TextDimBrush}"/>
-                                    </Grid>
-                                </HierarchicalDataTemplate>
-                            </TreeView.Resources>
+                        <!-- Tree; the busy state below covers it while a playlist's
+                             membership resolves off the UI thread, so a half-built
+                             playlist is never shown. -->
+                        <Grid Grid.Row="1">
+                            <TreeView x:Name="TrackTree"
+                                      ItemsSource="{Binding BrowserRoots}"
+                                      Background="{StaticResource PanelBrush}"
+                                      BorderThickness="0"
+                                      MouseDoubleClick="OnTrackDoubleClick"
+                                      PreviewMouseRightButtonDown="OnTrackRightClick">
+                                <TreeView.Resources>
+                                    <HierarchicalDataTemplate DataType="{x:Type lib:BrowserNode}"
+                                                              ItemsSource="{Binding Children}">
+                                        <Grid x:Name="RowGrid">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="240" SharedSizeGroup="ColTitle"/>
+                                                <ColumnDefinition Width="170" SharedSizeGroup="ColArtist"/>
+                                                <ColumnDefinition Width="52" SharedSizeGroup="ColBPM"/>
+                                                <ColumnDefinition Width="60" SharedSizeGroup="ColTime"/>
+                                                <ColumnDefinition Width="90" SharedSizeGroup="ColKaraoke"/>
+                                                <ColumnDefinition Width="*" SharedSizeGroup="ColPath"/>
+                                            </Grid.ColumnDefinitions>
+                                            <TextBlock Grid.Column="0" Text="{Binding Title}" Padding="6,4"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       Foreground="{StaticResource TextBrush}"/>
+                                            <TextBlock Grid.Column="1" Text="{Binding Artist}" Padding="6,4"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       Foreground="{StaticResource TextDimBrush}"/>
+                                            <TextBlock Grid.Column="2" Text="{Binding BpmText}" Padding="6,4"
+                                                       Foreground="{StaticResource TextDimBrush}"/>
+                                            <TextBlock Grid.Column="3" Text="{Binding DurationText}" Padding="6,4"
+                                                       Foreground="{StaticResource TextDimBrush}"/>
+                                            <TextBlock Grid.Column="4" Text="{Binding KaraokeStatus}" Padding="6,4"
+                                                       Foreground="{StaticResource TextDimBrush}"/>
+                                            <TextBlock Grid.Column="5" Text="{Binding PathText}" Padding="6,4"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       Foreground="{StaticResource TextDimBrush}"/>
+                                        </Grid>
+                                    </HierarchicalDataTemplate>
+                                </TreeView.Resources>
 
-                            <TreeView.ItemContainerStyle>
-                                <Style TargetType="TreeViewItem">
-                                    <Setter Property="IsExpanded" Value="False"/>
-                                    <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
-                                    <Setter Property="Background" Value="Transparent"/>
-                                    <Setter Property="Padding" Value="0,1"/>
-                                    <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
-                                    <Setter Property="Template">
-                                        <Setter.Value>
-                                            <ControlTemplate TargetType="TreeViewItem">
-                                                <Grid>
-                                                    <Grid.RowDefinitions>
-                                                        <RowDefinition Height="Auto"/>
-                                                        <RowDefinition Height="*"/>
-                                                    </Grid.RowDefinitions>
-                                                    <Border x:Name="Bd" Grid.Row="0"
-                                                            Background="{TemplateBinding Background}"
-                                                            Padding="0">
-                                                        <Grid>
-                                                            <Grid.ColumnDefinitions>
-                                                                <ColumnDefinition Width="Auto"/>
-                                                                <ColumnDefinition Width="*"/>
-                                                            </Grid.ColumnDefinitions>
-                                                            <!-- Expander toggle (visible only for folders) -->
-                                                            <ToggleButton x:Name="Expander" Grid.Column="0"
-                                                                          ClickMode="Press"
-                                                                          IsChecked="{Binding IsExpanded, RelativeSource={RelativeSource TemplatedParent}}"
-                                                                          Width="18" Height="18"
-                                                                          Margin="4,0,2,0">
-                                                                <ToggleButton.Template>
-                                                                    <ControlTemplate TargetType="ToggleButton">
-                                                                        <Border Width="18" Height="18"
-                                                                                Background="Transparent">
-                                                                            <Path x:Name="Arrow"
-                                                                                  HorizontalAlignment="Center"
-                                                                                  VerticalAlignment="Center"
-                                                                                  Data="M 0 0 L 5 4 L 0 8 Z"
-                                                                                  Fill="{StaticResource TextDimBrush}"/>
-                                                                        </Border>
-                                                                        <ControlTemplate.Triggers>
-                                                                            <Trigger Property="IsChecked" Value="True">
-                                                                                <Setter TargetName="Arrow"
-                                                                                        Property="Data"
-                                                                                        Value="M 0 0 L 8 0 L 4 5 Z"/>
-                                                                            </Trigger>
-                                                                        </ControlTemplate.Triggers>
-                                                                    </ControlTemplate>
-                                                                </ToggleButton.Template>
-                                                            </ToggleButton>
-                                                            <!-- Content (row grid) -->
-                                                            <ContentPresenter Grid.Column="1" x:Name="PART_Header"
-                                                                              ContentSource="Header"
-                                                                              HorizontalAlignment="Stretch"/>
-                                                        </Grid>
-                                                    </Border>
-                                                    <ItemsPresenter Grid.Row="1" x:Name="ItemsHost"
-                                                                    Visibility="Collapsed"/>
-                                                </Grid>
-                                                <ControlTemplate.Triggers>
-                                                    <Trigger Property="IsExpanded" Value="True">
-                                                        <Setter TargetName="ItemsHost"
-                                                                Property="Visibility" Value="Visible"/>
-                                                    </Trigger>
-                                                    <Trigger Property="HasItems" Value="False">
-                                                        <Setter TargetName="Expander"
-                                                                Property="Visibility" Value="Collapsed"/>
-                                                    </Trigger>
-                                                    <Trigger Property="IsSelected" Value="True">
-                                                        <Setter TargetName="Bd"
-                                                                Property="Background"
-                                                                Value="{StaticResource SelectionBrush}"/>
-                                                    </Trigger>
-                                                    <MultiTrigger>
-                                                        <MultiTrigger.Conditions>
-                                                            <Condition Property="IsMouseOver" Value="True"/>
-                                                            <Condition Property="IsSelected" Value="False"/>
-                                                        </MultiTrigger.Conditions>
-                                                        <Setter TargetName="Bd"
-                                                                Property="Background"
-                                                                Value="{StaticResource HoverBrush}"/>
-                                                    </MultiTrigger>
-                                                </ControlTemplate.Triggers>
-                                            </ControlTemplate>
-                                        </Setter.Value>
-                                    </Setter>
-                                </Style>
-                            </TreeView.ItemContainerStyle>
-                            <TreeView.ContextMenu>
-                                <ContextMenu x:Name="TrackContextMenu">
-                                    <MenuItem Header="Make Karaoke Track"/>
-                                    <MenuItem Header="Load onto Decks"
-                                              Command="{Binding LoadSelectedTreeTrackCommand}"/>
-                                </ContextMenu>
-                            </TreeView.ContextMenu>
-                        </TreeView>
+                                <TreeView.ItemContainerStyle>
+                                    <Style TargetType="TreeViewItem">
+                                        <!-- Bound two-way so a rebuild can restore the row state. -->
+                                        <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}"/>
+                                        <Setter Property="IsSelected" Value="{Binding IsSelected, Mode=TwoWay}"/>
+                                        <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+                                        <Setter Property="Background" Value="Transparent"/>
+                                        <Setter Property="Padding" Value="0,1"/>
+                                        <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                        <Setter Property="Template">
+                                            <Setter.Value>
+                                                <ControlTemplate TargetType="TreeViewItem">
+                                                    <Grid>
+                                                        <Grid.RowDefinitions>
+                                                            <RowDefinition Height="Auto"/>
+                                                            <RowDefinition Height="*"/>
+                                                        </Grid.RowDefinitions>
+                                                        <Border x:Name="Bd" Grid.Row="0"
+                                                                Background="{TemplateBinding Background}"
+                                                                Padding="0">
+                                                            <Grid>
+                                                                <Grid.ColumnDefinitions>
+                                                                    <ColumnDefinition Width="Auto"/>
+                                                                    <ColumnDefinition Width="*"/>
+                                                                </Grid.ColumnDefinitions>
+                                                                <!-- Expander toggle (visible only for folders) -->
+                                                                <ToggleButton x:Name="Expander" Grid.Column="0"
+                                                                              ClickMode="Press"
+                                                                              IsChecked="{Binding IsExpanded, RelativeSource={RelativeSource TemplatedParent}}"
+                                                                              Width="18" Height="18"
+                                                                              Margin="4,0,2,0">
+                                                                    <ToggleButton.Template>
+                                                                        <ControlTemplate TargetType="ToggleButton">
+                                                                            <Border Width="18" Height="18"
+                                                                                    Background="Transparent">
+                                                                                <Path x:Name="Arrow"
+                                                                                      HorizontalAlignment="Center"
+                                                                                      VerticalAlignment="Center"
+                                                                                      Data="M 0 0 L 5 4 L 0 8 Z"
+                                                                                      Fill="{StaticResource TextDimBrush}"/>
+                                                                            </Border>
+                                                                            <ControlTemplate.Triggers>
+                                                                                <Trigger Property="IsChecked" Value="True">
+                                                                                    <Setter TargetName="Arrow"
+                                                                                            Property="Data"
+                                                                                            Value="M 0 0 L 8 0 L 4 5 Z"/>
+                                                                                </Trigger>
+                                                                            </ControlTemplate.Triggers>
+                                                                        </ControlTemplate>
+                                                                    </ToggleButton.Template>
+                                                                </ToggleButton>
+                                                                <!-- Content (row grid) -->
+                                                                <ContentPresenter Grid.Column="1" x:Name="PART_Header"
+                                                                                  ContentSource="Header"
+                                                                                  HorizontalAlignment="Stretch"/>
+                                                            </Grid>
+                                                        </Border>
+                                                        <ItemsPresenter Grid.Row="1" x:Name="ItemsHost"
+                                                                        Visibility="Collapsed"/>
+                                                    </Grid>
+                                                    <ControlTemplate.Triggers>
+                                                        <Trigger Property="IsExpanded" Value="True">
+                                                            <Setter TargetName="ItemsHost"
+                                                                    Property="Visibility" Value="Visible"/>
+                                                        </Trigger>
+                                                        <Trigger Property="HasItems" Value="False">
+                                                            <Setter TargetName="Expander"
+                                                                    Property="Visibility" Value="Collapsed"/>
+                                                        </Trigger>
+                                                        <Trigger Property="IsSelected" Value="True">
+                                                            <Setter TargetName="Bd"
+                                                                    Property="Background"
+                                                                    Value="{StaticResource SelectionBrush}"/>
+                                                        </Trigger>
+                                                        <MultiTrigger>
+                                                            <MultiTrigger.Conditions>
+                                                                <Condition Property="IsMouseOver" Value="True"/>
+                                                                <Condition Property="IsSelected" Value="False"/>
+                                                            </MultiTrigger.Conditions>
+                                                            <Setter TargetName="Bd"
+                                                                    Property="Background"
+                                                                    Value="{StaticResource HoverBrush}"/>
+                                                        </MultiTrigger>
+                                                    </ControlTemplate.Triggers>
+                                                </ControlTemplate>
+                                            </Setter.Value>
+                                        </Setter>
+                                    </Style>
+                                </TreeView.ItemContainerStyle>
+                                <TreeView.ContextMenu>
+                                    <ContextMenu x:Name="TrackContextMenu">
+                                        <MenuItem Header="Make Karaoke Track"/>
+                                        <MenuItem Header="Load onto Decks"
+                                                  Command="{Binding LoadSelectedTreeTrackCommand}"/>
+                                        <MenuItem Header="Add to queue"
+                                                  InputGestureText="Ctrl+Q"
+                                                  Command="{Binding AddToQueueCommand}"/>
+                                        <Separator/>
+                                        <MenuItem Header="Add to playlist"
+                                                  ItemsSource="{Binding InternalPlaylists}">
+                                            <MenuItem.ItemContainerStyle>
+                                                <Style TargetType="MenuItem">
+                                                    <Setter Property="Header" Value="{Binding Name}"/>
+                                                    <Setter Property="Command"
+                                                            Value="{Binding DataContext.AddSelectedToPlaylistCommand,
+                                                                    RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                                    <Setter Property="CommandParameter" Value="{Binding}"/>
+                                                </Style>
+                                            </MenuItem.ItemContainerStyle>
+                                        </MenuItem>
+                                        <MenuItem Header="New playlist…"
+                                                  Command="{Binding BeginCreatePlaylistCommand}"/>
+                                        <MenuItem Header="Remove from playlist"
+                                                  Command="{Binding RemoveSelectedFromPlaylistCommand}"/>
+                                        <MenuItem Header="Remove from all playlists"
+                                                  Command="{Binding RemoveSelectedFromAllPlaylistsCommand}"/>
+                                        <Separator/>
+                                        <MenuItem Header="Rename…"
+                                                  Command="{Binding RenameTrackCommand}"/>
+                                        <MenuItem Header="Move…"
+                                                  Command="{Binding MoveTrackCommand}"/>
+                                        <MenuItem Header="Reveal in Explorer"
+                                                  Command="{Binding RevealInExplorerCommand}"/>
+                                        <MenuItem Header="Delete…"
+                                                  Foreground="{StaticResource DangerBrush}"
+                                                  Command="{Binding DeleteTrackCommand}"/>
+                                    </ContextMenu>
+                                </TreeView.ContextMenu>
+                            </TreeView>
+
+                            <!-- Busy state: a playlist resolves off the UI thread and is
+                                 applied as one batch, so the tree is only ever empty or
+                                 complete - never half built. -->
+                            <Border Background="{StaticResource PanelBrush}" Opacity="0.85"
+                                    Visibility="{Binding IsPlaylistLoading, Converter={StaticResource BoolToVisibility}}">
+                                <TextBlock Text="Loading playlist&#x2026;"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                                           FontSize="12" Foreground="{StaticResource TextDimBrush}"/>
+                            </Border>
+                        </Grid>
+                        </Grid>
                     </Grid>
                 </DockPanel>
                 </TabItem>
@@ -546,56 +942,487 @@
                 <TabItem Header="YOUTUBE">
                     <views:YouTubeView DataContext="{Binding YouTube}"/>
                 </TabItem>
+
+                <TabItem Header="{Binding QueueHeader}">
+                    <DockPanel>
+                        <!-- Queue toolbar: transport for the queue itself -->
+                        <DockPanel DockPanel.Dock="Top" Margin="4,0,4,8">
+                            <TextBlock Text="PLAYBACK QUEUE" FontSize="11" FontWeight="Bold"
+                                       Foreground="{StaticResource TextDimBrush}" VerticalAlignment="Center"/>
+                            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                <Button Content="&#x23EE; Prev" FontSize="10" Padding="8,3"
+                                        ToolTip="Play the previous unplayed queue track (Ctrl+Shift+Left)"
+                                        Command="{Binding PlayPreviousCommand}"/>
+                                <Button Content="Next &#x23ED;" FontSize="10" Padding="8,3" Margin="4,0,0,0"
+                                        ToolTip="Play the next queue track (Ctrl+Shift+Right)"
+                                        Command="{Binding PlayNextCommand}"/>
+                                <Button Command="{Binding ToggleRepeatQueueCommand}" Margin="8,0,0,0"
+                                        ToolTip="Start the queue over when it reaches the end">
+                                    <Button.Style>
+                                        <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                            <Setter Property="FontSize" Value="10"/>
+                                            <Setter Property="Padding" Value="8,3"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding RepeatQueue}" Value="True">
+                                                    <Setter Property="Foreground" Value="{StaticResource AccentABrush}"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Button.Style>
+                                    <TextBlock Text="&#x21BB; Repeat"/>
+                                </Button>
+                                <Button Content="Clear played" FontSize="10" Padding="8,3" Margin="4,0,0,0"
+                                        Command="{Binding ClearPlayedCommand}"/>
+                                <Button Content="Clear" FontSize="10" Padding="8,3" Margin="4,0,0,0"
+                                        Command="{Binding ClearQueueCommand}"/>
+                            </StackPanel>
+                        </DockPanel>
+
+                        <!-- Status line doubles as the empty-state hint -->
+                        <TextBlock DockPanel.Dock="Bottom" Text="{Binding QueueStatusText}"
+                                   Margin="6,6,6,0" FontSize="10.5"
+                                   Foreground="{StaticResource TextDimBrush}"
+                                   TextTrimming="CharacterEllipsis"/>
+
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+
+                            <!-- Column headers -->
+                            <Border Grid.Row="0" Background="{StaticResource PanelAltBrush}"
+                                    BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="26"/>
+                                        <ColumnDefinition Width="38"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="150"/>
+                                        <ColumnDefinition Width="56"/>
+                                        <ColumnDefinition Width="74"/>
+                                        <ColumnDefinition Width="56"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="#" Padding="6,5" FontWeight="SemiBold"
+                                               Foreground="{StaticResource TextDimBrush}"/>
+                                    <TextBlock Grid.Column="1" Text="Deck" Padding="0,5" FontWeight="SemiBold"
+                                               Foreground="{StaticResource TextDimBrush}"/>
+                                    <TextBlock Grid.Column="2" Text="Title" Padding="6,5" FontWeight="SemiBold"
+                                               Foreground="{StaticResource TextDimBrush}"/>
+                                    <TextBlock Grid.Column="3" Text="Artist" Padding="6,5" FontWeight="SemiBold"
+                                               Foreground="{StaticResource TextDimBrush}"/>
+                                    <TextBlock Grid.Column="4" Text="Time" Padding="6,5" FontWeight="SemiBold"
+                                               Foreground="{StaticResource TextDimBrush}"/>
+                                    <TextBlock Grid.Column="5" Text="State" Padding="6,5" FontWeight="SemiBold"
+                                               Foreground="{StaticResource TextDimBrush}"/>
+                                </Grid>
+                            </Border>
+
+                            <!-- Rows: played stays in the list (greyed), current gets the accent bar -->
+                            <ListView Grid.Row="1"
+                                      ItemsSource="{Binding Queue}"
+                                      SelectedItem="{Binding SelectedQueueItem}"
+                                      ItemContainerStyle="{StaticResource QueueRow}"
+                                      Background="{StaticResource PanelBrush}"
+                                      BorderThickness="0"
+                                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                      VirtualizingPanel.IsVirtualizing="True"
+                                      VirtualizingPanel.VirtualizationMode="Recycling">
+                                <ListView.ItemTemplate>
+                                    <DataTemplate DataType="{x:Type vm:PlaybackQueueItem}">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="26"/>
+                                                <ColumnDefinition Width="38"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="150"/>
+                                                <ColumnDefinition Width="56"/>
+                                                <ColumnDefinition Width="74"/>
+                                                <ColumnDefinition Width="56"/>
+                                            </Grid.ColumnDefinitions>
+
+                                            <TextBlock Grid.Column="0" Text="{Binding IndexText}"
+                                                       Padding="6,0" FontFamily="Consolas" FontSize="10.5"
+                                                       VerticalAlignment="Center"
+                                                       Foreground="{StaticResource TextDimBrush}"/>
+
+                                            <!-- Deck badge: click to flip the row between A and B -->
+                                            <Button Grid.Column="1" Content="{Binding DeckText}"
+                                                    Width="18" Height="16" Padding="0" Margin="1,0,0,0"
+                                                    HorizontalAlignment="Left" VerticalAlignment="Center"
+                                                    FontFamily="Consolas" FontSize="9"
+                                                    Foreground="{StaticResource TextDimBrush}"
+                                                    ToolTip="{Binding DeckHint}"
+                                                    Command="{Binding DataContext.FlipQueueDeckCommand,
+                                                        RelativeSource={RelativeSource AncestorType=ListView}}"
+                                                    CommandParameter="{Binding}">
+                                                <Button.Style>
+                                                    <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                                        <Setter Property="Background" Value="Transparent"/>
+                                                        <Setter Property="BorderThickness" Value="1"/>
+                                                        <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
+                                                        <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+                                                        <Style.Triggers>
+                                                            <Trigger Property="IsMouseOver" Value="True">
+                                                                <Setter Property="BorderBrush" Value="{StaticResource AccentABrush}"/>
+                                                                <Setter Property="Foreground" Value="{StaticResource AccentABrush}"/>
+                                                            </Trigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Button.Style>
+                                            </Button>
+
+                                            <TextBlock Grid.Column="2" Text="{Binding Title}"
+                                                       Padding="6,0" FontSize="12"
+                                                       VerticalAlignment="Center"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       ToolTip="{Binding Title}"/>
+
+                                            <TextBlock Grid.Column="3" Text="{Binding Artist}"
+                                                       Padding="6,0" FontSize="10.5"
+                                                       VerticalAlignment="Center"
+                                                       Foreground="{StaticResource TextDimBrush}"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       ToolTip="{Binding Artist}"/>
+
+                                            <TextBlock Grid.Column="4" Text="{Binding DurationText}"
+                                                       Padding="6,0" FontFamily="Consolas" FontSize="10.5"
+                                                       VerticalAlignment="Center"
+                                                       Foreground="{StaticResource TextDimBrush}"/>
+
+                                            <TextBlock Grid.Column="5" Text="{Binding Display}"
+                                                       Padding="6,0" FontSize="10"
+                                                       VerticalAlignment="Center"
+                                                       TextTrimming="CharacterEllipsis">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsCurrent}" Value="True">
+                                                                <Setter Property="Foreground" Value="{StaticResource AccentABrush}"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+
+                                            <StackPanel Grid.Column="6" Orientation="Horizontal"
+                                                        HorizontalAlignment="Right" VerticalAlignment="Center">
+                                                <Button Content="&#x25B6;" Width="22" Height="20"
+                                                        FontSize="9" Padding="0"
+                                                        ToolTip="Play this track now"
+                                                        Command="{Binding DataContext.PlayNowFromQueueCommand,
+                                                            RelativeSource={RelativeSource AncestorType=ListView}}"
+                                                        CommandParameter="{Binding}"/>
+                                                <Button Content="&#x2715;" Width="22" Height="20"
+                                                        FontSize="9" Padding="0" Margin="2,0,0,0"
+                                                        ToolTip="Remove from the queue"
+                                                        Command="{Binding DataContext.RemoveFromQueueCommand,
+                                                            RelativeSource={RelativeSource AncestorType=ListView}}"
+                                                        CommandParameter="{Binding}"/>
+                                            </StackPanel>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ListView.ItemTemplate>
+                            </ListView>
+
+                            <!-- Empty hint, layered over the (empty) list -->
+                            <TextBlock Grid.Row="1" Text="{Binding QueueStatusText}"
+                                       FontSize="11" Foreground="{StaticResource TextDimBrush}"
+                                       TextWrapping="Wrap" TextAlignment="Center" MaxWidth="260"
+                                       IsHitTestVisible="False"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"
+                                       Visibility="{Binding IsQueueEmpty, Converter={StaticResource BoolToVisibility}}"/>
+                        </Grid>
+                    </DockPanel>
+                </TabItem>
                 </TabControl>
             </Border>
 
             <!-- Lyrics panel -->
             <Border Grid.Column="2" Style="{StaticResource Card}">
                 <DockPanel>
-                    <DockPanel DockPanel.Dock="Top" Margin="0,0,0,8">
-                        <TextBlock Text="LYRICS" FontSize="11" FontWeight="Bold"
+                    <!-- Lyrics header, row 1: title, provider picker, status -->
+                    <Grid DockPanel.Dock="Top" Margin="0,0,0,4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+
+                        <TextBlock Grid.Column="0" Text="LYRICS" FontSize="11" FontWeight="Bold"
+                                   VerticalAlignment="Center"
                                    Foreground="{StaticResource TextDimBrush}"/>
-                        <TextBlock DockPanel.Dock="Right" Text="{Binding LyricsStatus}" FontSize="11"
+
+                        <ComboBox Grid.Column="1" Width="104" Height="24" MinHeight="24" Padding="6,3" Margin="10,0,0,0" FontSize="10"
+                                  VerticalAlignment="Center"
+                                  ItemsSource="{Binding LyricsSourceOptions}"
+                                  SelectedItem="{Binding SelectedLyricsSource}"
+                                  ToolTip="Lyric provider for this track (Auto = normal priority chain)"/>
+
+                        <Button x:Name="LyricsSourceMoreButton" Grid.Column="2" Content="&#x22EF;"
+                                Width="20" Height="20" Margin="4,0,0,0" Padding="0" FontSize="12"
+                                VerticalAlignment="Center"
+                                ToolTip="Try other lyric sources&#10;for this track"
+                                Command="{Binding TryOtherSourcesCommand}"/>
+
+                        <TextBlock Grid.Column="3" Text="{Binding LyricsStatus}" FontSize="11"
+                                   Margin="10,0,0,0" VerticalAlignment="Center"
                                    HorizontalAlignment="Right" Foreground="{StaticResource TextDimBrush}"
                                    TextTrimming="CharacterEllipsis"/>
-                    </DockPanel>
-                    <ListBox x:Name="LyricsList" ItemsSource="{Binding LyricLines}"
-                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                             ScrollViewer.CanContentScroll="False"
-                             VirtualizingPanel.IsVirtualizing="False"
-                             Focusable="False">
-                        <ListBox.ItemContainerStyle>
-                            <Style TargetType="ListBoxItem">
-                                <Setter Property="Focusable" Value="False"/>
-                                <Setter Property="Template">
-                                    <Setter.Value>
-                                        <ControlTemplate TargetType="ListBoxItem">
-                                            <ContentPresenter/>
-                                        </ControlTemplate>
-                                    </Setter.Value>
-                                </Setter>
-                            </Style>
-                        </ListBox.ItemContainerStyle>
-                        <ListBox.ItemTemplate>
-                            <DataTemplate>
-                                <TextBlock Text="{Binding Text}" TextWrapping="Wrap" TextAlignment="Center"
-                                           Margin="8,5" FontSize="16">
-                                    <TextBlock.Style>
-                                        <Style TargetType="TextBlock">
-                                            <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
-                                            <Style.Triggers>
-                                                <DataTrigger Binding="{Binding IsCurrent}" Value="True">
-                                                    <Setter Property="Foreground" Value="{StaticResource AccentABrush}"/>
-                                                    <Setter Property="FontSize" Value="20"/>
-                                                    <Setter Property="FontWeight" Value="Bold"/>
-                                                </DataTrigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </TextBlock.Style>
-                                </TextBlock>
-                            </DataTemplate>
-                        </ListBox.ItemTemplate>
-                    </ListBox>
+
+                        <!-- Every provider that returned lyrics for this track -->
+                        <Popup Grid.Column="1" Grid.ColumnSpan="2"
+                               IsOpen="{Binding IsLyricsSourcePickerOpen, Mode=TwoWay}"
+                               StaysOpen="False" AllowsTransparency="True" PopupAnimation="Fade"
+                               PlacementTarget="{Binding ElementName=LyricsSourceMoreButton}"
+                               Placement="Bottom">
+                            <Border Background="{StaticResource PanelAltBrush}"
+                                    BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                                    CornerRadius="6" Padding="8" Margin="0,4,8,0"
+                                    MinWidth="230" MaxWidth="320">
+                                <StackPanel>
+                                    <DockPanel Margin="0,0,0,6">
+                                        <Button DockPanel.Dock="Right" Content="&#x2715;" Padding="5,0"
+                                                FontSize="9" Height="18"
+                                                Command="{Binding CloseLyricsSourcePickerCommand}"/>
+                                        <TextBlock Text="LYRIC SOURCES" FontSize="10" FontWeight="Bold"
+                                                   VerticalAlignment="Center"
+                                                   Foreground="{StaticResource TextDimBrush}"/>
+                                    </DockPanel>
+                                    <TextBlock Text="{Binding LyricsSourceHint}" FontSize="10"
+                                               TextWrapping="Wrap" Margin="0,0,0,6"
+                                               Foreground="{StaticResource TextDimBrush}"/>
+                                    <ItemsControl ItemsSource="{Binding LyricsCandidates}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Button Margin="0,0,0,3" Padding="8,4"
+                                                        Command="{Binding DataContext.ApplyLyricsCandidateCommand,
+                                                                          RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                        CommandParameter="{Binding}">
+                                                    <StackPanel>
+                                                        <TextBlock Text="{Binding SourceName}" FontSize="11"/>
+                                                        <TextBlock Text="{Binding Detail}" FontSize="10"
+                                                                   Foreground="{StaticResource TextDimBrush}"/>
+                                                    </StackPanel>
+                                                </Button>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </StackPanel>
+                            </Border>
+                        </Popup>
+                    </Grid>
+
+                    <!-- Lyrics header, row 2: offset (positive = lyrics later) -->
+                    <Grid DockPanel.Dock="Top" Margin="0,0,0,8"
+                          ToolTip="Positive values show lyrics later than the audio.&#10;Scope: the loaded track (TRACK), or the global default when nothing is loaded (GLOBAL).">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*" MinWidth="60"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                            <TextBlock Text="{Binding LyricsOffsetScope}" FontSize="9" FontWeight="Bold"
+                                       Foreground="{StaticResource AccentABrush}"/>
+                            <TextBlock Text=" later &#x2192;" FontSize="9"
+                                       Foreground="{StaticResource TextDimBrush}"/>
+                        </StackPanel>
+
+                        <RepeatButton Grid.Column="1" Style="{StaticResource NudgeButton}" Content="&#x2212;100"
+                                      Width="30" Height="20" Margin="6,0,0,0" FontSize="9"
+                                      Delay="400" Interval="150"
+                                      Command="{Binding NudgeLyricsCommand}" CommandParameter="-100"
+                                      ToolTip="-100 ms"/>
+                        <RepeatButton Grid.Column="2" Style="{StaticResource NudgeButton}" Content="&#x2212;10"
+                                      Width="24" Height="20" Margin="3,0,0,0" FontSize="9"
+                                      Delay="400" Interval="150"
+                                      Command="{Binding NudgeLyricsCommand}" CommandParameter="-10"
+                                      ToolTip="-10 ms (fine tune)"/>
+
+                        <Slider Grid.Column="3" Height="18" Margin="6,0" VerticalAlignment="Center"
+                                Minimum="-2000" Maximum="2000" SmallChange="1" LargeChange="100"
+                                IsSnapToTickEnabled="False" Value="{Binding LyricsOffsetMs}"
+                                ToolTip="-2000 to +2000 ms; positive = lyrics later"/>
+
+                        <RepeatButton Grid.Column="4" Style="{StaticResource NudgeButton}" Content="+10"
+                                      Width="24" Height="20" FontSize="9" Delay="400" Interval="150"
+                                      Command="{Binding NudgeLyricsCommand}" CommandParameter="10"
+                                      ToolTip="+10 ms (fine tune)"/>
+                        <RepeatButton Grid.Column="5" Style="{StaticResource NudgeButton}" Content="+100"
+                                      Width="30" Height="20" Margin="3,0,0,0" FontSize="9"
+                                      Delay="400" Interval="150"
+                                      Command="{Binding NudgeLyricsCommand}" CommandParameter="100"
+                                      ToolTip="+100 ms"/>
+
+                        <TextBlock Grid.Column="6" Text="{Binding LyricsOffsetText}" Width="52"
+                                   Margin="8,0,0,0" VerticalAlignment="Center" TextAlignment="Right"
+                                   FontFamily="Consolas" FontSize="10"
+                                   Foreground="{StaticResource TextBrush}"/>
+
+                        <Button Grid.Column="7" Content="Reset" Height="20" Margin="6,0,0,0"
+                                FontSize="9" Padding="6,1"
+                                Command="{Binding ResetLyricsCommand}"
+                                ToolTip="Reset the current scope: the section, or this track's own offset (which then follows the global one again)"/>
+
+                        <Button Grid.Column="8" Content="{Binding LyricsFollowLabel}" Height="20"
+                                Margin="8,0,0,0" FontSize="9" Padding="6,1" MinWidth="42"
+                                Command="{Binding ToggleLyricsFollowCommand}"
+                                ToolTip="Lyric follow mode: LINE highlights one line at a time, WORD follows each word with the bouncing ball."/>
+                    </Grid>
+                    <Grid>
+                        <ListBox x:Name="LyricsList" ItemsSource="{Binding LyricLines}"
+                                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                 ScrollViewer.CanContentScroll="False"
+                                 VirtualizingPanel.IsVirtualizing="False"
+                                 Focusable="False"
+                                 SelectionMode="Extended">
+                            <!-- Timing menu. The ContextMenu is its own visual
+                                 tree, so it reaches the view model through the
+                                 ListBox it is placed on. -->
+                            <ListBox.ContextMenu>
+                                <ContextMenu DataContext="{Binding PlacementTarget.DataContext,
+                                    RelativeSource={RelativeSource Self}}">
+                                    <MenuItem Header="Set timing for selected lines"
+                                              Click="OnSetLyricTimingForSelection"
+                                              ToolTip="Give the selected lines their own offset; the next nudge then moves just this part"/>
+                                    <MenuItem Header="Remove timing for this section"
+                                              Command="{Binding RemoveLyricTimingSectionCommand}"
+                                              Visibility="{Binding HasSectionAtPlayhead,
+                                                  Converter={StaticResource BoolToVisibility}}"
+                                              ToolTip="Drop the saved section the playhead is in; the track offset applies again"/>
+                                </ContextMenu>
+                            </ListBox.ContextMenu>
+                            <ListBox.ItemContainerStyle>
+                                <Style TargetType="ListBoxItem">
+                                    <!-- Selectable: the timing menu acts on the selected
+                                         lines, so the rows take focus and show a fill. -->
+                                    <Setter Property="Focusable" Value="True"/>
+                                    <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+                                    <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                    <Setter Property="Template">
+                                        <Setter.Value>
+                                            <ControlTemplate TargetType="ListBoxItem">
+                                                <Border x:Name="SelectionBg" Background="Transparent">
+                                                    <ContentPresenter/>
+                                                </Border>
+                                                <ControlTemplate.Triggers>
+                                                    <Trigger Property="IsSelected" Value="True">
+                                                        <Setter TargetName="SelectionBg" Property="Background"
+                                                                Value="{StaticResource SelectionBrush}"/>
+                                                    </Trigger>
+                                                </ControlTemplate.Triggers>
+                                            </ControlTemplate>
+                                        </Setter.Value>
+                                    </Setter>
+                                </Style>
+                            </ListBox.ItemContainerStyle>
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid Margin="8,5">
+                                        <!-- Line-level only document: the original single
+                                             selectable-free text block. -->
+                                        <TextBlock Text="{Binding Text}" TextWrapping="Wrap"
+                                                   TextAlignment="Center" FontSize="16">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding HasWords}" Value="True">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                        </DataTrigger>
+                                                        <DataTrigger Binding="{Binding IsCurrent}" Value="True">
+                                                            <Setter Property="Foreground" Value="{StaticResource AccentABrush}"/>
+                                                            <Setter Property="FontSize" Value="20"/>
+                                                            <Setter Property="FontWeight" Value="Bold"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+
+                                        <!-- Word-level document: one TextBlock per word so the
+                                             active word can be highlighted on its own. The
+                                             trailing margin is the inter-word space (kept out of
+                                             the measured box, so the bouncing ball sits on the
+                                             glyphs). -->
+                                        <ItemsControl ItemsSource="{Binding Words}"
+                                                      HorizontalAlignment="Center">
+                                            <ItemsControl.Style>
+                                                <Style TargetType="ItemsControl">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding HasWords}" Value="True">
+                                                            <Setter Property="Visibility" Value="Visible"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </ItemsControl.Style>
+                                            <ItemsControl.ItemsPanel>
+                                                <ItemsPanelTemplate>
+                                                    <WrapPanel Orientation="Horizontal"/>
+                                                </ItemsPanelTemplate>
+                                            </ItemsControl.ItemsPanel>
+                                            <ItemsControl.ItemTemplate>
+                                                <DataTemplate>
+                                                    <TextBlock Text="{Binding Text}" Margin="0,0,5,0"
+                                                               FontSize="16">
+                                                        <TextBlock.Style>
+                                                            <Style TargetType="TextBlock">
+                                                                <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+                                                                <Style.Triggers>
+                                                                    <DataTrigger Binding="{Binding DataContext.IsCurrent,
+                                                                                  RelativeSource={RelativeSource AncestorType=ListBoxItem}}"
+                                                                                 Value="True">
+                                                                        <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+                                                                        <Setter Property="FontSize" Value="20"/>
+                                                                    </DataTrigger>
+                                                                    <DataTrigger Binding="{Binding IsCurrent}" Value="True">
+                                                                        <Setter Property="Foreground" Value="{StaticResource AccentABrush}"/>
+                                                                        <Setter Property="FontWeight" Value="Bold"/>
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </TextBlock.Style>
+                                                    </TextBlock>
+                                                </DataTemplate>
+                                            </ItemsControl.ItemTemplate>
+                                        </ItemsControl>
+                                    </Grid>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                        </ListBox>
+
+                        <!-- Bouncing ball, layered over the list so it can move freely.
+                             Hit-testing is off: clicks and wheel still reach the list. -->
+                        <Canvas x:Name="LyricsBallCanvas" IsHitTestVisible="False"
+                                ClipToBounds="True" HorizontalAlignment="Stretch"
+                                VerticalAlignment="Stretch">
+                            <Ellipse Width="{x:Static vm:MainViewModel.BallSize}"
+                                     Height="{x:Static vm:MainViewModel.BallSize}"
+                                     Fill="{StaticResource AccentABrush}"
+                                     Canvas.Left="{Binding BallX}" Canvas.Top="{Binding BallY}">
+                                <Ellipse.Style>
+                                    <Style TargetType="Ellipse">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding BallVisible}" Value="True">
+                                                <Setter Property="Visibility" Value="Visible"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Ellipse.Style>
+                            </Ellipse>
+                        </Canvas>
+                    </Grid>
                 </DockPanel>
             </Border>
         </Grid>

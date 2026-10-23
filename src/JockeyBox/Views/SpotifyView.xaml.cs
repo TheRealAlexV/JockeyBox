@@ -21,6 +21,13 @@ public partial class SpotifyView : UserControl
 
     private SpotifyViewModel? Vm => DataContext as SpotifyViewModel;
 
+    /// <summary>
+    /// Leaving the tab (switch or close) stops the streamed preview: the audio
+    /// belongs to this pane, and nothing should keep playing from a tab the
+    /// user has left.
+    /// </summary>
+    private void OnViewUnloaded(object sender, RoutedEventArgs e) => Vm?.StopPreview();
+
     private void OnTrackDoubleClick(object sender, MouseButtonEventArgs e)
     {
         if (FindAncestor<ListViewItem>(e.OriginalSource as DependencyObject) == null) return;

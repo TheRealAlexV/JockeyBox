@@ -250,6 +250,8 @@ public partial class DownloadsViewModel : ObservableObject
         RetryItemCommand.NotifyCanExecuteChanged();
         CancelItemCommand.NotifyCanExecuteChanged();
         OpenFileCommand.NotifyCanExecuteChanged();
+        DeleteFileCommand.NotifyCanExecuteChanged();
+        RemoveRowCommand.NotifyCanExecuteChanged();
 
         // Measuring the cache walks the cache folder; once every ~10 s is plenty.
         if (++_ticks % 25 == 0) RefreshCacheStats();
@@ -365,7 +367,7 @@ public partial class DownloadsViewModel : ObservableObject
         if (item is null || item.State != DownloadState.Queued) return;
         item.State = DownloadState.Cancelled;
         item.Error = null;
-        item.Track.State = SourceTrackState.New;
+        item.Track.State = item.PriorState;
         item.Track.Progress = 0;
         item.Completion?.TrySetResult(null);
         SetStatus($"Removed {item.Title} from the queue.");
@@ -404,6 +406,71 @@ public partial class DownloadsViewModel : ObservableObject
 
     private static bool CanOpenFile(DownloadItem? item) =>
         item?.State == DownloadState.Done && !string.IsNullOrWhiteSpace(item.OutputPath);
+
+    /// <summary>
+    /// Row action for a finished download: delete the file (through the Recycle
+    /// Bin, so it is undoable) and forget the ledger entry. There is no modal
+    /// confirmation in this window, so the button's tooltip states the effect and
+    /// the command is offered only on Done rows - a single click can never remove
+    /// a file the user is still downloading.
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanDeleteFile))]
+    private async Task DeleteFileAsync(DownloadItem? item)
+    {
+        if (item is null) return;
+
+        SetStatus($"Deleting {item.Title}\u2026", 0);
+
+        bool deleted;
+        try
+        {
+            deleted = await _queue.DeleteDownloadedFileAsync(item).ConfigureAwait(true);
+        }
+        catch (Exception ex)
+        {
+            // The queue swallows its own failures; this is the last line of defence
+            // so a delete can never throw into the dispatcher.
+            Log.Error($"Deleting the file for \"{item.Title}\" failed", ex);
+            item.Error = ex.Message;
+            deleted = false;
+        }
+
+        if (!deleted)
+        {
+            SetStatus(string.IsNullOrWhiteSpace(item.Error)
+                ? "Could not delete that file \u2014 see the log."
+                : item.Error!, 6);
+            Refresh();
+            return;
+        }
+
+        Items.Remove(item);
+        SetStatus($"Deleted {item.Title} (moved to the Recycle Bin).");
+        OnPropertyChanged(nameof(EmptyHint));
+        Refresh();
+    }
+
+    /// <summary>Only a Done row with a recorded path owns a file this app may delete.</summary>
+    private static bool CanDeleteFile(DownloadItem? item) =>
+        item?.State == DownloadState.Done && !string.IsNullOrWhiteSpace(item.OutputPath);
+
+    /// <summary>
+    /// Row action for a Failed/Cancelled row: forget the row. Nothing on disk is
+    /// touched - the Recycle Bin path is <see cref="DeleteFileCommand"/>'s job.
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanRemoveRow))]
+    private void RemoveRow(DownloadItem? item)
+    {
+        if (item is null) return;
+        if (!Items.Remove(item)) return;
+
+        SetStatus($"Removed {item.Title} from the list.");
+        OnPropertyChanged(nameof(EmptyHint));
+        Refresh();
+    }
+
+    private static bool CanRemoveRow(DownloadItem? item) =>
+        item?.State is DownloadState.Failed or DownloadState.Cancelled;
 
     [RelayCommand(CanExecute = nameof(CanUpdateTools))]
     private async Task InstallToolsAsync()

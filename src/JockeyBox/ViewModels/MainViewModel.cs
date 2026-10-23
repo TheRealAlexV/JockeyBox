@@ -1,6 +1,9 @@
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Diagnostics;
+using System.Globalization;
 using System.IO;
+using System.Windows;
 using System.Windows.Data;
 using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -9,11 +12,13 @@ using JockeyBox.Audio;
 using JockeyBox.Downloads;
 using JockeyBox.Library;
 using JockeyBox.Lyrics;
+using JockeyBox.Metadata;
 using JockeyBox.Playback;
 using JockeyBox.Separation;
 using JockeyBox.Settings;
 using JockeyBox.Sources;
 using JockeyBox.Tools;
+using JockeyBox.Views;
 
 namespace JockeyBox.ViewModels;
 
@@ -25,7 +30,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
 {
     private readonly AppSettings _settings;
     private readonly DeviceService _deviceService = new();
-    private readonly SyncTransport _transport;
+    private readonly DualDeckTransport _transport;
+    private readonly DeckPreviewTransport _previewTransport;
     private readonly TagCache _tagCache = new();
     private readonly LibraryScanner _scanner;
     private readonly LibraryWatcher _watcher = new();
@@ -38,36 +44,109 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly PlaylistStore _playlistStore;
     private readonly LibraryLedger _ledger;
     private readonly LibraryIndex _libraryIndex;
+    private Dictionary<string, SourceTrack>? _sourceTracksById;
     private readonly StreamCache _streamCache;
     private readonly DownloadQueue _downloadQueue;
     private readonly StreamResolver _streamResolver;
     private readonly DispatcherTimer _rescanDebounce;
+    private readonly DispatcherTimer _searchDebounce;
+    private readonly DispatcherTimer _playlistReloadDebounce;
     private readonly DispatcherTimer _autoSyncTimer;
+
+    // Playback queue: what plays after this track, plus its on-disk mirror.
+    private readonly PlaybackQueueStore _queueStore = new();
+    private bool _restoringQueue;
+    private bool _queueRestored;
+
+    // Deck routing for the queue: the deck the loaded track went to, and the
+    // deck handed to the last enqueued row (so a batch alternates A/B/A/B/A).
+    private PlaybackDeck _activeDeck = PlaybackDeck.A;
+    private PlaybackDeck? _lastAssignedDeck;
     private readonly HashSet<string> _pendingAutoKaraoke = new(StringComparer.OrdinalIgnoreCase);
+
+    // A library rename/move reports its old/new path and key through the media
+    // service's callbacks; these carry that pair into the persistence step.
+    private string _mediaOpOldPath = "";
+    private string _mediaOpNewPath = "";
+    private string _mediaOpOldKey = "";
+
+    // Header slider range for lyric offsets. AppSettings allows +/-10 s; the
+    // slider covers the useful range and the raw ms value is still settable
+    // from the Settings dialog.
+    private const double LyricsOffsetSliderLimitMs = 2000;
+    private const string AutoLyricsSource = "Auto";
 
     private CancellationTokenSource? _scanCts;
     private CancellationTokenSource? _lyricsCts;
+    private CancellationTokenSource? _lyricsCandidatesCts;
+    private readonly DispatcherTimer _lyricsSettingsSave;
     private bool _isUserSeeking;
+    private bool _syncingCrossfader;
     private int _currentLyricIndex = -1;
     private bool _lyricsSynced;
+
+    // Guards the two-way bindings of the lyrics header so programmatic syncs
+    // (track load, picker changes) don't loop back into persistence.
+    private bool _syncingLyricsOffset;
+    private bool _syncingLyricsSource;
+    private int _lyricsCandidatesGeneration;
+
+    // ---- per-track lyric metadata ----------------------------------------
+    // One store for the process, opened next to the settings and before the
+    // first track can load. It owns the per-track offset, the pinned source
+    // and the offset sections; AppSettings only keeps the global default and
+    // is read (never written) for the legacy per-track values.
+    private readonly TrackMetadataStore _trackMeta;
+
+    /// <summary>The document behind <see cref="LyricLines"/>; null when none is loaded.</summary>
+    private LyricsDocument? _lyricsDocument;
+
+    /// <summary>
+    /// Sections of the loaded track, fetched once per track/metadata change:
+    /// <c>GetSections</c> hands out a copy, and the 30 Hz tick must not copy.
+    /// </summary>
+    private IReadOnlyList<LyricOffsetSection> _trackSections = Array.Empty<LyricOffsetSection>();
+
+    /// <summary>Section the header edits; -1 means the track/global value.</summary>
+    private int _editSectionIndex = -1;
+
+    /// <summary>Section the playhead was inside on the previous tick (change detection only).</summary>
+    private int _playheadSectionIndex = -1;
 
     public MainViewModel()
     {
         _settings = AppSettings.Load();
+        // The browser layout comes from settings; assign the generated backing
+        // field so the change hook does not save settings during start-up.
+        _layout = _settings.LibraryLayout;
 
-        var deckA = new AudioDeck("Deck A", _deviceService);
-        var deckB = new AudioDeck("Deck B", _deviceService);
-        _transport = new SyncTransport(deckA, deckB);
+        // Per-track lyric metadata lives here from now on: open the store before
+        // any track can load, import the pre-store per-track settings exactly
+        // once (the store keeps the fence, so this is safe on every launch) and
+        // listen for writes made elsewhere. Opening is best-effort by design -
+        // a corrupt/unwritable store must not stop the app from starting.
+        _trackMeta = TrackMetadataStore.Open();
+        _trackMeta.MigrateLegacyLyrics(_settings);
+        _trackMeta.Changed += OnTrackMetadataChanged;
+        // Restore the follow mode before the UI binds; writing the backing field
+        // avoids the change hook saving settings during start-up.
+        _isWordFollow = _settings.LyricsFollowMode == LyricsFollowMode.Word;
+
+        var channelA = new DeckChannel("Deck A", _deviceService);
+        var channelB = new DeckChannel("Deck B", _deviceService);
+        _transport = new DualDeckTransport(channelA, channelB);
         _transport.StateChanged += (_, _) => OnTransportStateChanged();
+        _transport.ActiveDeckChanged += (_, _) => SyncDeckActivation();
 
-        DeckA = new DeckViewModel("DECK A \u00b7 KARAOKE", deckA, _transport, PersistDeckSettings,
+        DeckA = new DeckViewModel("DECK A", PlaybackDeck.A, channelA, _transport, PersistDeckSettings,
             id => id != null && _settings.DeviceDelays.TryGetValue(id, out var d) ? d : 0,
             (id, delay) => { if (id != null) _settings.DeviceDelays[id] = delay; });
-        DeckB = new DeckViewModel("DECK B \u00b7 MUSIC", deckB, _transport, PersistDeckSettings,
+        DeckB = new DeckViewModel("DECK B", PlaybackDeck.B, channelB, _transport, PersistDeckSettings,
             id => id != null && _settings.DeviceDelays.TryGetValue(id, out var d) ? d : 0,
             (id, delay) => { if (id != null) _settings.DeviceDelays[id] = delay; });
         DeckA.RestoreSettings(_settings.DeckADeviceId, _settings.DeckADelayMs, _settings.DeckAVolume);
         DeckB.RestoreSettings(_settings.DeckBDeviceId, _settings.DeckBDelayMs, _settings.DeckBVolume);
+        SyncDeckActivation();
         RefreshDevices();
 
         _scanner = new LibraryScanner(_tagCache);
@@ -76,8 +155,44 @@ public partial class MainViewModel : ObservableObject, IDisposable
             System.Windows.Application.Current.Dispatcher);
         _separation.StatusChanged += message => StatusText = message;
 
+        // Lyrics header: the offset slider writes through to the metadata store
+        // on every drag step (the store debounces its own save); the settings
+        // debounce below is only for the global default.
+        _lyricsSettingsSave = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
+        _lyricsSettingsSave.Tick += (_, _) =>
+        {
+            _lyricsSettingsSave.Stop();
+            _settings.Save();
+        };
+
+        LyricsSourceOptions.Add(AutoLyricsSource);
+        foreach (var name in _lyricsService.SourceNames)
+            LyricsSourceOptions.Add(name);
+        SyncLyricsOffsetEditor();
+
         TracksView = CollectionViewSource.GetDefaultView(Tracks);
         TracksView.Filter = FilterTrack;
+
+        // A rescan replaces TrackEntry instances, but membership is a set of
+        // library keys: only a change to the *key set* invalidates a cached
+        // answer. A scan raises this once per added row, so the scan itself
+        // suppresses the burst and decides once, at the end, whether the keys
+        // really moved (see RescanAsync).
+        Tracks.CollectionChanged += (_, _) =>
+        {
+            if (_suppressLibraryBump) return;
+            BumpLibraryGeneration("library list changed");
+        };
+
+        // Typing filters the tree itself. Coalesce the rebuild so a burst of
+        // keystrokes costs one tree build (and one collection view refresh).
+        _searchDebounce = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(150) };
+        _searchDebounce.Tick += (_, _) =>
+        {
+            _searchDebounce.Stop();
+            TracksView.Refresh();
+            RebuildBrowser();
+        };
 
         _watcher.Changed += (_, _) =>
             System.Windows.Application.Current?.Dispatcher.BeginInvoke(() => _ = RescanAsync());
@@ -94,9 +209,53 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _streamResolver = new StreamResolver(_downloadQueue, _streamCache, _ledger, _settings,
             _libraryIndex);
 
+        // The store keeps only a remote id per row, so "is this on disk?" is
+        // answered against the live download ledger plus the scanned library
+        // instead of the store's read-only snapshot of ledger.json.
+        _playlistStore.LibraryPathResolver = ResolveSourceLibraryPath;
+
+        // Any write to playlists.json (this view model, Spotify, YouTube) rebuilds
+        // the rail: the tabs create imported playlists too.
+        _playlistStore.Changed += () => System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
+        {
+            _sourceTracksById = null;
+            RefreshPlaylistRail();
+            ApplyPlaylistFilter(_activePlaylist);
+        });
+
+        // One-time heal for ledgers written before provenance existed: names are
+        // taken from queue.json and from imported playlists that still hold the
+        // row, never guessed. Idempotent - it writes only when it names something.
+        BackfillLedgerProvenance();
+        RefreshPlaylistRail();
+
+        // Cache invalidation is wired to the same signals the rescan uses: a
+        // membership answer resolved against the old library must never survive.
         _downloadQueue.LibraryChanged += () => System.Windows.Application.Current?.Dispatcher
-            .BeginInvoke(ScheduleRescan);
+            .BeginInvoke(() =>
+            {
+                BumpLibraryGeneration("library changed");
+                ScheduleRescan();
+            });
+        // A delete already raises LibraryChanged, which schedules the rescan;
+        // what is missing is the source tabs, which hold their own row objects
+        // and would otherwise keep their "in library" glyph.
+        _downloadQueue.FileDeleted += _ =>
+        {
+            System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
+            {
+                BumpLibraryGeneration("file deleted");
+                RefreshSourceLibraryStates();
+            });
+        };
         _downloadQueue.ItemFinished += OnDownloadFinished;
+        // A finished queue means the last file landed without another signal.
+        _downloadQueue.Drained += () => System.Windows.Application.Current?.Dispatcher
+            .BeginInvoke(() =>
+            {
+                BumpLibraryGeneration("downloads drained");
+                ScheduleRescan();
+            });
 
         // A batch of downloads should trigger one rescan, not one per track.
         _rescanDebounce = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(1500) };
@@ -106,11 +265,34 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _ = RescanAsync();
         };
 
+        // An open playlist is re-resolved after a library change, once per burst
+        // (a scan bumps the generation once per added row).
+        _playlistReloadDebounce = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
+        _playlistReloadDebounce.Tick += (_, _) =>
+        {
+            _playlistReloadDebounce.Stop();
+            // Counts the cache could not answer were dropped when the library
+            // moved on; repaint them together with the open playlist.
+            RefreshPlaylistRail();
+            if (_activePlaylist is not null) ApplyPlaylistFilter(_activePlaylist);
+        };
+
+        // The tabs' preview strips drive the deck pair this window already owns;
+        // the adapter reads the live transport and is ticked by OnUiTick.
+        _previewTransport = new DeckPreviewTransport(_transport);
+
         Spotify = new SpotifyViewModel(_settings, _playlistStore, _downloadQueue, _ledger,
-            new SpotifyOAuthService(_settings), PlaySourceTrackAsync);
+            new SpotifyOAuthService(_settings), s => PlaySourceTrackAsync(s),
+            previewTransport: _previewTransport, addToQueue: AddSourceToQueue);
         YouTube = new YouTubeViewModel(_settings, _playlistStore, _downloadQueue, _ledger,
-            PlaySourceTrackAsync);
+            s => PlaySourceTrackAsync(s),
+            previewTransport: _previewTransport, addToQueue: AddSourceToQueue);
         Downloads = new DownloadsViewModel(_settings, _downloadQueue);
+
+        // Re-derive the remote rows once now that the store and the library
+        // index both exist: a file removed outside the app must not keep a
+        // stale "in library" glyph on either tab.
+        RefreshSourceLibraryStates();
 
         // ~30 Hz UI clock for seek bar, deck readouts and lyric highlighting.
         // Re-read imported playlists on the interval chosen in Settings.
@@ -155,13 +337,27 @@ public partial class MainViewModel : ObservableObject, IDisposable
     public ObservableCollection<BrowserNode> BrowserRoots { get; } = new();
     public ObservableCollection<LyricLineViewModel> LyricLines { get; } = new();
 
-    /// <summary>Waveform amplitude data for Deck A (karaoke) and Deck B (music).</summary>
-    [ObservableProperty] private List<float> _waveformAData = new();
-    [ObservableProperty] private List<float> _waveformBData = new();
-    [ObservableProperty] private double _waveformProgress; // 0-1 from master clock
+    /// <summary>
+    /// Crossfader position for the deck pair: 0 = deck A, 1 = deck B, 0.5 =
+    /// equal-power centre. Programme changes (queue hand-off) ramp the transport
+    /// fader; the 30 Hz tick mirrors it back here so the slider follows.
+    /// </summary>
+    [ObservableProperty] private double _crossfader = 0.5;
+
+    /// <summary>Which deck the shared transport surface currently follows.</summary>
+    public bool IsDeckAActive => _transport.ActiveDeck == PlaybackDeck.A;
+    public bool IsDeckBActive => !IsDeckAActive;
 
     /// <summary>Raised when the highlighted lyric changes (view scrolls to it).</summary>
     public event Action<LyricLineViewModel>? CurrentLyricChanged;
+
+    /// <summary>
+    /// Raised when the active word changes (or word-follow is switched on): the
+    /// view must re-measure the line's word positions and push them back through
+    /// <see cref="SetLyricWordGeometry"/>. The active word turns bold, which
+    /// changes its width, so cached centres go stale on every word change.
+    /// </summary>
+    public event Action? CurrentWordChanged;
 
     [ObservableProperty] private string _musicDirectory = "";
     [ObservableProperty] private string _karaokeDirectory = "";
@@ -171,6 +367,18 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] private BrowserNode? _selectedTreeNode;
     [ObservableProperty] private TrackEntry? _loadedTrack;
 
+    /// <summary>Last track selected in the tree; survives rebuilds and filtering so selection can be restored.</summary>
+    private string _lastSelectedTrackKey = "";
+
+    /// <summary>
+    /// How the library tree groups tracks: tag-derived artist → album, or the
+    /// on-disk folder path. Persisted on change.
+    /// </summary>
+    [ObservableProperty] private LibraryLayout _layout;
+
+    public bool IsArtistAlbumLayout => Layout == LibraryLayout.ArtistAlbum;
+    public bool IsPathLayout => Layout == LibraryLayout.Path;
+
     [ObservableProperty] private bool _isPlaying;
     [ObservableProperty] private double _positionSeconds;
     [ObservableProperty] private double _durationSeconds;
@@ -178,6 +386,115 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [ObservableProperty] private string _durationText = "0:00";
     [ObservableProperty] private string _loadedTrackTitle = "JockeyBox";
     [ObservableProperty] private string _lyricsStatus = "Load a track to fetch lyrics.";
+
+    // ---- lyrics header (offset + source) ---------------------------------
+
+    /// <summary>"Auto" followed by one entry per lyrics provider (same names
+    /// <see cref="LyricsService.SourceNames"/> uses).</summary>
+    public ObservableCollection<string> LyricsSourceOptions { get; } = new();
+
+    /// <summary>Documents offered by "try other sources" for the loaded track.</summary>
+    public ObservableCollection<LyricsCandidateViewModel> LyricsCandidates { get; } = new();
+
+    /// <summary>Signed offset in ms for the current track (or the global default):
+    /// positive = lyrics later. Written straight through to AppSettings, so the
+    /// 30 Hz highlighter picks it up on the next tick.</summary>
+    [ObservableProperty] private double _lyricsOffsetMs;
+
+    /// <summary>Formatted offset, e.g. "+120 ms".</summary>
+    [ObservableProperty] private string _lyricsOffsetText = "0 ms";
+
+    /// <summary>"TRACK" when a track is loaded, otherwise "GLOBAL".</summary>
+    [ObservableProperty] private string _lyricsOffsetScope = "GLOBAL";
+
+    /// <summary>Selected entry of <see cref="LyricsSourceOptions"/>.</summary>
+    [ObservableProperty] private string _selectedLyricsSource = AutoLyricsSource;
+
+    [ObservableProperty] private bool _isLyricsSourcePickerOpen;
+    [ObservableProperty] private string _lyricsSourceHint = "";
+
+    // ---- lyrics follow mode + bouncing ball ------------------------------
+
+    /// <summary>
+    /// Word-by-word follow with the bouncing ball. Persisted immediately through
+    /// <see cref="AppSettings.LyricsFollowMode"/>; line mode is the default.
+    /// </summary>
+    [ObservableProperty] private bool _isWordFollow;
+
+    /// <summary>Compact header toggle label.</summary>
+    public string LyricsFollowLabel => IsWordFollow ? "WORD" : "LINE";
+
+    [ObservableProperty] private bool _ballVisible;
+    [ObservableProperty] private double _ballX;
+    [ObservableProperty] private double _ballY;
+
+    /// <summary>Ball diameter in device-independent pixels (the view's Ellipse matches).</summary>
+    public const double BallSize = 10;
+
+    /// <summary>Peak height of the hop above the word, in pixels.</summary>
+    private const double BallHopHeight = 6;
+
+    private int _currentWordIndex = -1;
+
+    /// <summary>Line whose word centres the cache describes; null = no cache.</summary>
+    private LyricLineViewModel? _ballLine;
+
+    /// <summary>Y (canvas space) of the cached line's word tops; NaN when unknown.</summary>
+    private double _ballWordTop = double.NaN;
+
+    /// <summary>X centre of every word in <see cref="_ballLine"/>, index-aligned with its Words.</summary>
+    private IReadOnlyList<double>? _ballCentres;
+
+    /// <summary>The line the highlighter is on, or null. Binds and measurement both use it.</summary>
+    public LyricLineViewModel? CurrentLyricLine =>
+        _currentLyricIndex >= 0 && _currentLyricIndex < LyricLines.Count
+            ? LyricLines[_currentLyricIndex]
+            : null;
+
+    /// <summary>
+    /// Accept measured word geometry from the view (the only place that can read
+    /// glyph positions). Ignored when it describes a line that is no longer
+    /// current, which happens when a queued layout pass lands after a seek.
+    /// </summary>
+    public void SetLyricWordGeometry(LyricLineViewModel line, double wordTop, IReadOnlyList<double> centres)
+    {
+        if (!ReferenceEquals(line, CurrentLyricLine) || centres.Count != line.Words.Count)
+        {
+            ClearLyricWordGeometry();
+            return;
+        }
+
+        _ballLine = line;
+        _ballWordTop = wordTop;
+        _ballCentres = centres;
+    }
+
+    /// <summary>Drop the cached geometry and hide the ball (measurement failed / no line).</summary>
+    public void ClearLyricWordGeometry()
+    {
+        _ballLine = null;
+        _ballCentres = null;
+        _ballWordTop = double.NaN;
+        BallVisible = false;
+    }
+
+    [RelayCommand]
+    private void ToggleLyricsFollow() => IsWordFollow = !IsWordFollow;
+
+    partial void OnIsWordFollowChanged(bool value)
+    {
+        _settings.LyricsFollowMode = value ? LyricsFollowMode.Word : LyricsFollowMode.Line;
+        _settings.Save(); // explicit user action: no debounce needed
+        OnPropertyChanged(nameof(LyricsFollowLabel));
+
+        ClearAllWordHighlights();
+        ClearLyricWordGeometry();
+
+        // Ask the view to measure the line that is already on screen, so the
+        // ball appears without waiting for the next line change.
+        if (value) CurrentWordChanged?.Invoke();
+    }
+
 
     public AppSettings SettingsRef => _settings;
 
@@ -210,6 +527,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [RelayCommand] private void FastForward() => _transport.SkipForward(10);
     [RelayCommand] private void Rewind() => _transport.SkipBack(10);
 
+    /// <summary>Make deck A / deck B the one the seek bar and lyrics clock follow.</summary>
+    [RelayCommand] private void ActivateDeckA() => _transport.ActivateDeck(PlaybackDeck.A);
+    [RelayCommand] private void ActivateDeckB() => _transport.ActivateDeck(PlaybackDeck.B);
+
+    partial void OnCrossfaderChanged(double value)
+    {
+        if (_syncingCrossfader) return;
+        _transport.SetCrossfader(value);
+    }
+
     /// <summary>Called by the view while the user drags the seek thumb.</summary>
     public void BeginSeek() => _isUserSeeking = true;
 
@@ -228,6 +555,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         MusicDirectory = _settings.MusicDirectory;
         KaraokeDirectory = _settings.KaraokeDirectory;
+
+        // The Settings dialog can edit the global lyric offset directly.
+        SyncLyricsOffsetEditor();
 
         // A new cache cap must take effect without a restart.
         if (Math.Abs(_streamCache.LimitBytes - _settings.StreamCacheLimitMb * 1024L * 1024L) > 1)
@@ -275,13 +605,41 @@ public partial class MainViewModel : ObservableObject, IDisposable
             scanFinished = true;
 
             _separation.RebindEntries(list);
-            Tracks.Clear();
-            foreach (var t in list) Tracks.Add(t);
-            BuildTree(list);
+
+            // Suppress the per-row invalidation: 5,000 rows would bump the
+            // generation 5,000 times and throw the persisted cache away even
+            // when nothing changed. The key-set comparison below is the exact
+            // test - a hash could collide and serve a stale membership.
+            var newKeys = LibraryKeySet(list);
+            var keysChanged = _libraryKeySignature is null || !_libraryKeySignature.SetEquals(newKeys);
+
+            _suppressLibraryBump = true;
+            try
+            {
+                Tracks.Clear();
+                foreach (var t in list) Tracks.Add(t);
+            }
+            finally
+            {
+                _suppressLibraryBump = false;
+            }
+
+            _libraryKeySignature = newKeys;
+            RebuildBrowser();
 
             // Let downloads and playback see files that were already on disk,
             // not only the ones this app produced.
             _libraryIndex.Rebuild(list);
+
+            // Cached membership survives a rescan that returned the same files;
+            // TrackEntry instances are looked up per rebuild, so the new ones are
+            // picked up without re-resolving a single row.
+            if (keysChanged) BumpLibraryGeneration("library scan completed");
+            RefreshPlaylistRail();
+            ApplyPlaylistFilter(_activePlaylist);
+
+            // The queue can only resolve library rows once this list exists.
+            RestorePlaybackQueue();
 
             // A queue restored before the library was known would re-download
             // tracks that are already here, so resume only once the index is warm.
@@ -299,22 +657,1356 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
-    partial void OnSearchTextChanged(string value) => TracksView.Refresh();
+    partial void OnSearchTextChanged(string value)
+    {
+        // The tree is rebuilt off a debounce; until then the old tree stays
+        // visible, which keeps typing responsive.
+        _searchDebounce.Stop();
+        _searchDebounce.Start();
+    }
+
+    partial void OnLayoutChanged(LibraryLayout value)
+    {
+        if (_settings.LibraryLayout != value)
+        {
+            _settings.LibraryLayout = value;
+            _settings.Save();
+        }
+        OnPropertyChanged(nameof(IsArtistAlbumLayout));
+        OnPropertyChanged(nameof(IsPathLayout));
+        RebuildBrowser();
+    }
+
+    [RelayCommand]
+    private void ShowArtistAlbumLayout() => Layout = LibraryLayout.ArtistAlbum;
+
+    [RelayCommand]
+    private void ShowPathLayout() => Layout = LibraryLayout.Path;
+
+    private const string UnknownArtist = "Unknown Artist";
+
+    private static string Norm(string? value) => (value ?? "").Trim();
+
+    /// <summary>Case-insensitive grouping key: " ABBA " and "abba" share a node.</summary>
+    private static string GroupKey(string? value) => Norm(value).ToLowerInvariant();
+
+    private static string TrackKey(string relativeKey) => "track:" + relativeKey.ToLowerInvariant();
 
     private bool FilterTrack(object obj)
     {
         if (obj is not TrackEntry t) return false;
-        if (string.IsNullOrWhiteSpace(SearchText)) return true;
-        return t.Title.Contains(SearchText, StringComparison.OrdinalIgnoreCase)
-            || t.Artist.Contains(SearchText, StringComparison.OrdinalIgnoreCase)
-            || t.RelativePath.Contains(SearchText, StringComparison.OrdinalIgnoreCase);
+
+        // Playlist filter first: a playlist is a narrower view of the library,
+        // not a search, so the two compose (AND) without either widening.
+        //
+        // _frozenKeys is only ever replaced as a whole set (a cache hit or one
+        // finished background load), so a filter pass can never see a playlist
+        // that is half resolved; while a load is in flight the tree is empty
+        // rather than partial.
+        if (_activePlaylist is not null)
+        {
+            if (!_hasFrozenKeys) return false;
+            if (!_frozenKeys.Contains(SourceTrack.NormalizeLocalKey(t.RelativeKey))) return false;
+        }
+
+        var query = Norm(SearchText);
+        if (query.Length == 0) return true;
+        return t.Title.Contains(query, StringComparison.OrdinalIgnoreCase)
+            || t.Artist.Contains(query, StringComparison.OrdinalIgnoreCase)
+            || t.Album.Contains(query, StringComparison.OrdinalIgnoreCase)
+            || t.RelativePath.Contains(query, StringComparison.OrdinalIgnoreCase);
     }
 
-    /// <summary>Build a folder tree from the flat track list for the browser TreeView.</summary>
-    private void BuildTree(List<TrackEntry> tracks)
+    // ---- playlist rail ---------------------------------------------------
+
+    /// <summary>Every rail row: ALL TRACKS, then app-owned lists, then imports by source.</summary>
+    public ObservableCollection<PlaylistRailItem> PlaylistRail { get; } = new();
+
+    public PlaylistRailItem AllTracksRow { get; } = new();
+
+    /// <summary>
+    /// The playlist the browser is filtered to, or null for the whole library.
+    /// Stored on the view model, not on a selected row, because the rail rows are
+    /// rebuilt whenever the store changes.
+    /// </summary>
+    private UserPlaylist? _activePlaylist;
+
+    /// <summary>
+    /// Resolved membership per playlist: memory plus
+    /// %APPDATA%\JockeyBox\playlist-cache.json, keyed by playlist id and stamped
+    /// with the library generation and the playlist store identity. A hit is one
+    /// dictionary lookup and costs no filesystem work.
+    /// </summary>
+    private readonly PlaylistMembershipCache _playlistCache = new();
+
+    /// <summary>Library indexes built once per generation; read by the worker thread.</summary>
+    private LibraryMembershipSnapshot? _membershipSnapshot;
+
+    /// <summary>
+    /// Bumped whenever <see cref="Tracks"/>/the library index is rebuilt. The
+    /// single source of truth is <see cref="PlaylistMembershipCache.LibraryGeneration"/>:
+    /// it is persisted, so a restart that has not rescanned yet still matches the
+    /// entries written last run.
+    /// </summary>
+    private int _libraryGeneration => _playlistCache.LibraryGeneration;
+
+    /// <summary>The membership the browser currently filters by, applied as one whole set.</summary>
+    private HashSet<string> _frozenKeys = new(StringComparer.OrdinalIgnoreCase);
+    private bool _hasFrozenKeys;
+    private string? _frozenPlaylistId;
+    private int _frozenLibraryGeneration = -1;
+    private int _frozenStoreRevision = -1;
+
+    /// <summary>True while a scan repopulates Tracks: its rows must not bump the generation.</summary>
+    private bool _suppressLibraryBump;
+
+    /// <summary>
+    /// Library keys of the last completed scan, or null before one. A rescan that
+    /// produces the same set keeps every cached membership valid.
+    /// </summary>
+    private HashSet<string>? _libraryKeySignature;
+
+    /// <summary>Generation+revision of the rail count pass in flight (-1: none), so a
+    /// rebuild burst does not start several passes over the same library.</summary>
+    private int _railCountsInFlightGen = -1;
+    private int _railCountsInFlightRev = -1;
+    private int _railCountsRetryBudget = 2;
+
+    /// <summary>Generation counter for playlist loads; a newer load cancels the old one.</summary>
+    private int _playlistLoadVersion;
+    private CancellationTokenSource? _playlistLoadCts;
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(IsNotCreatingPlaylist))]
+    private bool _isCreatingPlaylist;
+
+    /// <summary>True while a playlist's membership is being resolved off the UI thread.</summary>
+    [ObservableProperty]
+    private bool _isPlaylistLoading;
+
+    [ObservableProperty] private string _newPlaylistName = "";
+
+    public bool IsNotCreatingPlaylist => !IsCreatingPlaylist;
+
+    public bool HasInternalPlaylists => PlaylistRail.Any(r => r.IsInternal);
+
+    /// <summary>Drives the rail's "no playlists yet" hint (there is no inverse converter in this view).</summary>
+    public bool HasNoInternalPlaylists => !HasInternalPlaylists;
+
+    /// <summary>
+    /// Rebuild the rail from the store and recompute honest counts. Called on
+    /// every store change and after a scan.
+    /// </summary>
+    public void RefreshPlaylistRail()
     {
+        // A playlist removed by another tab (or by a failed load) must not keep
+        // filtering the browser to an empty set.
+        if (_activePlaylist is not null && !_playlistStore.Playlists.Contains(_activePlaylist))
+            _activePlaylist = null;
+
+        var keep = _activePlaylist;
+
+        PlaylistRail.Clear();
+        PlaylistRail.Add(AllTracksRow);
+
+        // The LIBRARY rail is internal-only by design: these are the user's own
+        // lists of local files. Imported Spotify / YouTube mirrors keep their
+        // rows in their own tabs, so no group headers and no source rows here.
+        foreach (var playlist in _playlistStore.Playlists.Where(p => p.IsInternal))
+            PlaylistRail.Add(new PlaylistRailItem(playlist));
+
+        // Selection is derived from the view model's active playlist, so a row
+        // that survives a rebuild comes back highlighted.
+        foreach (var row in PlaylistRail)
+            row.IsSelected = keep != null && ReferenceEquals(row.Playlist, keep);
+        AllTracksRow.IsSelected = keep is null;
+
+        OnPropertyChanged(nameof(HasInternalPlaylists));
+        OnPropertyChanged(nameof(HasNoInternalPlaylists));
+
+        RefreshPlaylistCounts();
+    }
+
+    /// <summary>
+    /// Paint every rail count from the cache. A row whose entry is current shows
+    /// its number immediately; a row that would need resolution shows "\u2026" and
+    /// is filled by one background pass, so a rebuild never walks the library on
+    /// the UI thread. Counts are resolved library keys, so an imported playlist
+    /// whose remote rows are gone but whose files remember it shows its real size
+    /// instead of 0.
+    /// </summary>
+    public void RefreshPlaylistCounts()
+    {
+        AllTracksRow.TrackCount = Tracks.Count;
+        AllTracksRow.IsCountPending = false;
+
+        var missing = new List<UserPlaylist>();
+
+        foreach (var row in PlaylistRail.Where(r => r.Playlist is not null))
+        {
+            var playlist = row.Playlist!;
+            if (_playlistCache.TryGetCount(playlist.Id, _playlistStore.Revision,
+                    _playlistStore.FileStamp, out var count))
+            {
+                row.IsCountPending = false;
+                row.TrackCount = count;
+            }
+            else
+            {
+                row.IsCountPending = true;
+                missing.Add(playlist);
+            }
+        }
+
+        SyncInternalPlaylists();
+
+        if (missing.Count > 0
+            && (_railCountsInFlightGen != _libraryGeneration
+                || _railCountsInFlightRev != _playlistStore.Revision))
+        {
+            _railCountsInFlightGen = _libraryGeneration;
+            _railCountsInFlightRev = _playlistStore.Revision;
+            _ = FillRailCountsAsync(missing);
+        }
+    }
+
+    /// <summary>
+    /// Resolve the counts the cache could not answer, off the UI thread, and
+    /// store them so the next rebuild is a hit. One cache write, not one per
+    /// playlist.
+    /// </summary>
+    private async Task FillRailCountsAsync(List<UserPlaylist> playlists)
+    {
+        var handedOver = false;
+        var generation = _libraryGeneration;
+        var revision = _playlistStore.Revision;
+        try
+        {
+            // Built on the UI thread (it reads Tracks), read on the worker.
+            var snapshot = MembershipSnapshot();
+            var stamp = _playlistStore.FileStamp;
+            var requests = playlists.Select(PlaylistMembershipRequest.Capture).ToList();
+
+            var resolved = await Task.Run(() =>
+            {
+                var result = new List<(string Id, List<string> Keys)>(requests.Count);
+                foreach (var request in requests)
+                {
+                    var keys = new List<string>(snapshot.Resolve(request));
+                    result.Add((request.PlaylistId, keys));
+                }
+
+                // One file write for the whole pass.
+                _playlistCache.PutRange(
+                    result.Select(r => (r.Id, (IReadOnlyList<string>)r.Keys)),
+                    revision, stamp, generation);
+
+                return result;
+            });
+
+            // A rescan moved on while this ran: the numbers belong to the old
+            // library and are already invalid, so they are dropped. Same for a
+            // store write: the rows this pass read are no longer the rows on screen.
+            if (generation != _libraryGeneration) return;
+            if (revision != _playlistStore.Revision || stamp != _playlistStore.FileStamp) return;
+
+            foreach (var (id, keys) in resolved)
+            {
+                var row = PlaylistRail.FirstOrDefault(r => r.Playlist?.Id == id);
+                if (row is null) continue;
+                row.TrackCount = keys.Count;
+                row.IsCountPending = false;
+            }
+
+            // A row that appeared while the pass was running (a sync adding a
+            // playlist) would otherwise keep its "…" until the next rebuild.
+            if (PlaylistRail.Any(r => r.IsCountPending) && _railCountsRetryBudget > 0)
+            {
+                _railCountsRetryBudget--;
+                // Clear the guard first: the retry must be allowed to start, and
+                // this pass must not clear the guard it takes over.
+                handedOver = true;
+                _railCountsInFlightGen = -1;
+                _railCountsInFlightRev = -1;
+                RefreshPlaylistCounts();
+            }
+            else
+            {
+                _railCountsRetryBudget = 2;
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Error("Playlist rail: background count pass failed", ex);
+        }
+        finally
+        {
+            // Only clear the guard if no newer pass took it over (a retry, or a
+            // rebuild after a rescan).
+            // Only clear the guard if it still belongs to this pass (a retry, or a
+            // rebuild after a rescan, may have taken it over).
+            if (!handedOver
+                && _railCountsInFlightGen == generation
+                && _railCountsInFlightRev == revision)
+            {
+                _railCountsInFlightGen = -1;
+                _railCountsInFlightRev = -1;
+            }
+        }
+    }
+
+    [RelayCommand]
+    private void SelectPlaylist(PlaylistRailItem? row)
+    {
+        if (row is null) return;
+
+        _activePlaylist = row.Playlist;
+        foreach (var item in PlaylistRail) item.IsSelected = ReferenceEquals(item, row);
+        ApplyPlaylistFilter(_activePlaylist);
+    }
+
+    /// <summary>
+    /// Point the browser at <paramref name="playlist"/> (null = the whole library).
+    ///
+    /// Cache hit: the frozen key set is swapped in and the tree is filtered in one
+    /// refresh - no File.Exists, no ledger read, no tag lookup (the early return is
+    /// <see cref="PlaylistMembershipCache.TryGet"/> above).
+    /// Cache miss: nothing old is left on screen, a busy state is shown and the
+    /// resolution runs on a worker; switching playlists cancels the previous load
+    /// through <see cref="_playlistLoadVersion"/> plus its token.
+    /// </summary>
+    private void ApplyPlaylistFilter(UserPlaylist? playlist)
+    {
+        // A pending re-resolve after a library change is superseded by this call.
+        _playlistReloadDebounce?.Stop();
+
+        if (playlist is null)
+        {
+            CancelPlaylistLoad();
+            UnfreezeMembership();
+            IsPlaylistLoading = false;
+            TracksView.Refresh();
+            RebuildBrowser();
+            StatusText = $"{Tracks.Count} tracks";
+            return;
+        }
+
+        // Fast path: one dictionary lookup, then one tree rebuild; TracksView is
+        // not consulted, so nothing here filters the whole library.
+        if (_playlistCache.TryGet(playlist.Id, _playlistStore.Revision, _playlistStore.FileStamp,
+                out var cached))
+        {
+            CancelPlaylistLoad();
+            FreezeMembership(playlist, cached);
+            IsPlaylistLoading = false;
+            RebuildBrowser();
+            StatusText = $"{playlist.Name} \u00b7 {_frozenKeys.Count} tracks";
+            return;
+        }
+
+        // Already showing this playlist at the current stamps (a finished load).
+        if (HasFrozenMembership(playlist))
+        {
+            RebuildBrowser();
+            StatusText = $"{playlist.Name} \u00b7 {_frozenKeys.Count} tracks";
+            return;
+        }
+
+        // Miss: show a busy state rather than a half-built list.
+        UnfreezeMembership();
+        IsPlaylistLoading = true;
+        StatusText = $"Loading {playlist.Name}\u2026";
+        RebuildBrowser();
+
+        _ = LoadPlaylistViewAsync(playlist);
+    }
+
+    /// <summary>
+    /// Resolve one playlist on a worker and apply the answer in one batch. A
+    /// newer selection, a rescan or a store write supersedes it: the version
+    /// check is what makes the result safe to drop.
+    /// </summary>
+    private async Task LoadPlaylistViewAsync(UserPlaylist playlist)
+    {
+        _playlistLoadCts?.Cancel();
+        var cts = new CancellationTokenSource();
+        _playlistLoadCts = cts;
+
+        var version = ++_playlistLoadVersion;
+        var ct = cts.Token;
+
+        try
+        {
+            var snapshot = MembershipSnapshot();
+            var request = PlaylistMembershipRequest.Capture(playlist);
+            var generation = _libraryGeneration;
+            var revision = _playlistStore.Revision;
+            var stamp = _playlistStore.FileStamp;
+
+            var keys = await Task.Run<IReadOnlyList<string>>(() =>
+            {
+                var resolved = snapshot.Resolve(request, ct);
+                var list = new List<string>(resolved);
+                // One cache write for this playlist; stamped with the generation it
+                // was resolved against, so a rescan mid-flight discards it.
+                _playlistCache.Put(playlist.Id, list, revision, stamp, generation);
+                return list;
+            }, ct);
+
+            if (ct.IsCancellationRequested || version != _playlistLoadVersion) return;
+            if (!ReferenceEquals(_activePlaylist, playlist)) return;
+            if (generation != _libraryGeneration) return;
+            // A rename/add/remove during the load changed the rows this set came
+            // from: the debounced reload owns them now, and freezing here would
+            // claim a membership the store no longer has.
+            if (revision != _playlistStore.Revision || stamp != _playlistStore.FileStamp) return;
+
+            FreezeMembership(playlist, keys);
+            IsPlaylistLoading = false;
+            // One rebuild for the whole set: no per-row notifications, no flicker.
+            RebuildBrowser();
+            StatusText = $"{playlist.Name} \u00b7 {_frozenKeys.Count} tracks";
+        }
+        catch (OperationCanceledException) { /* superseded by a newer selection */ }
+        catch (Exception ex)
+        {
+            Log.Error($"Playlist '{playlist.Name}': resolving membership failed", ex);
+            if (version == _playlistLoadVersion)
+            {
+                IsPlaylistLoading = false;
+                StatusText = $"Could not open {playlist.Name}";
+            }
+        }
+        finally
+        {
+            cts.Dispose();
+            if (ReferenceEquals(_playlistLoadCts, cts)) _playlistLoadCts = null;
+        }
+    }
+
+    [RelayCommand]
+    private void BeginCreatePlaylist()
+    {
+        NewPlaylistName = "";
+        IsCreatingPlaylist = true;
+    }
+
+    [RelayCommand]
+    private void CancelCreatePlaylist()
+    {
+        IsCreatingPlaylist = false;
+        NewPlaylistName = "";
+    }
+
+    [RelayCommand]
+    private void CommitCreatePlaylist()
+    {
+        var name = Norm(NewPlaylistName);
+        if (name.Length == 0)
+        {
+            CancelCreatePlaylist();
+            return;
+        }
+
+        var playlist = _playlistStore.CreateInternal(name);
+        _activePlaylist = playlist;
+        IsCreatingPlaylist = false;
+        NewPlaylistName = "";
+        RefreshPlaylistRail();
+        ApplyPlaylistFilter(playlist);
+        StatusText = $"created playlist {playlist.Name}";
+    }
+
+    [RelayCommand]
+    private void BeginRenamePlaylist(PlaylistRailItem? row) => row?.BeginEdit();
+
+    [RelayCommand]
+    private void CommitRenamePlaylist(PlaylistRailItem? row)
+    {
+        if (row?.Playlist is null) return;
+
+        if (!_playlistStore.Rename(row.Playlist, row.EditName))
+        {
+            row.CancelEdit();
+            return;
+        }
+
+        row.CancelEdit();
+        RefreshPlaylistRail();
+        ApplyPlaylistFilter(_activePlaylist);
+        StatusText = $"renamed playlist to {row.Playlist.Name}";
+    }
+
+    [RelayCommand]
+    private void CancelRenamePlaylist(PlaylistRailItem? row) => row?.CancelEdit();
+
+    [RelayCommand]
+    private void BeginDeletePlaylist(PlaylistRailItem? row) => row?.BeginDelete();
+
+    [RelayCommand]
+    private void CancelDeletePlaylist(PlaylistRailItem? row) => row?.CancelDelete();
+
+    /// <summary>Delete an app-owned playlist after the rail's confirmation.</summary>
+    [RelayCommand]
+    private void CommitDeletePlaylist(PlaylistRailItem? row)
+    {
+        if (row?.Playlist is not { IsInternal: true } playlist) return;
+
+        if (_activePlaylist == playlist) _activePlaylist = null;
+
+        if (!_playlistStore.Delete(playlist))
+        {
+            row.CancelDelete();
+            return;
+        }
+
+        // The store save already bumped the revision (which invalidates every
+        // entry); dropping this one keeps the file from carrying dead ids.
+        _playlistCache.Remove(playlist.Id);
+
+        RefreshPlaylistRail();
+        ApplyPlaylistFilter(_activePlaylist);
+        StatusText = $"deleted playlist {playlist.Name}";
+    }
+
+    /// <summary>
+    /// Add the selected library track(s) to an app-owned playlist. The row's
+    /// library key is what gets stored; re-downloads under a new name fall back
+    /// to the ledger path and then to artist/title (see <see cref="LibraryMembershipSnapshot"/>).
+    /// </summary>
+    [RelayCommand]
+    private void AddSelectedToPlaylist(UserPlaylist? playlist)
+    {
+        if (playlist is not { IsInternal: true }) return;
+
+        var added = _playlistStore.AddLibraryTracks(playlist, SelectedLibraryTracks().ToList());
+        if (added == 0)
+        {
+            StatusText = "nothing new for " + playlist.Name;
+            return;
+        }
+
+        RefreshPlaylistRail();
+        ApplyPlaylistFilter(_activePlaylist);
+        StatusText = $"added {added} track{(added == 1 ? "" : "s")} to {playlist.Name}";
+    }
+
+    [RelayCommand]
+    private void RemoveSelectedFromPlaylist()
+    {
+        if (_activePlaylist is not { IsInternal: true } playlist) return;
+
+        var removed = _playlistStore.RemoveLibraryTracks(playlist, SelectedLibraryTracks().ToList());
+        if (removed == 0) return;
+
+        RefreshPlaylistRail();
+        ApplyPlaylistFilter(_activePlaylist);
+        StatusText = $"removed {removed} track{(removed == 1 ? "" : "s")} from {playlist.Name}";
+    }
+
+    /// <summary>Remove the right-clicked library row from every app-owned playlist holding it.</summary>
+    [RelayCommand]
+    private void RemoveSelectedFromAllPlaylists()
+    {
+        var rows = SelectedLibraryTracks().ToList();
+        if (rows.Count == 0) return;
+
+        var removed = 0;
+        foreach (var playlist in _playlistStore.Playlists.Where(p => p.IsInternal).ToList())
+            removed += _playlistStore.RemoveLibraryTracks(playlist, rows);
+
+        if (removed == 0)
+        {
+            StatusText = "no playlist holds that track";
+            return;
+        }
+
+        RefreshPlaylistRail();
+        ApplyPlaylistFilter(_activePlaylist);
+        StatusText = $"removed {removed} row{(removed == 1 ? "" : "s")} from playlists";
+    }
+
+    // ---- library file operations (rename / move / delete / reveal) ---------
+
+    /// <summary>
+    /// The single track a file operation acts on. A folder row (or no row at
+    /// all) yields null, which disables the commands instead of guessing a
+    /// target. Falls back to the flat list selection when the tree has none.
+    /// </summary>
+    private TrackEntry? SelectedFileTrack()
+    {
+        if (SelectedTreeNode is { } node) return node.Track;
+        return SelectedTrack;
+    }
+
+    private bool CanEditSelectedFileTrack() => AudioPathOf(SelectedFileTrack()) != null;
+
+    /// <summary>Music file when it exists, otherwise the karaoke file (karaoke-only track).</summary>
+    private static string? AudioPathOf(TrackEntry? track)
+    {
+        if (track == null) return null;
+        if (!string.IsNullOrWhiteSpace(track.MusicPath)) return track.MusicPath;
+        if (!string.IsNullOrWhiteSpace(track.KaraokePath)) return track.KaraokePath;
+        return null;
+    }
+
+    /// <summary>Fresh service per operation so a stale pair of roots is never reused.</summary>
+    private MediaFileOps? CreateMediaOps()
+    {
+        try
+        {
+            var ops = new MediaFileOps(MusicDirectory, KaraokeDirectory)
+            {
+                OnLibraryFileMoved = OnMediaFileMoved,
+                OnRelativeKeyChanged = OnMediaRelativeKeyChanged,
+                // Rescanning is owned by the command that called the service
+                // (and by the watcher), so this callback stays silent.
+            };
+            return ops;
+        }
+        catch (ArgumentException ex)
+        {
+            StatusText = $"Cannot edit library files: {ex.Message}";
+            return null;
+        }
+    }
+
+    private void OnMediaFileMoved(string oldPath, string newPath)
+    {
+        _mediaOpOldPath = oldPath ?? "";
+        _mediaOpNewPath = newPath ?? "";
+        ApplyMediaPathChange(_mediaOpOldPath, _mediaOpNewPath, KeyForPath(oldPath), KeyForPath(newPath));
+    }
+
+    private void OnMediaRelativeKeyChanged(string oldKey, string newKey)
+    {
+        if (string.IsNullOrWhiteSpace(_mediaOpNewPath)) return;
+
+        // The service's keys are authoritative; the first pass used keys
+        // derived from the paths, and this pass is a no-op unless they differ.
+        ApplyMediaPathChange(_mediaOpOldPath, _mediaOpNewPath, oldKey ?? "", newKey ?? "");
+        _mediaOpOldKey = oldKey ?? _mediaOpOldKey;
+    }
+
+    [RelayCommand(CanExecute = nameof(CanEditSelectedFileTrack))]
+    private async Task RenameTrackAsync()
+    {
+        if (SelectedFileTrack() is not { } track || AudioPathOf(track) is not { } path) return;
+
+        var owner = DialogOwner();
+        var dialog = new RenameTrackDialog(path);
+        if (owner != null) dialog.Owner = owner;
+        if (dialog.ShowDialog() != true) return;
+
+        var ops = CreateMediaOps();
+        if (ops == null) return;
+
+        BeginMediaOp(track);
+        var outcome = ops.Rename(path, dialog.NewBaseName);
+        await HandleMediaOutcomeAsync(ops, outcome, path, "Rename");
+    }
+
+    [RelayCommand(CanExecute = nameof(CanEditSelectedFileTrack))]
+    private async Task MoveTrackAsync()
+    {
+        if (SelectedFileTrack() is not { } track || AudioPathOf(track) is not { } path) return;
+
+        var ops = CreateMediaOps();
+        if (ops == null) return;
+
+        var initialFolder = ops.SuggestFolder(path, track.Artist, track.Album);
+        var owner = DialogOwner();
+        var dialog = new MoveTrackDialog(DisplayRelativePath(track, path),
+            track.Artist, track.Album, track.Title, initialFolder);
+        if (owner != null) dialog.Owner = owner;
+        if (dialog.ShowDialog() != true) return;
+
+        BeginMediaOp(track);
+        var outcome = dialog.UsePreset
+            ? ops.MoveToPreset(path, dialog.PresetArtist, dialog.PresetAlbum, dialog.PresetTitle)
+            : ops.MoveTo(path, dialog.TargetFolder);
+        await HandleMediaOutcomeAsync(ops, outcome, path, "Move");
+    }
+
+    [RelayCommand(CanExecute = nameof(CanEditSelectedFileTrack))]
+    private async Task DeleteTrackAsync()
+    {
+        if (SelectedFileTrack() is not { } track || AudioPathOf(track) is not { } path) return;
+
+        var fileName = Path.GetFileName(path);
+        var karaokeOnly = string.IsNullOrWhiteSpace(track.MusicPath);
+        var detail = karaokeOnly
+            ? "This track has no music file, so only the karaoke file is deleted."
+            : "The karaoke mirror, if there is one, is kept.";
+
+        var question = $"Delete \u201c{fileName}\u201d?\n\n{path}\n\nThe file goes to the Recycle Bin. {detail}";
+        if (ShowOwnerMessage(question, "Delete track", MessageBoxButton.YesNo,
+                MessageBoxImage.Warning, MessageBoxResult.No) != MessageBoxResult.Yes)
+            return;
+
+        var ops = CreateMediaOps();
+        if (ops == null) return;
+
+        var outcome = ops.Delete(path);
+
+        if (outcome.Result != MediaOpResult.Ok)
+        {
+            StatusText = MessageOrFallback(outcome, "Could not delete the track.");
+            return;
+        }
+
+        // The file is gone. A karaoke-only track keeps the same RelativeKey as
+        // its deleted music file, so reselecting the old key finds the mirror
+        // when it survives and clears the selection when it does not.
+        var key = KeyForPath(path);
+        await RescanAsync();
+        ReselectLibraryKey(key);
+        StatusText = string.IsNullOrWhiteSpace(outcome.Message) ? "Deleted the track file." : outcome.Message;
+    }
+
+    [RelayCommand(CanExecute = nameof(CanEditSelectedFileTrack))]
+    private void RevealInExplorer()
+    {
+        if (SelectedFileTrack() is not { } track || AudioPathOf(track) is not { } path) return;
+
+        try
+        {
+            Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{path}\"")
+            {
+                UseShellExecute = true,
+            });
+            StatusText = $"Showing \u201c{Path.GetFileName(path)}\u201d in Explorer.";
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Could not open Explorer: {ex.Message}";
+        }
+    }
+
+    /// <summary>Reset the pending pair before an operation that may move a file.</summary>
+    private void BeginMediaOp(TrackEntry track)
+    {
+        _mediaOpOldPath = AudioPathOf(track) ?? "";
+        _mediaOpNewPath = "";
+        _mediaOpOldKey = track.RelativeKey;
+    }
+
+    /// <summary>
+    /// Act on a service outcome: report refusals verbatim, ask before adopting
+    /// a collision suggestion, and finish a success with persistence + rescan.
+    /// Every branch writes the status line, so no outcome is swallowed.
+    /// </summary>
+    private async Task HandleMediaOutcomeAsync(MediaFileOps ops, MediaOpOutcome outcome,
+        string sourcePath, string verb, int depth = 0)
+    {
+        switch (outcome.Result)
+        {
+            case MediaOpResult.Ok:
+                await CompleteMediaOperationAsync(outcome, sourcePath, verb);
+                return;
+
+            case MediaOpResult.Collision:
+            {
+                var suggestion = outcome.NewPath;
+                var detail = string.IsNullOrWhiteSpace(outcome.Message)
+                    ? $"A file already exists at the destination.\n\n{suggestion}"
+                    : $"{outcome.Message}\n\nSuggested destination:\n{suggestion}";
+                var question = $"{detail}\n\nMove to the suggested name instead?";
+
+                if (depth >= 3 || string.IsNullOrWhiteSpace(suggestion))
+                {
+                    StatusText = MessageOrFallback(outcome, "A file already exists at the destination.");
+                    return;
+                }
+
+                if (ShowOwnerMessage(question, "Destination already exists", MessageBoxButton.YesNo,
+                        MessageBoxImage.Question, MessageBoxResult.No) != MessageBoxResult.Yes)
+                {
+                    StatusText = MessageOrFallback(outcome, "Nothing was moved.");
+                    return;
+                }
+
+                var folder = Path.GetDirectoryName(suggestion);
+                if (string.IsNullOrWhiteSpace(folder))
+                {
+                    StatusText = MessageOrFallback(outcome, "The suggested destination is not usable.");
+                    return;
+                }
+
+                var retry = ops.MoveToNamed(sourcePath, folder!,
+                    Path.GetFileNameWithoutExtension(suggestion));
+                await HandleMediaOutcomeAsync(ops, retry, sourcePath, verb, depth + 1);
+                return;
+            }
+
+            default:
+                StatusText = MessageOrFallback(outcome,
+                    outcome.Result == MediaOpResult.Blocked ? "The file is blocked." : "The operation failed.");
+                return;
+        }
+    }
+
+    private async Task CompleteMediaOperationAsync(MediaOpOutcome outcome, string sourcePath, string verb)
+    {
+        var newPath = outcome.NewPath ?? "";
+
+        // Rename to the name the file already has reports success without moving.
+        if (string.IsNullOrWhiteSpace(newPath)
+            || string.Equals(newPath, sourcePath, StringComparison.Ordinal))
+        {
+            StatusText = MessageOrFallback(outcome, $"{verb}: nothing to change.");
+            return;
+        }
+
+        // The service callbacks normally persisted already; this covers a
+        // service implementation (or a future overload) that does not call them.
+        if (!string.Equals(_mediaOpNewPath, newPath, StringComparison.OrdinalIgnoreCase))
+            ApplyMediaPathChange(sourcePath, newPath, KeyForPath(sourcePath), KeyForPath(newPath));
+
+        var oldKey = _mediaOpOldKey.Length > 0 ? _mediaOpOldKey : KeyForPath(sourcePath);
+        var newKey = KeyForPath(newPath);
+
+        // The rescan refreshes the tree, the index, playlist counts and the
+        // source tabs' "in library" states.
+        await RescanAsync();
+
+        RepointLiveQueue(oldKey, newKey);
+        if (LoadedTrack != null &&
+            string.Equals(LoadedTrack.RelativeKey, oldKey, StringComparison.OrdinalIgnoreCase))
+            LoadedTrack = ResolveLibraryTrack(newKey);
+
+        ReselectLibraryKey(newKey);
+        StatusText = MessageOrFallback(outcome, $"{verb}d \u201c{Path.GetFileName(newPath)}\u201d.");
+    }
+
+    private static string MessageOrFallback(MediaOpOutcome outcome, string fallback) =>
+        string.IsNullOrWhiteSpace(outcome.Message) ? fallback : outcome.Message;
+
+    private string DisplayRelativePath(TrackEntry track, string path)
+    {
+        var root = !string.IsNullOrWhiteSpace(track.MusicPath) ? MusicDirectory : KaraokeDirectory;
+        try
+        {
+            if (!string.IsNullOrWhiteSpace(root)) return Path.GetRelativePath(root, path);
+        }
+        catch (ArgumentException)
+        {
+            // A path that does not share the root: show it as-is.
+        }
+        return path;
+    }
+
+    /// <summary>
+    /// Persist a successful library move/rename across every store that holds
+    /// the file by path or by library-relative key. Runs in the documented
+    /// order, each step independently guarded so one failed write does not
+    /// strand the others. Idempotent: a second call with the same pair finds
+    /// nothing left to move and writes nothing. One summary log line is emitted
+    /// only when at least one store changed.
+    /// </summary>
+    private void ApplyMediaPathChange(string oldPath, string newPath, string oldKey, string newKey)
+    {
+        var oldFull = (oldPath ?? "").Trim();
+        var newFull = (newPath ?? "").Trim();
+        if (oldFull.Length == 0 || newFull.Length == 0
+            || string.Equals(oldFull, newFull, StringComparison.Ordinal))
+            return;
+
+        var ledgerMoved = 0;
+        var tagsMoved = false;
+        var playlistsMoved = 0;
+        var queueMoved = 0;
+        var lyricsMoved = 0;
+
+        // 1. Download ledger: Path is what downloads resolve against.
+        try
+        {
+            ledgerMoved = _ledger.RepointPath(oldFull, newFull);
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Ledger repoint failed for {oldFull}", ex);
+        }
+
+        // 2. Tag cache: library.json is keyed by absolute path. Re-key so the
+        //    next scan keeps BPM/duration instead of re-tagging from scratch.
+        try
+        {
+            tagsMoved = _tagCache.Repoint(oldFull, newFull);
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Tag cache repoint failed for {oldFull}", ex);
+        }
+
+        // 3. Playlists: internal rows key on LocalKey, imported rows keep their
+        //    remote id but may have cached a library path.
+        try
+        {
+            playlistsMoved = _playlistStore.RepointLibraryFile(oldKey, newKey, oldFull, newFull);
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Playlist repoint failed for {oldFull}", ex);
+        }
+
+        // 4. Playback queue mirror: library rows are keyed by RelativeKey.
+        try
+        {
+            queueMoved = _queueStore.RepointLibraryKey(oldKey, newKey);
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Playback queue repoint failed for {oldFull}", ex);
+        }
+
+        // 5. Per-track lyric settings: the legacy offset/source keys in settings
+        //    (read-only since the metadata store took over, kept in step so the
+        //    one-time migration cannot resurrect stale rows) plus the store's own
+        //    record, which now holds the offset, the pin and the sections.
+        try
+        {
+            lyricsMoved = _settings.RepointLyricsKey(oldKey, newKey);
+            if (lyricsMoved > 0) _settings.Save();
+            if (MoveLyricMetadata(oldKey, newKey)) lyricsMoved++;
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Lyrics settings repoint failed for {oldFull}", ex);
+        }
+
+        if (ledgerMoved == 0 && !tagsMoved && playlistsMoved == 0 && queueMoved == 0 && lyricsMoved == 0)
+            return;
+
+        // A move/rename changes paths that membership resolution uses as fallback
+        // keys, even when no playlist row itself was rewritten.
+        BumpLibraryGeneration("file moved or renamed");
+        RefreshPlaylistRail();
+        ApplyPlaylistFilter(_activePlaylist);
+
+        Log.Info($"Repointed {Path.GetFileName(oldFull)} \u2192 {Path.GetFileName(newFull)}: " +
+                 $"ledger={ledgerMoved}, tags={(tagsMoved ? 1 : 0)}, playlists={playlistsMoved}, " +
+                 $"queue={queueMoved}, lyrics={lyricsMoved}");
+    }
+
+    /// <summary>
+    /// Carry a track's saved lyric metadata (offset, pinned source, sections) to
+    /// its new <c>RelativeKey</c> after a move/rename. Returns false when there
+    /// was nothing to move. The store has no repoint of its own, so the record is
+    /// re-applied under the new key through its public setters and then dropped.
+    /// </summary>
+    private bool MoveLyricMetadata(string oldKey, string newKey)
+    {
+        if (string.IsNullOrWhiteSpace(oldKey) || string.IsNullOrWhiteSpace(newKey)
+            || string.Equals(oldKey, newKey, StringComparison.Ordinal))
+            return false;
+
+        var record = _trackMeta.Get(oldKey);
+        if (record == null) return false;
+
+        _trackMeta.SetTrackInfo(newKey, record.Title, record.Artist);
+        if (record.LyricsOffsetMs is { } offsetMs) _trackMeta.SetLyricsOffset(newKey, offsetMs);
+        if (!string.IsNullOrWhiteSpace(record.LyricsSourceId))
+            _trackMeta.SetLyricsSource(newKey, record.LyricsSourceId);
+        if (record.LyricsFollowMode is { Length: > 0 } followMode)
+            _trackMeta.SetLyricsFollowMode(newKey, followMode);
+        foreach (var section in record.Sections)
+            _trackMeta.AddSection(newKey, section.StartMs, section.EndMs, section.OffsetMs, section.Label);
+        _trackMeta.Remove(oldKey);
+
+        if (string.Equals(TrackMetadataStore.NormalizeKey(CurrentLyricsKey),
+                TrackMetadataStore.NormalizeKey(oldKey), StringComparison.Ordinal))
+        {
+            RefreshTrackSections();
+            SyncLyricsOffsetEditor();
+        }
+        return true;
+    }
+
+    /// <summary>Rewrite live queue rows after a rescan gave the moved key a new entry.</summary>
+    private void RepointLiveQueue(string oldKey, string newKey)
+    {
+        if (string.IsNullOrWhiteSpace(oldKey) || string.IsNullOrWhiteSpace(newKey)
+            || string.Equals(oldKey, newKey, StringComparison.Ordinal))
+            return;
+
+        var track = ResolveLibraryTrack(newKey);
+        foreach (var item in Queue)
+        {
+            if (!item.IsLibrary) continue;
+            if (!string.Equals(item.Key, oldKey, StringComparison.OrdinalIgnoreCase)) continue;
+            item.Repoint(newKey, track);
+        }
+    }
+
+    /// <summary>Select the track row for <paramref name="key"/> after a rebuild; clears selection when gone.</summary>
+    private void ReselectLibraryKey(string? key)
+    {
+        if (string.IsNullOrWhiteSpace(key)) return;
+
+        _lastSelectedTrackKey = TrackKey(key);
+        var node = FindByKey(BrowserRoots, _lastSelectedTrackKey);
+        SelectedTreeNode = node;
+        if (node != null) node.IsSelected = true;
+    }
+
+    /// <summary>Library key for an absolute file path, using the root it lives under.</summary>
+    private string KeyForPath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return "";
+
+        try
+        {
+            var full = Path.GetFullPath(path);
+            foreach (var root in new[] { MusicDirectory, KaraokeDirectory })
+            {
+                if (string.IsNullOrWhiteSpace(root)) continue;
+                if (!IsInsideRoot(full, root)) continue;
+                return LibraryScanner.PairKey(root, full);
+            }
+            return "";
+        }
+        catch (Exception)
+        {
+            return "";
+        }
+    }
+
+    private static bool IsInsideRoot(string fullPath, string root)
+    {
+        var relative = Path.GetRelativePath(root, fullPath);
+        return !relative.StartsWith("..", StringComparison.Ordinal) && !Path.IsPathRooted(relative);
+    }
+
+    private void NotifyMediaCommandStates()
+    {
+        RenameTrackCommand.NotifyCanExecuteChanged();
+        MoveTrackCommand.NotifyCanExecuteChanged();
+        DeleteTrackCommand.NotifyCanExecuteChanged();
+        RevealInExplorerCommand.NotifyCanExecuteChanged();
+    }
+
+    private static System.Windows.Window? DialogOwner()
+    {
+        var owner = System.Windows.Application.Current?.MainWindow;
+        return owner is { IsVisible: true } ? owner : null;
+    }
+
+    private static MessageBoxResult ShowOwnerMessage(string message, string caption,
+        MessageBoxButton buttons, MessageBoxImage image, MessageBoxResult defaultResult)
+    {
+        var owner = DialogOwner();
+        return owner == null
+            ? MessageBox.Show(message, caption, buttons, image, defaultResult)
+            : MessageBox.Show(owner, message, caption, buttons, image, defaultResult);
+    }
+
+    /// <summary>
+    /// Tracks the context menu acts on: the right-clicked row when it is a track,
+    /// otherwise every track under that folder. Never more than the browser is
+    /// showing, so "Add to playlist" cannot pull in filtered-out files.
+    /// </summary>
+    private IEnumerable<TrackEntry> SelectedLibraryTracks()
+    {
+        var node = SelectedTreeNode;
+        if (node is null)
+        {
+            return SelectedTrack is { } single ? new[] { single } : Array.Empty<TrackEntry>();
+        }
+
+        var found = new List<TrackEntry>();
+        CollectNodeTracks(node, found);
+        return found;
+    }
+
+    private static void CollectNodeTracks(BrowserNode node, List<TrackEntry> found)
+    {
+        if (node.Track is { } track)
+        {
+            found.Add(track);
+            return;
+        }
+
+        foreach (var child in node.Children) CollectNodeTracks(child, found);
+    }
+
+    /// <summary>
+    /// The exact library-key set a scan produced. Exact on purpose: a hash of the
+    /// keys could collide, and a missed change would serve a stale membership
+    /// instead of re-resolving it.
+    /// </summary>
+    private static HashSet<string> LibraryKeySet(IEnumerable<TrackEntry> tracks)
+    {
+        var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var track in tracks)
+        {
+            if (track is null) continue;
+            var key = SourceTrack.NormalizeLocalKey(track.RelativeKey);
+            if (key.Length > 0) keys.Add(key);
+        }
+
+        return keys;
+    }
+
+    // ---- playlist membership: cache + off-thread resolution --------------
+
+    /// <summary>
+    /// Resolve <see cref="Tracks"/> and the playlists into immutable indexes the
+    /// worker can read. Rebuilt only when the library generation or the playlist
+    /// store moved on, and always on the UI thread - it is the only reader of the
+    /// mutable collections.
+    /// </summary>
+    private LibraryMembershipSnapshot MembershipSnapshot()
+    {
+        var cached = _membershipSnapshot;
+        if (cached is not null
+            && cached.LibraryGeneration == _libraryGeneration
+            && cached.StoreRevision == _playlistStore.Revision
+            && cached.StoreStamp == _playlistStore.FileStamp)
+            return cached;
+
+        cached = LibraryMembershipSnapshot.Build(
+            Tracks.ToArray(),
+            _playlistStore.Playlists.ToArray(),
+            _ledger.Entries,
+            _libraryIndex,
+            _libraryGeneration,
+            _playlistStore.Revision,
+            _playlistStore.FileStamp);
+
+        _membershipSnapshot = cached;
+        return cached;
+    }
+
+    /// <summary>
+    /// The library was rebuilt (scan, file operation, download): every resolved
+    /// answer is stale. Deliberately cheap - a scan raises it once per added row -
+    /// and the cache write it needs is coalesced in
+    /// <see cref="PlaylistMembershipCache.BumpLibraryGeneration"/>.
+    /// </summary>
+    private void BumpLibraryGeneration(string reason)
+    {
+        // The cache owns the counter (it persists it): one source of truth, so the
+        // generation a load resolves against is the generation the cache stamps.
+        _playlistCache.BumpLibraryGeneration();
+        _membershipSnapshot = null;
+        UnfreezeMembership();
+        CancelPlaylistLoad();
+
+        // A scan raises this once per added row; only the meaningful hooks log.
+        if (!string.Equals(reason, "library list changed", StringComparison.Ordinal))
+            Log.Debug($"Playlist membership invalidated: {reason} (generation {_libraryGeneration})");
+
+        // The open playlist's frozen set was just dropped. Show the busy state
+        // (not an empty list, not the stale one) and resolve again once the burst
+        // of bumps is over.
+        if (_activePlaylist is not null)
+        {
+            // No rebuild here: a scan raises this once per added row, and a tree
+            // rebuild per row would be quadratic. The old tree stays under the
+            // busy overlay until the debounced reload replaces it in one batch.
+            IsPlaylistLoading = true;
+            _playlistReloadDebounce?.Stop();
+            _playlistReloadDebounce?.Start();
+        }
+    }
+
+    /// <summary>Supersede any in-flight playlist load; its result is dropped on return.</summary>
+    private void CancelPlaylistLoad()
+    {
+        _playlistLoadVersion++;
+        _playlistLoadCts?.Cancel();
+    }
+
+    private void UnfreezeMembership()
+    {
+        // No allocation: a scan unfreezes once per added row, and the stale set is
+        // unreachable while _hasFrozenKeys is false.
+        _hasFrozenKeys = false;
+        _frozenPlaylistId = null;
+        _frozenLibraryGeneration = -1;
+        _frozenStoreRevision = -1;
+    }
+
+    private void FreezeMembership(UserPlaylist playlist, IReadOnlyList<string> keys)
+    {
+        _frozenKeys = keys as HashSet<string>
+                      ?? new HashSet<string>(keys, StringComparer.OrdinalIgnoreCase);
+        _hasFrozenKeys = true;
+        _frozenPlaylistId = playlist.Id;
+        _frozenLibraryGeneration = _libraryGeneration;
+        _frozenStoreRevision = _playlistStore.Revision;
+    }
+
+    /// <summary>True when the frozen set is the current playlist's and still current.</summary>
+    private bool HasFrozenMembership(UserPlaylist? playlist) =>
+        _hasFrozenKeys
+        && _frozenLibraryGeneration == _libraryGeneration
+        && _frozenStoreRevision == _playlistStore.Revision
+        && string.Equals(_frozenPlaylistId, playlist?.Id, StringComparison.Ordinal);
+
+
+    /// <summary>Membership rows the rail offers in "Add to playlist ▸".</summary>
+    public ObservableCollection<UserPlaylist> InternalPlaylists { get; } = new();
+
+    private void SyncInternalPlaylists()
+    {
+        InternalPlaylists.Clear();
+        foreach (var playlist in _playlistStore.Playlists.Where(p => p.IsInternal))
+            InternalPlaylists.Add(playlist);
+    }
+
+    /// <summary>
+    /// Heal pre-provenance ledgers once at start-up: entries written before the
+    /// ledger recorded a playlist are named from queue.json (exact remote id) and
+    /// from imported playlists that still hold the row. Nothing is guessed; a
+    /// source that is not known stays null, and one save happens at most.
+    ///
+    /// Title/artist are not re-read from tags here: the ledger wrote them from the
+    /// same tags at download time, and re-scanning every file at start-up would
+    /// trade a start-up stall for data that is already correct.
+    /// </summary>
+    private void BackfillLedgerProvenance()
+    {
+        var hints = new List<(string SourceKey, string PlaylistName, MediaSource Source)>();
+        foreach (var playlist in _playlistStore.Playlists.Where(p => p.IsImported))
+        {
+            foreach (var track in playlist.Tracks)
+            {
+                if (string.IsNullOrWhiteSpace(track.Id)) continue;
+                hints.Add((track.Id, playlist.Name, playlist.Source));
+            }
+        }
+
+        _ledger.BackfillProvenance(DownloadQueue.ReadPersistedProvenance(), hints);
+    }
+
+    /// <summary>Rebuild the browser from the tracks the current search matches.</summary>
+    private void RebuildBrowser()
+    {
+        // A playlist with no search text is rebuilt straight from the frozen key
+        // set: O(rows), not O(library). Everything else filters the library.
+        if (TryBuildPlaylistTracks(out var rows))
+        {
+            BuildTree(rows, Layout);
+            return;
+        }
+
+        BuildTree(Tracks.Where(FilterTrack).ToList(), Layout);
+    }
+
+    /// <summary>
+    /// Rows of the active playlist in library order, without a filter pass over
+    /// the whole library. False when the tree needs the general filter path (no
+    /// playlist, nothing frozen yet, or a search that narrows within the playlist).
+    /// </summary>
+    private bool TryBuildPlaylistTracks(out List<TrackEntry> rows)
+    {
+        rows = null!;
+        if (_activePlaylist is null || !_hasFrozenKeys) return false;
+        if (Norm(SearchText).Length > 0) return false;
+
+        rows = MembershipSnapshot().TracksForKeys(_frozenKeys);
+        return true;
+    }
+
+    /// <summary>
+    /// Build the browser tree for <paramref name="layout"/>. The previously
+    /// selected track and the expanded folder keys are carried over where the
+    /// new tree still contains them; folders that no longer exist collapse.
+    /// </summary>
+    private void BuildTree(List<TrackEntry> tracks, LibraryLayout layout)
+    {
+        var selectedKey = _lastSelectedTrackKey;
+        var expanded = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var root in BrowserRoots)
+            CollectExpanded(root, expanded);
+
+        // Old leaves hold live subscriptions into Tracks; release them before
+        // dropping the tree (rebuilds happen on every search keystroke).
+        foreach (var root in BrowserRoots)
+            root.DetachFromTrack();
         BrowserRoots.Clear();
-        var root = new Dictionary<string, BrowserNode>(StringComparer.OrdinalIgnoreCase);
+
+        if (layout == LibraryLayout.Path)
+            BuildPathTree(tracks);
+        else
+            BuildArtistAlbumTree(tracks);
+
+        foreach (var root in BrowserRoots)
+            _ = CountTracks(root);
+
+        foreach (var root in BrowserRoots)
+            RestoreExpanded(root, expanded);
+
+        var restored = selectedKey.Length == 0
+            ? null
+            : FindByKey(BrowserRoots, selectedKey);
+        SelectedTreeNode = restored;
+        if (restored != null)
+            restored.IsSelected = true;
+    }
+
+    /// <summary>
+    /// Tag layout: Artist → Album → Track. An empty artist lands under
+    /// "Unknown Artist"; an empty album puts its tracks directly under the
+    /// artist (no invented "Unknown Album" level).
+    /// </summary>
+    private void BuildArtistAlbumTree(List<TrackEntry> tracks)
+    {
+        var artists = tracks
+            .GroupBy(t => GroupKey(t.Artist), StringComparer.Ordinal)
+            .Select(g => new
+            {
+                Key = g.Key,
+                Name = Norm(g.First().Artist) is { Length: > 0 } name ? name : UnknownArtist,
+                Tracks = g,
+            })
+            .OrderBy(a => a.Name, StringComparer.CurrentCultureIgnoreCase);
+
+        foreach (var artist in artists)
+        {
+            var artistNode = new BrowserNode(artist.Name)
+            {
+                Key = "artist:" + artist.Key,
+                FolderArtist = artist.Name,
+            };
+
+            // Named albums first, alphabetical (and case-insensitive).
+            var albums = artist.Tracks
+                .GroupBy(t => GroupKey(t.Album), StringComparer.Ordinal)
+                .Where(g => g.Key.Length > 0)
+                .Select(g => new { Key = g.Key, Name = Norm(g.First().Album), Tracks = g })
+                .OrderBy(a => a.Name, StringComparer.CurrentCultureIgnoreCase);
+
+            foreach (var album in albums)
+            {
+                var albumNode = new BrowserNode(album.Name)
+                {
+                    Key = artistNode.Key + "/" + album.Key,
+                    FolderArtist = artist.Name,
+                    FolderAlbum = album.Name,
+                };
+                foreach (var track in album.Tracks.OrderBy(t => t.Title, StringComparer.CurrentCultureIgnoreCase))
+                    albumNode.Children.Add(BrowserNode.FromTrack(track, TrackKey(track.RelativeKey)));
+                artistNode.Children.Add(albumNode);
+            }
+
+            // Album-less tracks sit directly under the artist, after the albums.
+            var loose = artist.Tracks
+                .Where(t => GroupKey(t.Album).Length == 0)
+                .OrderBy(t => t.Title, StringComparer.CurrentCultureIgnoreCase);
+            foreach (var track in loose)
+                artistNode.Children.Add(BrowserNode.FromTrack(track, TrackKey(track.RelativeKey)));
+
+            BrowserRoots.Add(artistNode);
+        }
+    }
+
+    /// <summary>Path layout: folder tree straight from <see cref="TrackEntry.RelativePath"/> (unchanged behaviour).</summary>
+    private void BuildPathTree(List<TrackEntry> tracks)
+    {
+        var folders = new Dictionary<string, BrowserNode>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var track in tracks)
         {
@@ -329,19 +2021,62 @@ public partial class MainViewModel : ObservableObject, IDisposable
             {
                 var seg = segments[i];
                 current = current.Length == 0 ? seg : current + "/" + seg;
-                if (!root.TryGetValue(current, out var folder))
+                if (!folders.TryGetValue(current, out var folder))
                 {
-                    folder = new BrowserNode(seg);
-                    root[current] = folder;
+                    folder = new BrowserNode(seg) { Key = "path:" + current.ToLowerInvariant() };
+                    folders[current] = folder;
                     (parent?.Children ?? BrowserRoots).Add(folder);
                 }
                 parent = folder;
             }
 
             // Leaf node for the file itself.
-            var leaf = BrowserNode.FromTrack(track);
+            var leaf = BrowserNode.FromTrack(track, TrackKey(track.RelativeKey));
             (parent?.Children ?? BrowserRoots).Add(leaf);
         }
+    }
+
+    /// <summary>Post-order leaf count so folder rows can show "12 tracks".</summary>
+    private static int CountTracks(BrowserNode node)
+    {
+        if (!node.IsFolder) return 1;
+        var count = 0;
+        foreach (var child in node.Children)
+            count += CountTracks(child);
+        node.TrackCount = count;
+        return count;
+    }
+
+    private static void CollectExpanded(BrowserNode node, HashSet<string> expanded)
+    {
+        if (!node.IsFolder) return;
+        if (node.IsExpanded && node.Key.Length > 0)
+            expanded.Add(node.Key);
+        foreach (var child in node.Children)
+            CollectExpanded(child, expanded);
+    }
+
+    private static void RestoreExpanded(BrowserNode node, HashSet<string> expanded)
+    {
+        if (!node.IsFolder) return;
+        if (node.Key.Length > 0 && expanded.Contains(node.Key))
+            node.IsExpanded = true;
+        foreach (var child in node.Children)
+            RestoreExpanded(child, expanded);
+    }
+
+    /// <summary>Find a node by key and expand the folders leading to it.</summary>
+    private static BrowserNode? FindByKey(IEnumerable<BrowserNode> nodes, string key)
+    {
+        foreach (var node in nodes)
+        {
+            if (node.Key == key) return node;
+            var hit = FindByKey(node.Children, key);
+            if (hit == null) continue;
+            if (node.IsFolder) node.IsExpanded = true;
+            return hit;
+        }
+        return null;
     }
 
     // ---- smart loading -----------------------------------------------------
@@ -361,14 +2096,37 @@ public partial class MainViewModel : ObservableObject, IDisposable
             LoadTrack(track);
     }
 
-    private void LoadTrack(TrackEntry track)
+    /// <summary>
+    /// Load a whole track onto exactly one deck: the original music file as the
+    /// deck's primary stem plus, when the track has a karaoke partner, the
+    /// karaoke version as the sub-stem inside the same deck. The other deck's
+    /// media is left alone - it may be the track being mixed out of.
+    ///
+    /// Without an explicit target the free deck is used while the active deck is
+    /// playing (queueing the next track without cutting the current one).
+    /// </summary>
+    private void LoadTrack(TrackEntry track, bool fromQueue = false, PlaybackDeck? targetDeck = null)
     {
-        _transport.OnTracksChanged(); // stop cleanly before swapping readers
+        if (!fromQueue)
+        {
+            // Played outside the queue: leave the queue's rows alone, but
+            // nothing in it is "current" any more.
+            SetCurrentQueueIndex(-1);
+            MarkQueueState();
+        }
+
+        var deck = targetDeck
+            ?? (_transport.IsDeckPlaying(_activeDeck) ? _activeDeck.Opposite() : _activeDeck);
+        var target = deck == PlaybackDeck.A ? DeckA : DeckB;
+
+        // The original file is always the deck's primary stem; the karaoke file
+        // only exists as its sub-stem (a karaoke-only track has no sub-stem).
+        var musicPath = track.MusicPath ?? track.KaraokePath;
+        var karaokePath = track.MusicPath != null ? track.KaraokePath : null;
 
         try
         {
-            DeckA.SetTrack(track.KaraokePath, track.Title, track.Artist);
-            DeckB.SetTrack(track.MusicPath, track.Title, track.Artist);
+            target.SetTrack(musicPath, karaokePath, track.Title, track.Artist);
         }
         catch (Exception ex)
         {
@@ -376,31 +2134,618 @@ public partial class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
+        _activeDeck = deck;
+        _transport.ActivateDeck(deck);
+        SyncDeckActivation();
+
         LoadedTrack = track;
         LoadedTrackTitle = string.IsNullOrWhiteSpace(track.Artist)
             ? track.Title : $"{track.Artist} \u2014 {track.Title}";
         RefreshDurations();
-        _ = FetchLyricsAsync(track);
-        _ = GenerateWaveformsAsync(track);
+
+        // The store owns this track's lyric metadata: record its identity (so a
+        // moved file can be re-matched later) and swap in its sections before
+        // the header reads the offset, so the scope is right from the first tick.
+        _trackMeta.SetTrackInfo(track.RelativeKey, track.Title, track.Artist);
+        RefreshTrackSections();
+        _editSectionIndex = -1;
+        // -2: "not resolved for this track yet", so the first tick reads the
+        // playhead's section even if it is already mid-track (the transport may
+        // still be settling, so it is not trusted here).
+        _playheadSectionIndex = -2;
+
+        // Point the lyrics header at the new track: its persisted offset and
+        // its pinned source (Auto when the track never had one).
+        var lyricsSource = StoredLyricsSource(track.RelativeKey);
+        SyncLyricsOffsetEditor();
+        SetLyricsSourceSelection(LyricsSourceNameForId(lyricsSource));
+        IsLyricsSourcePickerOpen = false;
+        LyricsCandidates.Clear();
+
+        _ = FetchLyricsAsync(track, lyricsSource);
+        _ = GenerateWaveformsAsync(target, target.WaveformGeneration, musicPath, karaokePath);
     }
 
-    private async Task GenerateWaveformsAsync(TrackEntry track)
+    private async Task GenerateWaveformsAsync(DeckViewModel deck, int generation,
+                                               string? musicPath, string? karaokePath)
     {
-        var aTask = Task.Run(() => WaveformGenerator.Generate(track.KaraokePath));
-        var bTask = Task.Run(() => WaveformGenerator.Generate(track.MusicPath));
-        await Task.WhenAll(aTask, bTask);
-        WaveformAData = aTask.Result ?? new List<float>();
-        WaveformBData = bTask.Result ?? new List<float>();
+        var musicTask = Task.Run(() => WaveformGenerator.Generate(musicPath));
+        var karaokeTask = Task.Run(() => WaveformGenerator.Generate(karaokePath));
+        await Task.WhenAll(musicTask, karaokeTask);
+        deck.SetWaveforms(generation, musicTask.Result, karaokeTask.Result);
+    }
+
+    // ---- playback queue -----------------------------------------------------
+
+    /// <summary>
+    /// What plays after the current track, in order. Rows stay in the list once
+    /// played (greyed in the UI); the queue is persisted across runs.
+    /// </summary>
+    public ObservableCollection<PlaybackQueueItem> Queue { get; } = new();
+
+    /// <summary>Index of the queue row playing now; -1 = playing outside the queue.</summary>
+    [ObservableProperty] private int _currentIndex = -1;
+
+    [ObservableProperty] private int _queueCount;
+
+    /// <summary>Rows not played yet, for the tab header and the empty hint.</summary>
+    [ObservableProperty] private int _queueRemainingCount;
+
+    [ObservableProperty] private bool _isQueueEmpty = true;
+
+    [ObservableProperty] private PlaybackQueueItem? _selectedQueueItem;
+
+    /// <summary>When on, the queue starts over instead of stopping at the end.</summary>
+    [ObservableProperty] private bool _repeatQueue;
+
+    public string QueueHeader => QueueCount > 0 ? $"QUEUED ({QueueCount})" : "QUEUED";
+
+    public string QueueStatusText => QueueCount == 0
+        ? "The queue is empty \u2014 right-click a track and choose \u201cAdd to queue\u201d."
+        : QueueRemainingCount == 0
+            ? "Every queued track has played."
+            : $"{QueueRemainingCount} of {Queue.Count} still to play";
+
+    partial void OnQueueCountChanged(int value)
+    {
+        OnPropertyChanged(nameof(QueueHeader));
+        OnPropertyChanged(nameof(QueueStatusText));
+    }
+
+    partial void OnQueueRemainingCountChanged(int value) => OnPropertyChanged(nameof(QueueStatusText));
+
+    partial void OnSelectedTrackChanged(TrackEntry? value)
+    {
+        AddToQueueCommand.NotifyCanExecuteChanged();
+        NotifyMediaCommandStates();
+    }
+
+    partial void OnSelectedTreeNodeChanged(BrowserNode? value)
+    {
+        AddToQueueCommand.NotifyCanExecuteChanged();
+        NotifyMediaCommandStates();
+        if (value == null) return; // tree rebuild / filtered out: keep the key for restore
+        _lastSelectedTrackKey = value.Track is { } track
+            ? TrackKey(track.RelativeKey)
+            : ""; // a folder row carries no track to restore
+    }
+
+    /// <summary>Add the library selection (tree row or list row) to the end of the queue.</summary>
+    [RelayCommand(CanExecute = nameof(CanAddToQueue))]
+    private void AddToQueue()
+    {
+        var track = SelectedTreeNode?.Track ?? SelectedTrack;
+        if (track == null)
+        {
+            StatusText = "Select a track to queue.";
+            return;
+        }
+
+        Enqueue(PlaybackQueueItem.FromTrack(track, AssignDeckForNewRow()));
+    }
+
+    /// <summary>
+    /// Deck for a freshly queued row. Rotation reads the live transport, never a
+    /// cached guess: while a deck is playing the new row goes to the other one,
+    /// so the current track is never pulled out from under itself. With nothing
+    /// playing the first row takes A and later rows alternate from the last
+    /// pick (A, B, A, B, A), which keeps a batch spread over both decks.
+    /// </summary>
+    private PlaybackDeck AssignDeckForNewRow()
+    {
+        var deck = _transport.AnyPlaying
+            ? _activeDeck.Opposite()
+            : _lastAssignedDeck is { } last ? last.Opposite() : PlaybackDeck.A;
+
+        _lastAssignedDeck = deck;
+        return deck;
+    }
+
+    private void Enqueue(PlaybackQueueItem item)
+    {
+        var existing = Queue.FirstOrDefault(q =>
+            string.Equals(q.Key, item.Key, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(q.Kind, item.Kind, StringComparison.OrdinalIgnoreCase));
+
+        if (existing != null)
+        {
+            // Already queued: move it to the end instead of duplicating the row,
+            // and take the deck the rotation just handed out.
+            var from = Queue.IndexOf(existing);
+            existing.IsPlayed = false;
+            // The running row's audio came from its deck; only a row that has not
+            // started yet takes the deck the rotation just handed out.
+            if (!existing.IsCurrent) existing.DeckTarget = item.DeckTarget;
+            Queue.Move(from, Queue.Count - 1);
+            if (CurrentIndex == from) SetCurrentQueueIndex(Queue.Count - 1);
+            else if (CurrentIndex > from) SetCurrentQueueIndex(CurrentIndex - 1);
+            MarkQueueState();
+            StatusText = $"Moved \u201c{existing.Title}\u201d to the end of the queue " +
+                         $"(deck {existing.DeckText}).";
+            SaveQueue();
+            return;
+        }
+
+        Queue.Add(item);
+        MarkQueueState();
+        StatusText = $"Queued \u201c{item.Title}\u201d for deck {item.DeckText}.";
+        SaveQueue();
+    }
+
+    /// <summary>Flip a row between deck A and deck B. The running row keeps its deck.</summary>
+    [RelayCommand(CanExecute = nameof(CanRetargetQueueItem))]
+    private void FlipQueueDeck(PlaybackQueueItem? item)
+    {
+        if (item == null) return;
+        RetargetQueueItem(item, item.DeckTarget.Opposite());
+    }
+
+    [RelayCommand(CanExecute = nameof(CanRetargetQueueItem))]
+    private void SendToDeckA(PlaybackQueueItem? item) => RetargetQueueItem(item, PlaybackDeck.A);
+
+    [RelayCommand(CanExecute = nameof(CanRetargetQueueItem))]
+    private void SendToDeckB(PlaybackQueueItem? item) => RetargetQueueItem(item, PlaybackDeck.B);
+
+    /// <summary>
+    /// Route a queued row to a deck and persist it. The row playing now is
+    /// excluded (see <see cref="CanRetargetQueueItem"/>): its badge describes the
+    /// audio that is already on a deck.
+    /// </summary>
+    private void RetargetQueueItem(PlaybackQueueItem? item, PlaybackDeck deck)
+    {
+        if (item == null || item.DeckTarget == deck) return;
+
+        item.DeckTarget = deck;
+        StatusText = $"\u201c{item.Title}\u201d will play on deck {item.DeckText}.";
+        SaveQueue();
+    }
+
+    [RelayCommand(CanExecute = nameof(CanPlayNowFromQueue))]
+    private async Task PlayNowFromQueue(PlaybackQueueItem? item)
+    {
+        if (item == null) return;
+
+        var index = Queue.IndexOf(item);
+        if (index < 0) return;
+
+        if (item.IsLibrary && item.Track == null)
+        {
+            StatusText = $"\u201c{item.Title}\u201d is no longer in the library.";
+            return;
+        }
+
+        item.IsPlayed = false;
+        SetCurrentQueueIndex(index);
+        MarkQueueState();
+        await StartQueueItemAsync(item);
+    }
+
+    [RelayCommand(CanExecute = nameof(CanRemoveFromQueue))]
+    private void RemoveFromQueue(PlaybackQueueItem? item)
+    {
+        if (item == null) return;
+
+        var index = Queue.IndexOf(item);
+        if (index < 0) return;
+
+        Queue.RemoveAt(index);
+        if (CurrentIndex == index) SetCurrentQueueIndex(-1);
+        else if (CurrentIndex > index) SetCurrentQueueIndex(CurrentIndex - 1);
+        MarkQueueState();
+        SaveQueue();
+    }
+
+    [RelayCommand(CanExecute = nameof(CanClearQueue))]
+    private void ClearQueue()
+    {
+        Queue.Clear();
+        SetCurrentQueueIndex(-1);
+        MarkQueueState();
+        StatusText = "Queue cleared.";
+        SaveQueue();
+    }
+
+    /// <summary>Drop finished rows; the row playing now is never played, so it stays.</summary>
+    [RelayCommand(CanExecute = nameof(CanClearPlayed))]
+    private void ClearPlayed()
+    {
+        for (var i = Queue.Count - 1; i >= 0; i--)
+        {
+            if (!Queue[i].IsPlayed || i == CurrentIndex) continue;
+            if (i < CurrentIndex) CurrentIndex--;
+            Queue.RemoveAt(i);
+        }
+
+        MarkQueueState();
+        SaveQueue();
+    }
+
+    [RelayCommand(CanExecute = nameof(CanPlayNext))]
+    private async Task PlayNext()
+    {
+        var next = FindNextUnplayed(CurrentIndex + 1);
+        if (next == null)
+        {
+            StatusText = RepeatQueue
+                ? "Nothing left to play; Repeat is on, so the next automatic advance starts over."
+                : "No more tracks in the queue.";
+            return;
+        }
+
+        await PlayNowFromQueue(next);
+    }
+
+    [RelayCommand(CanExecute = nameof(CanPlayPrevious))]
+    private async Task PlayPrevious()
+    {
+        // Leaving a row backwards must not leave it greyed as finished.
+        if (CurrentIndex >= 0 && CurrentIndex < Queue.Count)
+            Queue[CurrentIndex].IsPlayed = false;
+
+        var start = CurrentIndex < 0 ? Queue.Count - 1 : CurrentIndex - 1;
+        PlaybackQueueItem? target = null;
+        for (var i = start; i >= 0; i--)
+        {
+            if (Queue[i].IsPlayed) continue;
+            target = Queue[i];
+            break;
+        }
+
+        if (target == null && start >= 0)
+        {
+            // Everything before it already played: still let the user rewind one
+            // row rather than dead-ending on a greyed list.
+            target = Queue[start];
+        }
+
+        if (target != null)
+        {
+            await PlayNowFromQueue(target);
+            return;
+        }
+
+        MarkQueueState();
+        StatusText = "Nothing earlier in the queue.";
+    }
+
+    [RelayCommand]
+    private void ToggleRepeatQueue() => RepeatQueue = !RepeatQueue;
+
+    /// <summary>
+    /// Queue a remote (Spotify / YouTube) track. The source tabs own their own
+    /// selection, so they call this - the library tab uses <see cref="AddToQueue"/>.
+    /// </summary>
+    public void AddSourceToQueue(SourceTrack source)
+    {
+        if (source == null) return;
+        if (string.IsNullOrWhiteSpace(source.Id) && string.IsNullOrWhiteSpace(source.Title)) return;
+
+        Enqueue(PlaybackQueueItem.FromSource(source, AssignDeckForNewRow()));
+    }
+
+    /// <summary>
+    /// Library file for a remote track id, for <see cref="PlaylistStore"/>.
+    ///
+    /// The store only hands over the id. The download ledger records exactly
+    /// the ids this app fetched, so it is the first (and normal) answer; a file
+    /// the app never downloaded is matched through the scanned library, which
+    /// needs the row's metadata, hence the lookup in the store's own playlists.
+    /// Only paths that still exist are returned.
+    /// </summary>
+    private string? ResolveSourceLibraryPath(string id)
+    {
+        if (string.IsNullOrWhiteSpace(id)) return null;
+
+        var key = id.Trim();
+
+        var entry = _ledger.TryGet(key);
+        if (entry != null && !string.IsNullOrWhiteSpace(entry.Path) && File.Exists(entry.Path))
+            return entry.Path;
+
+        var track = FindSourceTrackById(key);
+        return track == null ? null : _libraryIndex.Resolve(track);
+    }
+
+    private SourceTrack? FindSourceTrackById(string id)
+    {
+        if (_sourceTracksById == null)
+        {
+            var byId = new Dictionary<string, SourceTrack>(StringComparer.OrdinalIgnoreCase);
+            foreach (var playlist in _playlistStore.Playlists)
+            {
+                foreach (var track in playlist.Tracks)
+                {
+                    if (!string.IsNullOrWhiteSpace(track.Id)) byId.TryAdd(track.Id.Trim(), track);
+                }
+            }
+
+            _sourceTracksById = byId;
+        }
+
+        return _sourceTracksById.TryGetValue(id, out var match) ? match : null;
+    }
+
+    /// <summary>
+    /// Re-derive every remote row's state from what is actually on disk: the
+    /// playlist store's rows (YouTube's playlist) and the source tabs' own row
+    /// objects (Spotify keeps its fetched track objects). Run on the UI thread.
+    /// </summary>
+    private void RefreshSourceLibraryStates()
+    {
+        _sourceTracksById = null; // playlists may have changed since the last pass
+        _playlistStore.SanitizeStates();
+        Spotify.ReconcileFromLibrary();
+        YouTube.ReconcileFromLibrary();
+    }
+
+    private bool CanAddToQueue() => SelectedTreeNode?.Track != null || SelectedTrack != null;
+
+    private bool CanPlayNext() => Queue.Count > 0;
+
+    private bool CanPlayPrevious() => Queue.Count > 0;
+
+    private bool CanClearQueue() => Queue.Count > 0;
+
+    private bool CanClearPlayed() => Queue.Any(item => item.IsPlayed);
+
+    private bool CanRemoveFromQueue(PlaybackQueueItem? item) => item != null && Queue.Contains(item);
+
+    /// <summary>
+    /// Deck changes are allowed for rows that have not started: the running
+    /// row's badge describes audio already loaded on a deck.
+    /// </summary>
+    private bool CanRetargetQueueItem(PlaybackQueueItem? item) =>
+        item != null && !item.IsCurrent && Queue.Contains(item);
+
+    private bool CanPlayNowFromQueue(PlaybackQueueItem? item) => item != null && Queue.Contains(item);
+
+    private PlaybackQueueItem? FindNextUnplayed(int start)
+    {
+        for (var i = Math.Max(0, start); i < Queue.Count; i++)
+            if (!Queue[i].IsPlayed) return Queue[i];
+        return null;
+    }
+
+    /// <summary>Refresh row numbers, the current flag and the header counts.</summary>
+    private void MarkQueueState()
+    {
+        for (var i = 0; i < Queue.Count; i++)
+        {
+            Queue[i].Index = i + 1;
+            Queue[i].IsCurrent = i == CurrentIndex;
+        }
+
+        QueueCount = Queue.Count;
+        QueueRemainingCount = Queue.Count(item => !item.IsPlayed);
+        IsQueueEmpty = Queue.Count == 0;
+
+        PlayNextCommand.NotifyCanExecuteChanged();
+        PlayPreviousCommand.NotifyCanExecuteChanged();
+        ClearQueueCommand.NotifyCanExecuteChanged();
+        ClearPlayedCommand.NotifyCanExecuteChanged();
+        RemoveFromQueueCommand.NotifyCanExecuteChanged();
+        PlayNowFromQueueCommand.NotifyCanExecuteChanged();
+        FlipQueueDeckCommand.NotifyCanExecuteChanged();
+        SendToDeckACommand.NotifyCanExecuteChanged();
+        SendToDeckBCommand.NotifyCanExecuteChanged();
+    }
+
+    private void SetCurrentQueueIndex(int index)
+    {
+        CurrentIndex = index;
+        for (var i = 0; i < Queue.Count; i++)
+            Queue[i].IsCurrent = i == index;
+    }
+
+    /// <summary>
+    /// Start a queue row: library rows load directly, remote rows resolve first.
+    /// Auto-advance hands the track to the deck that is not currently audible
+    /// (and rewrites the row's deck target, so the persisted queue stays honest);
+    /// a manual Next/Prev/Play now keeps the row's own target.
+    /// </summary>
+    private async Task StartQueueItemAsync(PlaybackQueueItem item, bool autoAdvance = false)
+    {
+        var deck = item.DeckTarget;
+        if (autoAdvance && _transport.IsDeckPlaying(deck))
+        {
+            deck = deck.Opposite();
+            item.DeckTarget = deck;
+            SaveQueue();
+        }
+
+        if (item.Track != null)
+        {
+            LoadTrack(item.Track, fromQueue: true, targetDeck: deck);
+        }
+        else if (item.Source != null)
+        {
+            if (!await PlaySourceTrackAsync(item.Source, fromQueue: true, targetDeck: deck,
+                                            startPlayback: false))
+                return;
+        }
+        else
+        {
+            return;
+        }
+
+        StartDeckAfterLoad(deck);
+    }
+
+    /// <summary>
+    /// Start a freshly loaded deck and, when the other deck is still running,
+    /// hand the mix over with the default 2 s equal-power crossfade instead of a cut.
+    /// </summary>
+    private void StartDeckAfterLoad(PlaybackDeck deck)
+    {
+        // autoCue: false - the hand-off below owns the fader, so PlayDeck must
+        // not snap it first.
+        _transport.PlayDeck(deck, autoCue: false);
+        _transport.ActivateDeck(deck);
+        SyncDeckActivation();
+
+        // Both decks can be live at once. If the other deck is still playing,
+        // hand the mix over with the default 2 s equal-power crossfade instead
+        // of a cut; if it is only parked/loaded there is nothing to fade out, so
+        // snap the fader so the deck that just started is audible.
+        var other = deck.Opposite();
+        if (_transport.IsDeckPlaying(other))
+        {
+            _transport.CrossfadeToDeck(deck);
+        }
+        else
+        {
+            var side = deck == PlaybackDeck.A ? 0.0 : 1.0;
+            if (Math.Abs(_transport.Crossfader - side) > 0.001)
+                _transport.SetCrossfader(side);
+        }
+
+        SyncCrossfaderFromTransport();
+    }
+
+    /// <summary>
+    /// The transport finished a track that came from the queue: grey the row,
+    /// then start the next unplayed one (or stop at the end). The successor
+    /// loads on its own target deck, so the deck that just finished is the one
+    /// that gets reused when the rotation comes back to it.
+    /// </summary>
+    private async Task AdvanceQueueAfterEndAsync()
+    {
+        try
+        {
+            if (CurrentIndex >= 0 && CurrentIndex < Queue.Count)
+                Queue[CurrentIndex].IsPlayed = true;
+
+            var next = FindNextUnplayed(CurrentIndex + 1);
+            if (next == null && RepeatQueue && Queue.Count > 0)
+            {
+                foreach (var item in Queue) item.IsPlayed = false;
+                next = FindNextUnplayed(0);
+            }
+
+            if (next == null)
+            {
+                SetCurrentQueueIndex(-1);
+                MarkQueueState();
+                StatusText = "End of queue.";
+                SaveQueue();
+                return;
+            }
+
+            SetCurrentQueueIndex(Queue.IndexOf(next));
+            MarkQueueState();
+            SaveQueue();
+            await StartQueueItemAsync(next, autoAdvance: true);
+        }
+        catch (Exception ex)
+        {
+            Log.Error("Queue auto-advance failed", ex);
+        }
+    }
+
+    // ---- queue persistence ---------------------------------------------------
+
+    private void SaveQueue()
+    {
+        if (_restoringQueue) return;
+
+        _queueStore.Save(Queue.Select(item => new PlaybackQueueRecord
+        {
+            Kind = item.Kind,
+            Key = item.Key,
+            Title = item.Title,
+            Artist = item.Artist,
+            Played = item.IsPlayed,
+            Deck = item.DeckTarget.ToPersistedString(),
+        }));
+    }
+
+    /// <summary>
+    /// Restore the saved queue once the library index is warm. Only library rows
+    /// whose file still resolves come back; anything else is dropped silently
+    /// (a remote row would have to re-download to be playable).
+    /// </summary>
+    private void RestorePlaybackQueue()
+    {
+        if (_queueRestored) return;
+        _queueRestored = true;
+
+        var records = _queueStore.Load();
+        if (records.Count == 0) return;
+
+        _restoringQueue = true;
+        try
+        {
+            foreach (var record in records)
+            {
+                if (!string.Equals(record.Kind, PlaybackQueueItem.LibraryKind,
+                        StringComparison.OrdinalIgnoreCase))
+                    continue; // remote rows are not restored (see summary)
+
+                var track = ResolveLibraryTrack(record.Key);
+                if (track == null) continue; // file gone - drop it
+
+                Queue.Add(PlaybackQueueItem.FromRecord(record, track));
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"Could not restore the playback queue: {ex.Message}");
+        }
+        finally
+        {
+            _restoringQueue = false;
+        }
+
+        SetCurrentQueueIndex(-1);
+        MarkQueueState();
+
+        // Resume the rotation where the restored rows left off, so a new addition
+        // after a restart alternates instead of colliding with the restored tail.
+        _lastAssignedDeck = Queue.Count > 0 ? Queue[^1].DeckTarget : null;
+    }
+
+    private TrackEntry? ResolveLibraryTrack(string key)
+    {
+        if (string.IsNullOrWhiteSpace(key)) return null;
+
+        foreach (var track in Tracks)
+            if (string.Equals(track.RelativeKey, key, StringComparison.OrdinalIgnoreCase))
+                return track;
+
+        return null;
     }
 
     // ---- remote playback (Spotify / YouTube) --------------------------------
 
     /// <summary>
     /// Play a remote track: resolve it to a local file (library copy, ledger
-    /// entry, warm cache, or a fresh fetch into the cache), then load it into
-    /// Deck B exactly like a library file so delay/routing/lyrics apply.
+    /// entry, warm cache, or a fresh fetch into the cache), then load it onto a
+    /// deck exactly like a library file so delay/routing/lyrics apply.
+    /// Returns false when nothing could be resolved.
     /// </summary>
-    public async Task PlaySourceTrackAsync(SourceTrack source)
+    public async Task<bool> PlaySourceTrackAsync(SourceTrack source, bool fromQueue = false,
+                                                  PlaybackDeck? targetDeck = null,
+                                                  bool startPlayback = true)
     {
         try
         {
@@ -409,7 +2754,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             if (string.IsNullOrWhiteSpace(path))
             {
                 StatusText = $"Could not play {source.DisplayName}.";
-                return;
+                return false;
             }
 
             var entry = new TrackEntry
@@ -425,14 +2770,21 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 Duration = source.Duration,
             };
 
-            LoadTrack(entry);
-            if (!IsPlaying) _transport.Play();
+            LoadTrack(entry, fromQueue, targetDeck);
+            if (startPlayback)
+            {
+                _transport.Play();
+                if (_transport.IsDeckPlaying(_transport.ActiveDeck.Opposite()))
+                    _transport.CrossfadeToDeck(_transport.ActiveDeck);
+            }
             StatusText = $"Playing {source.DisplayName}";
+            return true;
         }
         catch (Exception ex)
         {
             Log.Error($"Remote playback failed for {source.DisplayName}", ex);
             StatusText = $"Playback failed: {ex.Message}";
+            return false;
         }
     }
 
@@ -463,6 +2815,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
 
             if (item.State != DownloadState.Done || item.OutputPath == null) return;
+
+            // The file just joined the library: membership resolved before it
+            // existed is stale even if the scan has not finished yet.
+            BumpLibraryGeneration("download completed");
 
             if (_settings.DownloadAutoKaraoke)
                 _pendingAutoKaraoke.Add(item.OutputPath);
@@ -536,7 +2892,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     // ---- lyrics ------------------------------------------------------------
 
-    private async Task FetchLyricsAsync(TrackEntry track)
+    private async Task FetchLyricsAsync(TrackEntry track, string? preferredSourceId = null)
     {
         _lyricsCts?.Cancel();
         _lyricsCts = new CancellationTokenSource();
@@ -545,25 +2901,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
         LyricLines.Clear();
         _currentLyricIndex = -1;
         _lyricsSynced = false;
+        _lyricsDocument = null;
         LyricsStatus = "Fetching lyrics\u2026";
 
         try
         {
-            var doc = await _lyricsService.GetLyricsAsync(track, ct);
+            var doc = await _lyricsService.GetLyricsAsync(track, ct, preferredSourceId);
             if (ct.IsCancellationRequested) return;
 
-            if (doc == null)
-            {
-                LyricsStatus = "No lyrics found for this track.";
-                return;
-            }
-
-            foreach (var line in doc.Lines)
-                LyricLines.Add(new LyricLineViewModel(line.Time, line.Text));
-            _lyricsSynced = doc.Synced;
-            LyricsStatus = doc.Synced
-                ? $"Synced lyrics \u00b7 {doc.Source}"
-                : $"Lyrics (not time-synced) \u00b7 {doc.Source}";
+            ApplyLyricsDocument(doc);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
@@ -572,10 +2918,520 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
     }
 
+    /// <summary>
+    /// Rebuild the rendered lines from a document. Unsynced documents still
+    /// render, just without a highlight (the tick skips them).
+    /// </summary>
+    private void ApplyLyricsDocument(LyricsDocument? doc)
+    {
+        LyricLines.Clear();
+        _currentLyricIndex = -1;
+        _currentWordIndex = -1;
+        _lyricsSynced = false;
+        // The section command reads the document's line times, so keep the one
+        // behind the rendered lines (cleared when the lines are cleared).
+        _lyricsDocument = doc;
+        ClearLyricWordGeometry();
+        OnPropertyChanged(nameof(CurrentLyricLine));
+
+        if (doc == null)
+        {
+            LyricsStatus = "No lyrics found for this track.";
+            return;
+        }
+
+        // Word-follow needs per-word spans. Documents that already carry real
+        // word timings (A2 enhanced LRC, providers with word data) are used as
+        // is; line-only synced documents get an even split bounded by the next
+        // line. Unsynced documents stay line-only.
+        if (doc.Synced && !doc.HasWordTimings)
+            WordTimeline.Synthesize(doc, LoadedTrack?.Duration);
+
+        foreach (var line in doc.Lines)
+            LyricLines.Add(new LyricLineViewModel(line.Time, line.Text, line.Words));
+        _lyricsSynced = doc.Synced;
+        LyricsStatus = doc.Synced
+            ? $"Synced lyrics \u00b7 {doc.Source}"
+            : $"Lyrics (not time-synced) \u00b7 {doc.Source}";
+    }
+
+    // ---- lyrics header (offset + source) ---------------------------------
+
+    /// <summary>Persistence key of the loaded track; null when nothing is loaded.</summary>
+    private string? CurrentLyricsKey => LoadedTrack?.RelativeKey;
+
+    partial void OnLyricsOffsetMsChanged(double value)
+    {
+        LyricsOffsetText = FormatLyricsOffset(value);
+        if (_syncingLyricsOffset) return;
+
+        // Inside a saved section the header edits that span only: the store
+        // applies it as an override, so the track and global values stay put.
+        if (EditSection is not null && CurrentLyricsKey is { } sectionKey)
+        {
+            _trackMeta.SetSectionOffset(sectionKey, _editSectionIndex, ToOffsetMs(value));
+            RefreshTrackSections();
+            return;
+        }
+
+        var key = CurrentLyricsKey;
+        if (key == null)
+        {
+            // No track: the header edits the global default in settings.
+            _settings.LyricsOffsetMs = Math.Clamp(value, -AppSettings.MaxLyricsOffsetMs,
+                AppSettings.MaxLyricsOffsetMs);
+            ScheduleLyricsSettingsSave();
+            return;
+        }
+
+        // Outside any section this writes the track's own offset, which is what
+        // the label promised; inside one the branch above edited only that span.
+        _trackMeta.SetLyricsOffset(key, value);
+        RefreshTrackSections();
+        SyncLyricsOffsetEditor();
+    }
+
+    partial void OnSelectedLyricsSourceChanged(string value)
+    {
+        if (_syncingLyricsSource) return;
+
+        if (string.IsNullOrEmpty(value))
+        {
+            // The ComboBox can transiently push null; fall back to the pinned
+            // source instead of silently clearing it.
+            SetLyricsSourceSelection(LyricsSourceNameForId(StoredLyricsSource(CurrentLyricsKey)));
+            return;
+        }
+
+        _ = ApplyLyricsSourceAsync(value);
+    }
+
+    /// <summary>
+    /// Mirror the offset the header edits into the slider and its readout: the
+    /// section under the playhead when one is selected, otherwise the track's
+    /// own value (which falls back to the global default). The scope label says
+    /// which of the three the next nudge will write.
+    /// </summary>
+    private void SyncLyricsOffsetEditor()
+    {
+        var key = CurrentLyricsKey;
+
+        double stored;
+        string scope;
+        if (EditSection is { } section)
+        {
+            stored = section.OffsetMs;
+            scope = "SECTION";
+        }
+        else if (key != null && _trackMeta.HasOwnOffset(key))
+        {
+            stored = _trackMeta.GetBaseOffset(key, _settings.LyricsOffsetMs);
+            scope = "TRACK";
+        }
+        else
+        {
+            stored = _trackMeta.GetBaseOffset(key, _settings.LyricsOffsetMs);
+            scope = "GLOBAL";
+        }
+
+        _syncingLyricsOffset = true;
+        try
+        {
+            LyricsOffsetScope = scope;
+            // The slider only covers +/-2 s; hand it a clamped value so a
+            // larger offset set from the Settings dialog is not written back
+            // clamped. The text still shows the real value.
+            LyricsOffsetMs = Math.Clamp(stored, -LyricsOffsetSliderLimitMs, LyricsOffsetSliderLimitMs);
+            LyricsOffsetText = FormatLyricsOffset(stored);
+        }
+        finally
+        {
+            _syncingLyricsOffset = false;
+        }
+    }
+
+    private void ScheduleLyricsSettingsSave()
+    {
+        _lyricsSettingsSave.Stop();
+        _lyricsSettingsSave.Start();
+    }
+
+    private static string FormatLyricsOffset(double ms) =>
+        ms.ToString("+0;-0;0", CultureInfo.InvariantCulture) + " ms";
+
+    /// <summary>
+    /// The store is written from other places too (importer, settings tooling),
+    /// so re-read the loaded track's record when it changes. Marshalled to the
+    /// UI thread because the write can come from a background save, and dropped
+    /// when it is not the track that is loaded by the time it lands.
+    /// </summary>
+    private void OnTrackMetadataChanged(object? sender, TrackMetadataChangedEventArgs e)
+    {
+        if (e.Key.Length == 0) return;
+
+        System.Windows.Application.Current?.Dispatcher.BeginInvoke(new Action(() =>
+        {
+            var key = CurrentLyricsKey;
+            if (key == null) return;
+            if (!string.Equals(TrackMetadataStore.NormalizeKey(key), e.Key, StringComparison.Ordinal))
+                return;
+
+            RefreshTrackSections();
+            if (_editSectionIndex >= _trackSections.Count) _editSectionIndex = -1;
+            OnPropertyChanged(nameof(HasSectionAtPlayhead));
+            SyncLyricsOffsetEditor();
+        }));
+    }
+
+    /// <summary>"Auto" for no pin, else the provider's display name.</summary>
+    private string LyricsSourceNameForId(string? sourceId)
+    {
+        if (string.IsNullOrEmpty(sourceId)) return AutoLyricsSource;
+        var ids = _lyricsService.SourceIds;
+        for (var i = 0; i < ids.Count; i++)
+        {
+            if (string.Equals(ids[i], sourceId, StringComparison.OrdinalIgnoreCase))
+                return _lyricsService.SourceNames[i];
+        }
+        return AutoLyricsSource;
+    }
+
+    /// <summary>Provider id for a picker entry; null means "Auto".</summary>
+    private string? LyricsSourceIdForName(string? name)
+    {
+        if (string.IsNullOrEmpty(name) || name == AutoLyricsSource) return null;
+        var names = _lyricsService.SourceNames;
+        for (var i = 0; i < names.Count; i++)
+        {
+            if (string.Equals(names[i], name, StringComparison.Ordinal))
+                return _lyricsService.SourceIds[i];
+        }
+        return null;
+    }
+
+    /// <summary>Move the picker without triggering a re-fetch.</summary>
+    private void SetLyricsSourceSelection(string name)
+    {
+        _syncingLyricsSource = true;
+        try
+        {
+            SelectedLyricsSource = name;
+        }
+        finally
+        {
+            _syncingLyricsSource = false;
+        }
+    }
+
+    /// <summary>
+    /// Pin the picked provider for the loaded track and re-fetch, or clear the
+    /// pin for "Auto" (normal priority chain).
+    /// </summary>
+    private async Task ApplyLyricsSourceAsync(string? name)
+    {
+        var sourceId = LyricsSourceIdForName(name);
+        var key = CurrentLyricsKey;
+
+        // The pin lives in the track's metadata record: null/blank clears it
+        // back to the default provider chain.
+        _trackMeta.SetLyricsSource(key, sourceId);
+
+        if (LoadedTrack is { } track)
+            await FetchLyricsAsync(track, sourceId);
+    }
+
+    [RelayCommand]
+    private void NudgeLyrics(string? deltaMs)
+    {
+        if (!double.TryParse(deltaMs, NumberStyles.Float, CultureInfo.InvariantCulture, out var delta))
+            return;
+
+        LyricsOffsetMs = Math.Clamp(LyricsOffsetMs + delta, -AppSettings.MaxLyricsOffsetMs,
+            AppSettings.MaxLyricsOffsetMs);
+    }
+
+    /// <summary>
+    /// Back to 0 ms for whatever the header currently edits: the section under
+    /// the playhead, or the track (which then inherits the global offset again).
+    /// </summary>
+    [RelayCommand]
+    private void ResetLyrics()
+    {
+        var key = CurrentLyricsKey;
+
+        if (EditSection is not null && key != null)
+        {
+            var name = SectionDisplayName(_editSectionIndex);
+            _trackMeta.SetSectionOffset(key, _editSectionIndex, 0);
+            RefreshTrackSections();
+            SyncLyricsOffsetEditor();
+            StatusText = $"Timing reset for {name} (0 ms)";
+            return;
+        }
+
+        if (key != null)
+        {
+            // Drop the per-track value rather than pinning 0: the track follows
+            // the global slider again, which is what "Reset" means here.
+            _trackMeta.ClearLyricsOffset(key);
+            RefreshTrackSections();
+            SyncLyricsOffsetEditor();
+            StatusText = "Track timing reset \u2014 following the global offset.";
+            return;
+        }
+
+        LyricsOffsetMs = 0;
+    }
+
+    // ---- lyric timing sections --------------------------------------------
+    // A section is a saved span of the track with its own offset (override
+    // semantics: inside it the section's value replaces the track's). The
+    // header edits whichever section the playhead is in - that is what makes
+    // "fix timing for this part only" possible - and the cached list below is
+    // what the 30 Hz tick reads instead of copying the store every frame.
+
+    /// <summary>True when the playhead sits inside a saved section (drives the context-menu entry).</summary>
+    public bool HasSectionAtPlayhead => CachedSectionIndexAt(PlayheadMs()) >= 0;
+
+    /// <summary>The section the header edits; null means it edits the track/global value.</summary>
+    private LyricOffsetSection? EditSection =>
+        _editSectionIndex >= 0 && _editSectionIndex < _trackSections.Count
+            ? _trackSections[_editSectionIndex]
+            : null;
+
+    /// <summary>Refresh the cached section list for the loaded track (one copy, on change only).</summary>
+    private void RefreshTrackSections() => _trackSections = _trackMeta.GetSections(CurrentLyricsKey);
+
+    /// <summary>Section index at a position, from the cached list - no store call, no allocation.</summary>
+    private int CachedSectionIndexAt(int positionMs) =>
+        _trackSections.Count == 0 ? -1 : LyricOffsetTimeline.SectionIndexAt(_trackSections, positionMs);
+
+    /// <summary>The active deck's playhead, in the millisecond clock the store uses.</summary>
+    private int PlayheadMs() => LyricOffsetTimeline.ToPositionMs(_transport.Position);
+
+    /// <summary>
+    /// Follow the playhead into and out of saved sections; the section the header
+    /// edits always follows the one under the playhead. Cheap enough for the tick:
+    /// it scans the cached list and only touches the UI at a boundary.
+    /// </summary>
+    private void UpdateLyricSectionScope(TimeSpan position)
+    {
+        var index = CachedSectionIndexAt(LyricOffsetTimeline.ToPositionMs(position));
+        if (index == _playheadSectionIndex) return;
+
+        _playheadSectionIndex = index;
+        SetEditSection(index);
+    }
+
+    /// <summary>Point the header at a section, or back at the track/global value with -1.</summary>
+    private void SetEditSection(int index)
+    {
+        if (index < 0 || index >= _trackSections.Count) index = -1;
+
+        _editSectionIndex = index;
+        OnPropertyChanged(nameof(HasSectionAtPlayhead));
+        SyncLyricsOffsetEditor();
+    }
+
+    private string SectionDisplayName(int index)
+    {
+        if (index < 0 || index >= _trackSections.Count) return "section";
+        var label = _trackSections[index].Label;
+        return string.IsNullOrWhiteSpace(label) ? $"section {index + 1}" : label;
+    }
+
+    /// <summary>Round a slider value to the integer milliseconds the store keeps.</summary>
+    private static int ToOffsetMs(double ms) =>
+        (int)Math.Round(Math.Clamp(ms, -AppSettings.MaxLyricsOffsetMs, AppSettings.MaxLyricsOffsetMs),
+            MidpointRounding.AwayFromZero);
+
+    /// <summary>Pinned provider id for a track; null means the default chain.</summary>
+    private string? StoredLyricsSource(string? key)
+    {
+        var id = _trackMeta.Get(key)?.LyricsSourceId;
+        return string.IsNullOrWhiteSpace(id) ? null : id;
+    }
+
+    /// <summary>
+    /// "Set timing for selected lines": save the offset the selected lines play
+    /// at now as a section, so the next nudge moves only that span. The indexes
+    /// come from the view (the ListBox owns the selection).
+    /// </summary>
+    public void SetTimingForSelectedLines(IReadOnlyList<int>? lineIndexes)
+    {
+        var key = CurrentLyricsKey;
+        if (key == null)
+        {
+            StatusText = "Load a track before saving lyric timing.";
+            return;
+        }
+
+        if (_lyricsDocument is not { Synced: true } document)
+        {
+            StatusText = "Load synced lyrics first \u2014 timing needs line timestamps.";
+            return;
+        }
+
+        int first = int.MaxValue, last = -1;
+        if (lineIndexes != null)
+        {
+            foreach (var index in lineIndexes)
+            {
+                if (index < 0 || index >= LyricLines.Count) continue;
+                if (index < first) first = index;
+                if (index > last) last = index;
+            }
+        }
+
+        if (last < 0)
+        {
+            StatusText = "Select one or more lyric lines first.";
+            return;
+        }
+
+        // The section starts by reproducing the offset the user already hears,
+        // so adding it changes nothing until they nudge it.
+        var current = _trackMeta.GetEffectiveOffset(key, PlayheadMs(), _settings.LyricsOffsetMs);
+        var label = first == last
+            ? $"line {first + 1}"
+            : $"lines {first + 1}\u2013{last + 1}";
+
+        if (LyricSectionSelector.FromLines(document, first, last, ToOffsetMs(current), label) is not { } span)
+        {
+            StatusText = "Those lines have no usable timing.";
+            return;
+        }
+
+        var result = _trackMeta.AddSection(key, span.StartMs, span.EndMs, span.OffsetMs, span.Label);
+        if (!result.Added)
+        {
+            StatusText = $"Could not set timing: {result.RejectReason}";
+            return;
+        }
+
+        // Make the new section the edit target right away: the slider shows its
+        // offset now, without waiting for the playhead (or a reload) to get there.
+        RefreshTrackSections();
+        SetEditSection(result.Index);
+
+        StatusText = result.ReplacedSections > 0
+            ? $"Timing set for {label} ({FormatLyricsOffset(span.OffsetMs)}) \u00b7 " +
+              $"{result.ReplacedSections} earlier section(s) displaced"
+            : $"Timing set for {label} ({FormatLyricsOffset(span.OffsetMs)})";
+    }
+
+    /// <summary>Drop the section the playhead is in; the track offset applies there again.</summary>
+    [RelayCommand]
+    private void RemoveLyricTimingSection()
+    {
+        var key = CurrentLyricsKey;
+        var index = CachedSectionIndexAt(PlayheadMs());
+        if (key == null || index < 0)
+        {
+            StatusText = "The playhead is not inside a timed section.";
+            return;
+        }
+
+        var name = SectionDisplayName(index);
+        if (!_trackMeta.RemoveSection(key, index))
+        {
+            RefreshTrackSections();
+            SetEditSection(-1);
+            StatusText = "That section is already gone.";
+            return;
+        }
+
+        RefreshTrackSections();
+        SetEditSection(-1);
+        StatusText = $"Timing removed for {name} \u2014 the track offset applies again";
+    }
+
+    /// <summary>
+    /// Fetch every provider for the loaded track and offer them in the header
+    /// popup (source, line count, synced/unsynced). Picking one pins it for
+    /// this track only.
+    /// </summary>
+    [RelayCommand]
+    private async Task TryOtherSourcesAsync()
+    {
+        var track = LoadedTrack;
+        if (track == null)
+        {
+            LyricsCandidates.Clear();
+            LyricsSourceHint = "Load a track first, then try its other lyric sources.";
+            IsLyricsSourcePickerOpen = true;
+            return;
+        }
+
+        var generation = ++_lyricsCandidatesGeneration;
+        _lyricsCandidatesCts?.Cancel();
+        _lyricsCandidatesCts = new CancellationTokenSource();
+        var ct = _lyricsCandidatesCts.Token;
+
+        LyricsCandidates.Clear();
+        LyricsSourceHint = "Searching sources\u2026";
+        IsLyricsSourcePickerOpen = true;
+
+        try
+        {
+            var docs = await _lyricsService.GetCandidatesAsync(track, ct);
+            if (ct.IsCancellationRequested || generation != _lyricsCandidatesGeneration) return;
+            if (!ReferenceEquals(LoadedTrack, track)) return;
+
+            foreach (var doc in docs)
+            {
+                if (doc == null) continue;
+                var detail = doc.Synced
+                    ? $"synced \u00b7 {doc.Lines.Count} lines"
+                    : $"unsynced \u00b7 {doc.Lines.Count} lines";
+                LyricsCandidates.Add(new LyricsCandidateViewModel(doc, detail));
+            }
+
+            LyricsSourceHint = LyricsCandidates.Count switch
+            {
+                0 => "No source returned lyrics for this track.",
+                1 => "One source had lyrics - pick it to pin it.",
+                _ => $"{LyricsCandidates.Count} sources found - pick one for this track.",
+            };
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            LyricsSourceHint = $"Could not search sources: {ex.Message}";
+        }
+    }
+
+    [RelayCommand]
+    private void ApplyLyricsCandidate(LyricsCandidateViewModel? candidate)
+    {
+        if (candidate == null || LoadedTrack is not { } track) return;
+
+        // Pin by stable id; a document without one (legacy cache entry) is
+        // applied for this session only.
+        if (!string.IsNullOrEmpty(candidate.SourceId))
+        {
+            _trackMeta.SetLyricsSource(track.RelativeKey, candidate.SourceId);
+            SetLyricsSourceSelection(LyricsSourceNameForId(candidate.SourceId));
+        }
+
+        ApplyLyricsDocument(candidate.Document);
+
+        IsLyricsSourcePickerOpen = false;
+        LyricsCandidates.Clear();
+    }
+
+    [RelayCommand]
+    private void CloseLyricsSourcePicker() => IsLyricsSourcePickerOpen = false;
+
     // ---- UI clock ------------------------------------------------------------
 
     private void OnUiTick()
     {
+        // The active deck's playhead drives the shared seek bar and lyric clock;
+        // each deck card reads its own playhead independently.
+        DeckA.UpdateReadout();
+        DeckB.UpdateReadout();
+
         var pos = _transport.Position;
 
         if (!_isUserSeeking)
@@ -584,21 +3440,66 @@ public partial class MainViewModel : ObservableObject, IDisposable
             PositionText = Format(pos);
         }
 
-        DeckA.UpdateReadout(pos);
-        DeckB.UpdateReadout(pos);
         UpdateLyricHighlight(pos);
+
+        // Entering or leaving a saved section changes what the header edits, so
+        // follow the playhead across section boundaries. This reads the cached
+        // section list and only touches the UI when the index actually changes.
+        UpdateLyricSectionScope(pos);
+
         RefreshDurations(); // duration depends on deck delays; setters no-op when unchanged
 
-        WaveformProgress = DurationSeconds > 0 ? pos.TotalSeconds / DurationSeconds : 0;
+        SyncCrossfaderFromTransport();
 
-        // Auto-stop once every deck (including its delay tail) has finished.
-        if (_transport.ReachedEnd) _transport.Stop();
+        // A deck that finishes while it is not the active one is simply stopped:
+        // its media is over, but the queue hand-off belongs to the active deck.
+        var otherDeck = _transport.ActiveDeck == PlaybackDeck.A ? PlaybackDeck.B : PlaybackDeck.A;
+        if (_transport.Channel(otherDeck).ReachedEnd)
+            _transport.StopDeck(otherDeck);
+
+        // The source tabs' preview strips ride this clock (their own timers would
+        // only fight it): one notification per frame keeps position, duration and
+        // play state in step with the decks.
+        _previewTransport.NotifyTick();
+
+        // Auto-stop the active deck once it (including its karaoke tail) has
+        // finished. A track that came from the queue hands over to the next row;
+        // the other deck keeps playing underneath, which is the mix.
+        if (_transport.ReachedEnd)
+        {
+            var fromQueue = CurrentIndex >= 0;
+            _transport.Stop();
+            if (fromQueue) _ = AdvanceQueueAfterEndAsync();
+        }
     }
 
     private void OnTransportStateChanged()
     {
         IsPlaying = _transport.State == TransportState.Playing;
         RefreshDurations();
+    }
+
+    /// <summary>Mirror the deck pair's active deck onto the two cards' highlight.</summary>
+    private void SyncDeckActivation()
+    {
+        var active = _transport.ActiveDeck;
+        _activeDeck = active;
+        DeckA.IsActive = active == PlaybackDeck.A;
+        DeckB.IsActive = active == PlaybackDeck.B;
+        OnPropertyChanged(nameof(IsDeckAActive));
+        OnPropertyChanged(nameof(IsDeckBActive));
+    }
+
+    /// <summary>
+    /// A programme crossfade ramps the transport fader; copy it back so the
+    /// slider thumb follows without feeding the value straight back in.
+    /// </summary>
+    private void SyncCrossfaderFromTransport()
+    {
+        if (Math.Abs(Crossfader - _transport.Crossfader) < 0.002) return;
+        _syncingCrossfader = true;
+        try { Crossfader = _transport.Crossfader; }
+        finally { _syncingCrossfader = false; }
     }
 
     private void RefreshDurations()
@@ -610,9 +3511,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private void UpdateLyricHighlight(TimeSpan position)
     {
         // Unsynced lyrics are static scrollable text - no highlight tracking.
-        if (!_lyricsSynced || LyricLines.Count == 0) return;
+        if (!_lyricsSynced || LyricLines.Count == 0)
+        {
+            BallVisible = false;
+            return;
+        }
 
-        var effective = position + TimeSpan.FromMilliseconds(_settings.LyricsOffsetMs);
+        // Positive settings mean "lyrics later": the store hands the offset back
+        // already negated for the "position + offset" comparison, applying the
+        // section override under the playhead instead of the track value. One
+        // value drives the line highlight, the word highlight and the ball, so
+        // they can never disagree.
+        var offset = _trackMeta.GetEffectiveOffset(CurrentLyricsKey, position, _settings.LyricsOffsetMs);
+        var effective = position + TimeSpan.FromMilliseconds(-offset);
 
         // Last line whose time has passed (cheap linear scan; lyric documents
         // are small enough that this is negligible at 30 Hz).
@@ -623,16 +3534,134 @@ public partial class MainViewModel : ObservableObject, IDisposable
             else break;
         }
 
-        if (index == _currentLyricIndex) return;
-
-        if (_currentLyricIndex >= 0 && _currentLyricIndex < LyricLines.Count)
-            LyricLines[_currentLyricIndex].IsCurrent = false;
-        _currentLyricIndex = index;
-        if (index >= 0)
+        if (index != _currentLyricIndex)
         {
-            LyricLines[index].IsCurrent = true;
-            CurrentLyricChanged?.Invoke(LyricLines[index]);
+            if (_currentLyricIndex >= 0 && _currentLyricIndex < LyricLines.Count)
+            {
+                var previous = LyricLines[_currentLyricIndex];
+                previous.IsCurrent = false;
+                foreach (var word in previous.Words) word.IsCurrent = false;
+            }
+
+            _currentLyricIndex = index;
+            _currentWordIndex = -1;
+            // Cached X positions describe the old line; the view re-measures
+            // when CurrentLyricChanged fires below.
+            ClearLyricWordGeometry();
+            OnPropertyChanged(nameof(CurrentLyricLine));
+
+            if (index >= 0)
+            {
+                LyricLines[index].IsCurrent = true;
+                CurrentLyricChanged?.Invoke(LyricLines[index]);
+            }
         }
+
+        UpdateWordHighlight(effective);
+        UpdateBallMotion(effective);
+    }
+
+    /// <summary>
+    /// Highlight exactly one word of the current line when word-follow is on,
+    /// and none at all in line mode.
+    /// </summary>
+    private void UpdateWordHighlight(TimeSpan effective)
+    {
+        if (!IsWordFollow)
+        {
+            // Toggling the mode already cleared every flag; this covers the tick
+            // that follows a switch back to line mode.
+            if (_currentWordIndex >= 0) ClearAllWordHighlights();
+            return;
+        }
+
+        if (_currentLyricIndex < 0 || _currentLyricIndex >= LyricLines.Count) return;
+
+        var words = LyricLines[_currentLyricIndex].Words;
+        // No word layout rendered (no words, or one unbreakable token): line
+        // highlighting is all there is, so there is nothing to flag.
+        if (!LyricLines[_currentLyricIndex].HasWords)
+        {
+            if (_currentWordIndex != -1) ClearAllWordHighlights();
+            return;
+        }
+
+        // Last word that has started. Words are ordered and non-overlapping.
+        int index = -1;
+        for (int i = 0; i < words.Count; i++)
+        {
+            if (words[i].Start <= effective) index = i;
+            else break;
+        }
+
+        if (index == _currentWordIndex) return;
+
+        if (_currentWordIndex >= 0 && _currentWordIndex < words.Count)
+            words[_currentWordIndex].IsCurrent = false;
+        _currentWordIndex = index;
+        if (index >= 0) words[index].IsCurrent = true;
+
+        // The active word turns bold, so its measured box changes. Ask the view
+        // to re-measure; until it answers, the previous centres stay in use (a
+        // tick of stale-by-a-pixel beats a flickering ball).
+        CurrentWordChanged?.Invoke();
+    }
+
+    /// <summary>Clear every word flag (mode switch, line change, rebuild).</summary>
+    private void ClearAllWordHighlights()
+    {
+        for (int i = 0; i < LyricLines.Count; i++)
+        {
+            foreach (var word in LyricLines[i].Words)
+            {
+                if (word.IsCurrent) word.IsCurrent = false;
+            }
+        }
+        _currentWordIndex = -1;
+    }
+
+    /// <summary>
+    /// Place the bouncing ball from the transport clock alone: no animation, so a
+    /// seek or pause lands exactly where the current position says. The ball
+    /// travels from the active word's centre to the next word's centre over the
+    /// active word's span, with a sine hop.
+    /// </summary>
+    private void UpdateBallMotion(TimeSpan effective)
+    {
+        var line = CurrentLyricLine;
+        var centres = _ballCentres;
+
+        if (!IsWordFollow || line is null || !line.HasWords || centres is null
+            || !ReferenceEquals(line, _ballLine)
+            || double.IsNaN(_ballWordTop))
+        {
+            BallVisible = false;
+            return;
+        }
+
+        var words = line.Words;
+        int index = _currentWordIndex;
+        if (index < 0 || index >= words.Count || index >= centres.Count)
+        {
+            BallVisible = false;
+            return;
+        }
+
+        var word = words[index];
+        double span = (word.End - word.Start).TotalMilliseconds;
+        double t = span > 0
+            ? Math.Clamp((effective - word.Start).TotalMilliseconds / span, 0, 1)
+            : 1;
+
+        double x0 = centres[index];
+        double x1 = index + 1 < centres.Count ? centres[index + 1] : x0;
+
+        BallX = x0 + (x1 - x0) * t - BallSize / 2;
+        // Top of the line, minus the ball and a 2 px gap, minus the hop.
+        BallY = _ballWordTop - BallSize - 2 - Math.Sin(Math.PI * t) * BallHopHeight;
+        // Measurement is in canvas space; a negative origin means the line is
+        // scrolled out of the panel, where a ball would be misleading.
+        BallVisible = BallX + BallSize > 0 && BallY >= 0;
     }
 
     private void RefreshDevices()
@@ -673,10 +3702,23 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         _uiTimer.Stop();
         _rescanDebounce.Stop();
+        _searchDebounce.Stop();
         _autoSyncTimer.Stop();
+        _lyricsSettingsSave.Stop();
+        // Flush a queue write that hadn't hit its debounce yet.
+        _queueStore.Dispose();
         _downloadQueue.Dispose();
         _scanCts?.Cancel();
         _lyricsCts?.Cancel();
+        _lyricsCandidatesCts?.Cancel();
+        // Persist a pending lyric offset drag that hadn't hit its debounce yet.
+        _settings.Save();
+        // Per-track lyric metadata (offset, pinned sources, sections) lives in
+        // the store now: flush anything the debounce still holds, then stop
+        // listening.
+        _trackMeta.Changed -= OnTrackMetadataChanged;
+        _trackMeta.Save();
+        _trackMeta.Dispose();
         _separation.Dispose();
         _watcher.Dispose();
         _transport.Dispose();

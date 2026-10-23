@@ -15,6 +15,8 @@ public class LrclibProvider : ILyricsProvider
 
     public LrclibProvider(HttpClient http) => _http = http;
 
+    public string Id => "lrclib";
+
     public string Name => "LRCLIB";
 
     public async Task<LyricsDocument?> GetLyricsAsync(TrackEntry track, CancellationToken ct)
@@ -78,7 +80,7 @@ public class LrclibProvider : ILyricsProvider
             && synced.ValueKind == JsonValueKind.String
             && !string.IsNullOrWhiteSpace(synced.GetString()))
         {
-            return LrcParser.Parse(synced.GetString()!, Name);
+            return LrcParser.Parse(synced.GetString()!, Name, Id);
         }
 
         if (record.TryGetProperty("plainLyrics", out var plain)
@@ -86,7 +88,7 @@ public class LrclibProvider : ILyricsProvider
             && !string.IsNullOrWhiteSpace(plain.GetString()))
         {
             var lines = plain.GetString()!.Split('\n').Select(l => l.TrimEnd('\r'));
-            return LyricsDocument.Unsynced(lines, Name);
+            return LyricsDocument.Unsynced(lines, Name, Id);
         }
         return null;
     }

@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json;
 using JockeyBox.Lyrics;
 using JockeyBox.Settings;
@@ -26,6 +27,13 @@ public sealed class SpotifyApiException : Exception
         StatusCode = statusCode;
         Body = body;
     }
+
+    /// <summary>
+    /// True when the failure means the grant is no longer good enough - a rejected
+    /// token (401) or a missing scope (403). The view model catches this to offer
+    /// re-authorisation rather than a generic "try again".
+    /// </summary>
+    public bool NeedsReauthorization => StatusCode is 401 or 403;
 }
 
 /// <summary>
@@ -248,6 +256,157 @@ public sealed class SpotifyApi
         return dto is { IsPlayable: true } ? dto.ToSourceTrack(null) : null;
     }
 
+    // ---- writes ---------------------------------------------------------------
+    //
+    // All of these need a token granted playlist-modify-private (or -public).
+    // A 401/403 from them surfaces as a SpotifyApiException whose
+    // NeedsReauthorization is true, which the Spotify tab turns into a
+    // "Re-authorize" prompt instead of a dead end.
+
+    /// <summary>
+    /// Create an empty playlist on the signed-in account and return it as the
+    /// playlist rail expects (0 tracks, its own id). Playlists are private unless
+    /// <paramref name="isPublic"/> is set.
+    /// </summary>
+    public async Task<SpotifyPlaylistInfo> CreatePlaylistAsync(
+        string name, string? description, bool isPublic, CancellationToken ct)
+    {
+        var user = await GetCurrentUserAsync(ct)
+            ?? throw new SpotifyApiException("Spotify did not report the signed-in account.", 502, null);
+
+        var url = $"{BaseUrl}/users/{Uri.EscapeDataString(user.Id)}/playlists";
+        var json = JsonSerializer.Serialize(new
+        {
+            name,
+            description = description ?? "",
+            @public = isPublic,
+        });
+
+        using var response = await SendAsync(HttpMethod.Post, url, json, ct);
+        var payload = await response.Content.ReadAsStringAsync(ct);
+        if (!response.IsSuccessStatusCode) throw CreateException(url, response.StatusCode, payload, isWrite: true);
+
+        using var doc = ParseJson(url, payload);
+        return ParsePlaylist(doc.RootElement)
+            ?? throw new SpotifyApiException("Spotify created the playlist but did not return its id.", 502, payload);
+    }
+
+    /// <summary>
+    /// Append tracks to a playlist, 100 per request (Spotify's cap) and chunked
+    /// beyond that. Accepts bare track ids or full <c>spotify:track:</c> URIs and
+    /// returns how many were sent.
+    /// </summary>
+    public async Task<int> AddTracksToPlaylistAsync(
+        string playlistId, IEnumerable<string> trackIds, CancellationToken ct)
+    {
+        var uris = ToTrackUris(trackIds);
+        var added = 0;
+
+        foreach (var chunk in Chunk(uris, 100))
+        {
+            var json = JsonSerializer.Serialize(new { uris = chunk });
+            await SendPlaylistItemsAsync(HttpMethod.Post, playlistId, json, ct);
+            added += chunk.Count;
+        }
+
+        Log.Debug($"Spotify playlist {playlistId}: added {added} track(s).");
+        return added;
+    }
+
+    /// <summary>
+    /// Remove tracks from a playlist, 100 per request. Removal is by URI, so a
+    /// title that appears twice keeps one copy; returns how many were sent.
+    /// </summary>
+    public async Task<int> RemoveTracksFromPlaylistAsync(
+        string playlistId, IEnumerable<string> trackIds, CancellationToken ct)
+    {
+        var uris = ToTrackUris(trackIds);
+        var removed = 0;
+
+        foreach (var chunk in Chunk(uris, 100))
+        {
+            var json = JsonSerializer.Serialize(new
+            {
+                tracks = chunk.Select(uri => new { uri }).ToList(),
+            });
+            await SendPlaylistItemsAsync(HttpMethod.Delete, playlistId, json, ct);
+            removed += chunk.Count;
+        }
+
+        Log.Debug($"Spotify playlist {playlistId}: removed {removed} track(s).");
+        return removed;
+    }
+
+    /// <summary>
+    /// Move one item (single-track range). <paramref name="insertBefore"/> is the
+    /// destination index in the pre-move list, as Spotify defines it.
+    /// </summary>
+    public async Task ReorderPlaylistItemAsync(
+        string playlistId, int fromIndex, int insertBefore, CancellationToken ct)
+    {
+        if (fromIndex < 0) throw new ArgumentOutOfRangeException(nameof(fromIndex));
+
+        var json = JsonSerializer.Serialize(new
+        {
+            range_start = fromIndex,
+            insert_before = insertBefore,
+            range_length = 1,
+        });
+
+        await SendPlaylistItemsAsync(HttpMethod.Put, playlistId, json, ct);
+    }
+
+    /// <summary>
+    /// Write to a playlist's item collection. `/items` is the current endpoint
+    /// name; accounts still on the older rollout only have `/tracks`, so a 404
+    /// retries there once - the same fallback the read path uses.
+    /// </summary>
+    private async Task SendPlaylistItemsAsync(
+        HttpMethod method, string playlistId, string json, CancellationToken ct)
+    {
+        var id = Uri.EscapeDataString(playlistId);
+        var url = $"{BaseUrl}/playlists/{id}/items";
+
+        var response = await SendAsync(method, url, json, ct);
+
+        if (response.StatusCode == HttpStatusCode.NotFound)
+        {
+            response.Dispose();
+            var fallbackUrl = $"{BaseUrl}/playlists/{id}/tracks";
+            Log.Debug($"Spotify {method} playlists/{playlistId}/items returned 404; falling back to /tracks.");
+
+            using var fallback = await SendAsync(method, fallbackUrl, json, ct);
+            var fallbackBody = await fallback.Content.ReadAsStringAsync(ct);
+            if (!fallback.IsSuccessStatusCode)
+                throw CreateException(fallbackUrl, fallback.StatusCode, fallbackBody, isWrite: true);
+            return;
+        }
+
+        using (response)
+        {
+            if (response.IsSuccessStatusCode) return;
+            var body = await response.Content.ReadAsStringAsync(ct);
+            throw CreateException(url, response.StatusCode, body, isWrite: true);
+        }
+    }
+
+    /// <summary>Normalise ids to <c>spotify:track:</c> URIs, dropping empties and duplicates.</summary>
+    private static List<string> ToTrackUris(IEnumerable<string> trackIds) =>
+        trackIds
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Select(id => id.Trim())
+            .Select(id => id.StartsWith("spotify:", StringComparison.OrdinalIgnoreCase)
+                ? id
+                : $"spotify:track:{id}")
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+    private static IEnumerable<List<T>> Chunk<T>(List<T> source, int size)
+    {
+        for (var i = 0; i < source.Count; i += size)
+            yield return source.GetRange(i, Math.Min(size, source.Count - i));
+    }
+
     // ---- parsing helpers ------------------------------------------------------
 
     private static SpotifyPlaylistInfo? ParsePlaylist(JsonElement item)
@@ -383,17 +542,30 @@ public sealed class SpotifyApi
     /// Handles the two retryable failures: a rejected token (refresh once) and
     /// 429 with Retry-After (up to two waits, each capped at 10s).
     /// </summary>
-    private async Task<HttpResponseMessage> SendAsync(string url, CancellationToken ct)
+    private Task<HttpResponseMessage> SendAsync(string url, CancellationToken ct) =>
+        SendAsync(HttpMethod.Get, url, null, ct);
+
+    /// <summary>
+    /// Send a request with an optional JSON body (recreated on every retry, so a
+    /// refresh or a rate-limit wait can replay it) and return the response for the
+    /// caller to inspect and dispose. <c>DELETE</c> carries a body too - Spotify's
+    /// playlist item endpoint requires it.
+    /// </summary>
+    private async Task<HttpResponseMessage> SendAsync(
+        HttpMethod method, string url, string? jsonBody, CancellationToken ct)
     {
+        var isWrite = !string.Equals(method.Method, "GET", StringComparison.OrdinalIgnoreCase);
         var token = await GetTokenAsync(ct);
         var authRetried = false;
         var rateLimitRetries = 0;
 
         while (true)
         {
-            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            using var request = new HttpRequestMessage(method, url);
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
             request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+            if (jsonBody != null)
+                request.Content = new StringContent(jsonBody, Encoding.UTF8, "application/json");
 
             var response = await _http.SendAsync(request, ct);
 
@@ -405,11 +577,11 @@ public sealed class SpotifyApi
                 if (authRetried)
                 {
                     Log.Warn($"Spotify rejected a freshly refreshed token (401) on {url}.");
-                    throw new SpotifyApiException("Spotify rejected the access token. Sign in again.", 401, body);
+                    throw new SpotifyApiException(UnauthorizedMessage(isWrite), 401, body);
                 }
 
                 var refreshed = await ForceRefreshAsync(token, ct);
-                if (refreshed == null) throw new SpotifyApiException("Spotify rejected the access token. Sign in again.", 401, body);
+                if (refreshed == null) throw new SpotifyApiException(UnauthorizedMessage(isWrite), 401, body);
 
                 token = refreshed;
                 authRetried = true;
@@ -496,20 +668,43 @@ public sealed class SpotifyApi
         await TryGetJsonAsync(url, ct)
         ?? throw CreateException(url, HttpStatusCode.NotFound, null);
 
-    private static SpotifyApiException CreateException(string url, HttpStatusCode status, string? body)
+    private static SpotifyApiException CreateException(
+        string url, HttpStatusCode status, string? body, bool isWrite = false)
     {
         var code = (int)status;
         var message = status switch
         {
+            HttpStatusCode.Forbidden when isWrite =>
+                "Spotify refused this edit - re-authorize Spotify to grant playlist editing " +
+                "(and check that the playlist is yours to edit).",
             HttpStatusCode.Forbidden =>
                 "Spotify denied this request - re-authorise with playlist scopes (log out, then log in again).",
             HttpStatusCode.NotFound => "Spotify item not found.",
-            HttpStatusCode.Unauthorized => "Spotify rejected the access token. Sign in again.",
+            HttpStatusCode.Unauthorized => UnauthorizedMessage(isWrite),
             _ => $"Spotify request failed (HTTP {code}).",
         };
 
         Log.Warn($"Spotify {code} on {url}: {Truncate(body, 300)}");
         return new SpotifyApiException(message, code, body);
+    }
+
+    /// <summary>401 wording; a failed write always points at re-authorisation.</summary>
+    private static string UnauthorizedMessage(bool isWrite) => isWrite
+        ? "Spotify rejected the access token - re-authorize Spotify to grant playlist editing."
+        : "Spotify rejected the access token. Sign in again.";
+
+    /// <summary>Parse a success/write payload, turning garbage into a 502 like the GET path does.</summary>
+    private static JsonDocument ParseJson(string url, string body)
+    {
+        try
+        {
+            return JsonDocument.Parse(body);
+        }
+        catch (JsonException ex)
+        {
+            Log.Warn($"Spotify returned unreadable JSON for {url}: {ex.Message}");
+            throw new SpotifyApiException("Spotify returned an unreadable response.", 502, body);
+        }
     }
 
     private static TimeSpan GetRetryDelay(HttpResponseMessage response)

@@ -251,6 +251,50 @@
                                             </Style>
                                         </Button.Style>
                                     </Button>
+
+                                    <!-- Done rows only: deletes the file itself. The tooltip is the
+                                         only confirmation this window has, so it says exactly what
+                                         happens (Recycle Bin = undoable). -->
+                                    <Button Content="&#x1F5D1;"
+                                            ToolTip="Delete the downloaded file - it goes to the Recycle Bin and the library stops listing it"
+                                            AutomationProperties.Name="Delete the downloaded file"
+                                            Command="{Binding DataContext.DeleteFileCommand,
+                                                      RelativeSource={RelativeSource AncestorType=Window}}"
+                                            CommandParameter="{Binding}">
+                                        <Button.Style>
+                                            <Style TargetType="Button" BasedOn="{StaticResource RowAction}">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                <Setter Property="Foreground" Value="{StaticResource ErrorBrush}"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding State}" Value="Done">
+                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Button.Style>
+                                    </Button>
+
+                                    <!-- Failed/Cancelled rows only: drops the row, touches no file. -->
+                                    <Button Content="&#x2715;"
+                                            ToolTip="Remove this row from the list (any file already on disk is left alone)"
+                                            AutomationProperties.Name="Remove this row from the list"
+                                            Command="{Binding DataContext.RemoveRowCommand,
+                                                      RelativeSource={RelativeSource AncestorType=Window}}"
+                                            CommandParameter="{Binding}">
+                                        <Button.Style>
+                                            <Style TargetType="Button" BasedOn="{StaticResource RowAction}">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding State}" Value="Failed">
+                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding State}" Value="Cancelled">
+                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Button.Style>
+                                    </Button>
                                 </StackPanel>
                             </StackPanel>
                         </Grid>

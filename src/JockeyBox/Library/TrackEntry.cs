@@ -5,18 +5,28 @@ namespace JockeyBox.Library;
 public enum SeparationState { None, Queued, Running, Failed }
 
 /// <summary>
-/// One logical track in the unified browser list. The Music folder is the
-/// source of truth; the Karaoke side holds the generated instrumental with the
-/// same relative path (extension may differ - pairing ignores it).
+/// One logical track in the unified browser list: the music file plus, when it
+/// exists, its karaoke partner.
+///
+/// In the merged one-root library the partner sits beside the original and is
+/// named "Song.karaoke.ext" (see <see cref="KaraokeNaming"/>); in a split library
+/// it mirrors the relative path under the karaoke root. Either way the pair is
+/// matched on the base relative path - the extension and the marker are ignored
+/// when pairing - so a row keeps one identity across the migration.
 /// Observable so the browser row updates live while karaoke tracks are
 /// generated in the background.
 /// </summary>
 public partial class TrackEntry : ObservableObject
 {
-    /// <summary>Pairing key: relative path with the extension stripped (case-insensitive matching).</summary>
+    /// <summary>
+    /// Pairing key: relative path with the extension and any ".karaoke" marker
+    /// stripped (case-insensitive matching). The instrumental of "a/b/song.mp3"
+    /// carries the key "a/b/song" as well, so playlists, the queue and settings
+    /// never see a second identity for one song.
+    /// </summary>
     public required string RelativeKey { get; init; }
 
-    /// <summary>Music-folder relative path (for display).</summary>
+    /// <summary>Library-relative path (for display): the music file when present, otherwise the karaoke file.</summary>
     public required string RelativePath { get; init; }
 
     /// <summary>Absolute path of the full music file (Deck B), if present.</summary>
@@ -24,7 +34,11 @@ public partial class TrackEntry : ObservableObject
     [NotifyPropertyChangedFor(nameof(KaraokeStatus), nameof(NeedsKaraoke))]
     private string? _musicPath;
 
-    /// <summary>Absolute path of the instrumental file (Deck A), if present.</summary>
+    /// <summary>
+    /// Absolute path of the instrumental file (Deck A), if present: either the
+    /// merged-layout sibling "Song.karaoke.ext" or, for an unmerged library, the
+    /// copy under the karaoke root.
+    /// </summary>
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(KaraokeStatus), nameof(NeedsKaraoke))]
     private string? _karaokePath;

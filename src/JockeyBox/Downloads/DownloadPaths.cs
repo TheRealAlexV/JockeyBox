@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.IO;
+using JockeyBox.Library;
 using JockeyBox.Settings;
 using JockeyBox.Sources;
 using JockeyBox.Tools;
@@ -8,7 +9,14 @@ namespace JockeyBox.Downloads;
 
 /// <summary>
 /// Turns a <see cref="SourceTrack"/> into a library-relative path, resolves that
-/// path against the configured Music root, and mirrors it into the Karaoke root.
+/// path against the configured Music root, and derives the karaoke path of a
+/// music file.
+///
+/// The library is one tree: the karaoke version of a track lives beside it as
+/// "Song.karaoke.ext" (<see cref="KaraokeNaming"/>), so nothing is mirrored into
+/// a second root any more. <see cref="AppSettings.KaraokeDirectory"/> survives
+/// only as the legacy split root, and the mirror mapping below still honours it
+/// when the music root is unknown.
 ///
 /// All layout logic lives here so the download queue, the library scanner and
 /// the karaoke chaining code agree on where a file belongs.
@@ -69,29 +77,38 @@ public static class DownloadPaths
     /// <summary>
     /// Return <paramref name="absolutePath"/> when nothing occupies it, else the
     /// first free "name (2).ext" ... "name (999).ext" candidate.
+    ///
+    /// A karaoke partner ("Song.karaoke.ext") is not a music track: it never
+    /// blocks a download to "Song.ext". A name that itself ends in the karaoke
+    /// marker is never free, because the scanner would read it as the
+    /// instrumental of the unrelated "Song.ext" - the loop below moves the marker
+    /// out of the way instead.
     /// </summary>
     public static string EnsureUnique(string absolutePath)
     {
         if (string.IsNullOrWhiteSpace(absolutePath)) return absolutePath;
 
-        try
+        if (!KaraokeNaming.IsKaraokeFile(absolutePath))
         {
-            if (!File.Exists(absolutePath)) return absolutePath;
-        }
-        catch (Exception ex)
-        {
-            Log.Error($"Could not probe '{absolutePath}'; using it as-is", ex);
-            return absolutePath;
+            try
+            {
+                if (!File.Exists(absolutePath)) return absolutePath;
+            }
+            catch (Exception ex)
+            {
+                Log.Error($"Could not probe '{absolutePath}'; using it as-is", ex);
+                return absolutePath;
+            }
         }
 
         var directory = Path.GetDirectoryName(absolutePath) ?? "";
-        var stem = Path.GetFileNameWithoutExtension(absolutePath);
-        var extension = Path.GetExtension(absolutePath);
 
         for (var n = 2; n <= 999; n++)
         {
             var candidate = Path.Combine(
-                directory, $"{stem} ({n.ToString(CultureInfo.InvariantCulture)}){extension}");
+                directory,
+                KaraokeNaming.InsertInBaseName(
+                    absolutePath, $" ({n.ToString(CultureInfo.InvariantCulture)})"));
             try
             {
                 if (!File.Exists(candidate)) return candidate;
@@ -103,7 +120,7 @@ public static class DownloadPaths
             }
         }
 
-        var last = Path.Combine(directory, $"{stem} (999){extension}");
+        var last = Path.Combine(directory, KaraokeNaming.InsertInBaseName(absolutePath, " (999)"));
         Log.Warn($"No free file name for '{absolutePath}' up to 999; reusing '{last}'");
         return last;
     }
@@ -149,8 +166,13 @@ public static class DownloadPaths
     }
 
     /// <summary>
-    /// The Karaoke counterpart of a library path: the same relative path under
-    /// <see cref="AppSettings.KaraokeDirectory"/>. Accepts absolute or relative input.
+    /// The karaoke counterpart of a library path.
+    ///
+    /// In the merged one-root layout that is the sibling "Song.karaoke.ext" -
+    /// same folder, same extension, marker inserted before it. When the music
+    /// root is unknown (unset, or the path lies outside it) the legacy mapping
+    /// into <see cref="AppSettings.KaraokeDirectory"/> is kept, so a settings file
+    /// from before the merge still resolves. Accepts absolute or relative input.
     /// </summary>
     public static string KaraokeMirror(AppSettings settings, string relativePath)
     {
@@ -158,13 +180,67 @@ public static class DownloadPaths
 
         var relative = RelativeTo(settings, relativePath);
         if (Path.IsPathRooted(relative)) return relative; // outside the library - leave alone
+
         relative = relative.TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+        var music = settings?.MusicDirectory?.Trim() ?? "";
+        if (music.Length > 0) return KaraokeNaming.KaraokePathFor(Path.Combine(music, relative));
 
         var karaoke = settings?.KaraokeDirectory?.Trim() ?? "";
         return karaoke.Length == 0 ? relative : Path.Combine(karaoke, relative);
     }
 
+    /// <summary>
+    /// Where a newly generated karaoke file for <paramref name="musicPath"/>
+    /// belongs: "Song.karaoke.&lt;ext&gt;" in the music file's own folder, so the
+    /// library stays one tree and the pair is found without a second root.
+    ///
+    /// The output format decides the extension, not the music file: a generated
+    /// instrumental may be lossless (.flac) beside a downloaded .mp3. A blank
+    /// format falls back to FLAC, matching the separation settings' default.
+    ///
+    /// Returns "" only when no folder can be decided - no music path and no
+    /// karaoke root to fall back to - which callers report as a setup problem.
+    /// When the music folder is unknown but <paramref name="relativeKey"/> and the
+    /// legacy karaoke root are known, the old mirror mapping is used.
+    /// </summary>
+    public static string KaraokeOutputPath(AppSettings settings, string? musicPath,
+                                           string? extension, string? relativeKey = null)
+    {
+        var format = (extension ?? "").Trim().TrimStart('.');
+        if (format.Length == 0) format = "flac";
+
+        var folder = FolderOf(musicPath);
+        var stem = KaraokeNaming.BaseFileName(musicPath);
+        if (folder.Length > 0 && stem.Length > 0)
+            return Path.Combine(folder, stem + KaraokeNaming.Marker + "." + format.ToLowerInvariant());
+
+        // Unknown music folder: keep the legacy mirror into the karaoke root.
+        var karaokeRoot = settings?.KaraokeDirectory?.Trim() ?? "";
+        var key = (relativeKey ?? "").Trim()
+            .TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        if (karaokeRoot.Length > 0 && key.Length > 0)
+            return Path.Combine(karaokeRoot, key + "." + format.ToLowerInvariant());
+
+        return "";
+    }
+
     // ---- internals --------------------------------------------------------
+
+    /// <summary>Folder of a path, or "" when the path has none (or is unusable).</summary>
+    private static string FolderOf(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return "";
+
+        try
+        {
+            return Path.GetDirectoryName(path.Trim()) ?? "";
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return "";
+        }
+    }
 
     private static string FromTemplate(string template, LayoutContext ctx, SourceTrack track)
     {

@@ -113,6 +113,9 @@ public sealed class DownloadQueue : IDisposable
     /// <summary>Raised when a permanent library file was added, so the browser can rescan.</summary>
     public event Action? LibraryChanged;
 
+    /// <summary>Raised (on a background thread) after a downloaded file was deleted from disk.</summary>
+    public event Action<DownloadItem>? FileDeleted;
+
     /// <summary>
     /// Raised when the queue becomes idle while someone is awaiting
     /// <see cref="WhenDrainedAsync"/>. It is not a general "queue empty" event:
@@ -161,6 +164,12 @@ public sealed class DownloadQueue : IDisposable
             IndexInPlaylist = Math.Max(0, indexInPlaylist),
             LayoutOverride = layoutOverride,
             State = DownloadState.Queued,
+            // Remember where the row was, so a preview (which is not a library
+            // download) or a cancel can put it back instead of leaving it at
+            // Downloading.
+            PriorState = track.State is SourceTrackState.InLibrary or SourceTrackState.Failed
+                ? track.State
+                : SourceTrackState.New,
         };
 
         if (kind == DownloadKind.Stream)
@@ -258,6 +267,161 @@ public sealed class DownloadQueue : IDisposable
         RequestSave();
     }
 
+    /// <summary>
+    /// Delete the file behind a finished download, then forget it in the ledger
+    /// so the app stops believing the track is downloaded.
+    ///
+    /// Safe by construction: the path must exist and must live under the
+    /// configured Music/Karaoke folders (path-traversal guard), the file goes to
+    /// the Recycle Bin so a mistaken click is undoable, and every failure is
+    /// reported through <see cref="DownloadItem.Error"/> instead of throwing
+    /// into the UI thread.
+    /// </summary>
+    /// <param name="item">Finished download to delete.</param>
+    /// <param name="alsoRemoveLedger">Drop the matching ledger entry (default true).</param>
+    /// <returns>True when the file is gone and the bookkeeping was updated.</returns>
+    public Task<bool> DeleteDownloadedFileAsync(DownloadItem item, bool alsoRemoveLedger = true)
+    {
+        if (item is null) return Task.FromResult(false);
+
+        // File probes and the shell's recycle call can block on a slow or
+        // sleeping volume; keep them off the dispatcher that owns the command.
+        return Task.Run(() => DeleteDownloadedFile(item, alsoRemoveLedger));
+    }
+
+    private bool DeleteDownloadedFile(DownloadItem item, bool alsoRemoveLedger)
+    {
+        var path = item.OutputPath;
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            item.Error = "There is no file recorded for this download.";
+            return false;
+        }
+
+        string full;
+        try
+        {
+            full = Path.GetFullPath(path);
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"Refusing to delete '{path}': unusable path", ex);
+            item.Error = $"Not a usable path: {path}";
+            return false;
+        }
+
+        if (!IsInsideLibrary(full))
+        {
+            // Never delete outside the folders the user configured, whatever the
+            // queue item (or a hand-edited queue.json) claims.
+            Log.Warn($"Refusing to delete '{full}': outside the music/karaoke folders");
+            item.Error = "Refused: that file is outside the music/karaoke folders.";
+            return false;
+        }
+
+        if (!File.Exists(full))
+        {
+            // Already gone: drop the stale ledger entry so the tick disappears.
+            if (alsoRemoveLedger) _ledger.RemoveByPath(full);
+            item.Error = "That file is no longer on disk.";
+            return false;
+        }
+
+        try
+        {
+            MoveToRecycleBin(full);
+            Log.Info($"deleted {full} (Recycle Bin)");
+        }
+        catch (Exception ex)
+        {
+            // Recycle Bin is a nicety; if the shell refuses, deleting for real
+            // still beats leaving a file the user asked to remove.
+            Log.Error($"Recycle Bin delete failed for '{full}'; falling back to File.Delete", ex);
+            try
+            {
+                File.Delete(full);
+            }
+            catch (Exception inner)
+            {
+                Log.Error($"Could not delete '{full}'", inner);
+                item.Error = $"Could not delete the file: {inner.Message}";
+                return false;
+            }
+        }
+
+        if (alsoRemoveLedger) _ledger.RemoveByPath(full);
+
+        item.OutputPath = null;
+        item.Error = null;
+        item.Detail = null;
+
+        var track = item.Track;
+        if (PathsEqual(track.LibraryPath, full))
+        {
+            track.LibraryPath = null;
+            track.State = SourceTrackState.New;
+            track.Progress = 0;
+        }
+        if (PathsEqual(track.PreviewPath, full)) track.PreviewPath = null;
+        track.Error = null;
+
+        try
+        {
+            FileDeleted?.Invoke(item);
+            // The library index is now stale; the host rescans on this event.
+            LibraryChanged?.Invoke();
+        }
+        catch (Exception ex)
+        {
+            Log.Error("A file-deleted handler threw", ex);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// True when <paramref name="fullPath"/> sits under the configured Music or
+    /// Karaoke root. The separator matters: "C:\Music2" must not match "C:\Music".
+    /// </summary>
+    private bool IsInsideLibrary(string fullPath)
+    {
+        foreach (var root in new[] { _settings.MusicDirectory, _settings.KaraokeDirectory })
+        {
+            if (string.IsNullOrWhiteSpace(root)) continue;
+
+            string normalised;
+            try
+            {
+                normalised = Path.GetFullPath(root);
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"Ignoring unusable library root '{root}': {ex.Message}");
+                continue;
+            }
+
+            var prefix = normalised.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            if (prefix.Length == 0) continue;
+            prefix += Path.DirectorySeparatorChar;
+
+            if (fullPath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return true;
+        }
+
+        return false;
+    }
+
+    /// <summary>Send one file to the Recycle Bin so a mistaken delete is undoable.</summary>
+    private static void MoveToRecycleBin(string fullPath) =>
+        Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile(
+            fullPath,
+            Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs,
+            Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
+
+    private static bool PathsEqual(string? a, string? b) =>
+        !string.IsNullOrWhiteSpace(a)
+        && !string.IsNullOrWhiteSpace(b)
+        && string.Equals(a.Trim(), b.Trim(), StringComparison.OrdinalIgnoreCase);
+
     public void Pause() => _paused = true;
     public void Resume() => _paused = false;
 
@@ -286,7 +450,9 @@ public sealed class DownloadQueue : IDisposable
         foreach (var item in victims)
         {
             item.State = DownloadState.Cancelled;
-            item.Track.State = SourceTrackState.New;
+            // Back to where the row was, not to a hard-coded New: a cancelled
+            // library download that was already InLibrary must keep its tick.
+            item.Track.State = item.PriorState;
             item.Track.Progress = 0;
             item.Completion?.TrySetResult(null);
         }
@@ -381,6 +547,7 @@ public sealed class DownloadQueue : IDisposable
                 IndexInPlaylist = Math.Max(0, record.IndexInPlaylist),
                 LayoutOverride = record.LayoutOverride,
                 State = isFailed ? DownloadState.Failed : DownloadState.Queued,
+                PriorState = isFailed ? SourceTrackState.Failed : SourceTrackState.New,
                 // A restarted process gets a fresh retry budget; keeping a spent
                 // one would fail the item again on the first hiccup.
                 Attempts = isFailed ? record.Attempts : 0,
@@ -495,6 +662,41 @@ public sealed class DownloadQueue : IDisposable
 
         return JsonSerializer.Deserialize<QueueFile>(json, JsonOptions)?.Items
                ?? new List<QueueRecord>();
+    }
+
+    /// <summary>
+    /// Playlist provenance that queue.json still remembers: rows that were queued
+    /// but not yet finished when the app last stopped. Exact by remote id - used
+    /// once by <see cref="LibraryLedger"/> to name entries written before the
+    /// ledger recorded provenance. Never throws: an unreadable queue yields
+    /// nothing, because a missing hint is better than a wrong one.
+    /// </summary>
+    public static IReadOnlyDictionary<string, (string PlaylistName, MediaSource Source)> ReadPersistedProvenance()
+    {
+        var map = new Dictionary<string, (string, MediaSource)>(StringComparer.OrdinalIgnoreCase);
+
+        try
+        {
+            foreach (var record in LoadPersisted())
+            {
+                var key = string.IsNullOrWhiteSpace(record.Id) ? record.Key : record.Id;
+                if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(record.PlaylistName)) continue;
+                if (record.Kind != DownloadKind.Library) continue;
+
+                // Only an imported source can name a playlist in the rail; a
+                // Manual row's name is an app-owned list, where membership does
+                // not live in the ledger.
+                if (record.Source is not (MediaSource.Spotify or MediaSource.YouTube)) continue;
+
+                map[key.Trim()] = (record.PlaylistName!.Trim(), record.Source);
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"Could not read playlist provenance from queue.json: {ex.Message}");
+        }
+
+        return map;
     }
 
     private static QueueRecord ToRecord(DownloadItem item)
@@ -741,7 +943,11 @@ public sealed class DownloadQueue : IDisposable
                 var cover = await DownloadTagger.FetchCoverAsync(track.CoverUrl, token).ConfigureAwait(false);
                 await DownloadTagger.ApplyAsync(produced, track, cover, token).ConfigureAwait(false);
 
-                _ledger.Put(track.Id, produced, track.Title, track.Artist);
+                // Provenance travels with the file: "this download came from
+                // playlist X" survives the queue row being forgotten on completion.
+                _ledger.Put(track.Id, produced, track.Title, track.Artist,
+                    string.IsNullOrWhiteSpace(track.PlaylistName) ? null : track.PlaylistName,
+                    track.Source is MediaSource.Spotify or MediaSource.YouTube ? track.Source : null);
                 track.State = SourceTrackState.InLibrary;
                 track.LibraryPath = produced;
                 LibraryChanged?.Invoke();
@@ -749,7 +955,13 @@ public sealed class DownloadQueue : IDisposable
             }
             else
             {
-                track.LibraryPath = produced;
+                // A preview is NOT a library download: the file lives in the
+                // evictable stream cache, so it gets PreviewPath ("▶") and never
+                // LibraryPath ("✓"). The row also returns to the state it had
+                // before the queue touched it - leaving it at Downloading is
+                // exactly what produced the permanent "⋯ 0%" row.
+                track.PreviewPath = produced;
+                track.State = item.PriorState;
                 _cache.Evict();
             }
 
@@ -766,7 +978,9 @@ public sealed class DownloadQueue : IDisposable
             item.State = DownloadState.Cancelled;
             item.Error = null;
             item.Percent = 0;
-            track.State = SourceTrackState.New;
+            // Restore the pre-download state (New, or Failed on a retry) instead
+            // of leaving the row spinning at Downloading.
+            track.State = item.PriorState;
             track.Progress = 0;
             track.Error = null;
             item.Completion?.TrySetResult(null);
@@ -799,7 +1013,7 @@ public sealed class DownloadQueue : IDisposable
                     item.State = DownloadState.Cancelled;
                     item.Detail = null;
                     item.Percent = 0;
-                    track.State = SourceTrackState.New;
+                    track.State = item.PriorState;
                     track.Progress = 0;
                     item.Completion?.TrySetResult(null);
                     RequestSave();
@@ -814,7 +1028,12 @@ public sealed class DownloadQueue : IDisposable
             item.State = DownloadState.Failed;
             item.Error = DescribeFailure(ex);
             item.Detail = null;
-            track.State = SourceTrackState.Failed;
+            // Show the failure, but never overwrite a tick we still have: a track
+            // that was already in the library keeps it, and in no case may the
+            // row stay at Downloading.
+            track.State = item.PriorState == SourceTrackState.InLibrary
+                ? SourceTrackState.InLibrary
+                : SourceTrackState.Failed;
             track.Progress = 0;
             track.Error = item.Error;
             item.Completion?.TrySetResult(null);

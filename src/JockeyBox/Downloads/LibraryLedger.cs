@@ -1,5 +1,6 @@
 using System.IO;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using JockeyBox.Library;
 using JockeyBox.Sources;
 using JockeyBox.Tools;
@@ -8,19 +9,32 @@ namespace JockeyBox.Downloads;
 
 /// <summary>
 /// One downloaded track: the remote identity it was fetched for, where it landed
-/// in the library, and when it was added.
+/// in the library, when it was added, and which playlist it was downloaded from.
 /// </summary>
 /// <param name="SourceKey">Stable remote identity (Spotify track id / YouTube video id).</param>
 /// <param name="Path">Absolute path of the downloaded file.</param>
 /// <param name="Title">Track title as written to the file.</param>
 /// <param name="Artist">Track artist as written to the file.</param>
 /// <param name="AddedUtc">When the entry was first recorded.</param>
+/// <param name="PlaylistName">
+/// Playlist the download was started from, or null when unknown. Null is the
+/// honest answer for files downloaded before provenance existed - a source that
+/// was never recorded is never invented.
+/// </param>
+/// <param name="PlaylistSource">Which service that playlist belonged to; null when unknown.</param>
 public sealed record LedgerEntry(
     string SourceKey,
     string Path,
     string Title,
     string Artist,
-    DateTime AddedUtc);
+    DateTime AddedUtc,
+    string? PlaylistName = null,
+    MediaSource? PlaylistSource = null)
+{
+    /// <summary>True when this file remembers which playlist it came from.</summary>
+    [JsonIgnore]
+    public bool HasPlaylistProvenance => !string.IsNullOrWhiteSpace(PlaylistName);
+}
 
 /// <summary>
 /// Persistent record of what has already been downloaded, stored as JSON in
@@ -37,7 +51,12 @@ public class LibraryLedger
     private const string FileName = "ledger.json";
     private const string DirectoryName = "downloads";
 
-    private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        WriteIndented = true,
+        // Absent provenance means "unknown", so do not write nulls for it.
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    };
 
     private readonly object _gate = new();
     private readonly Dictionary<string, LedgerEntry> _entries = new(StringComparer.OrdinalIgnoreCase);
@@ -109,11 +128,78 @@ public class LibraryLedger
         }
     }
 
+    /// <summary>Entry pointing at <paramref name="path"/> (case-insensitive), or null.</summary>
+    public LedgerEntry? FindByPath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return null;
+
+        lock (_gate)
+        {
+            foreach (var entry in _entries.Values)
+            {
+                if (PathMatches(entry.Path, path.Trim())) return entry;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Every entry whose recorded provenance names <paramref name="playlistName"/>,
+    /// whatever service it was downloaded through. Only for playlists that carry no
+    /// service of their own (a hand-built list in the YouTube tab): there the name
+    /// is the only identity the ledger and the list share, and no other list claims
+    /// it. Service-imported lists must use <see cref="FindByPlaylist"/>.
+    /// </summary>
+    public IReadOnlyList<LedgerEntry> FindByPlaylistName(string playlistName)
+    {
+        if (string.IsNullOrWhiteSpace(playlistName)) return Array.Empty<LedgerEntry>();
+
+        var wanted = playlistName.Trim();
+
+        lock (_gate)
+        {
+            return _entries.Values
+                .Where(e => e.PlaylistSource is MediaSource.Spotify or MediaSource.YouTube
+                            && string.Equals((e.PlaylistName ?? "").Trim(), wanted, StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+        }
+    }
+
+    /// <summary>
+    /// Every entry whose recorded provenance names <paramref name="playlistName"/>
+    /// on <paramref name="source"/>. This is the honest answer for an imported
+    /// playlist whose remote rows are gone: the files still remember where they
+    /// came from.
+    /// </summary>
+    public IReadOnlyList<LedgerEntry> FindByPlaylist(string playlistName, MediaSource source)
+    {
+        if (string.IsNullOrWhiteSpace(playlistName)) return Array.Empty<LedgerEntry>();
+
+        var wanted = playlistName.Trim();
+
+        lock (_gate)
+        {
+            return _entries.Values
+                .Where(e => e.PlaylistSource == source
+                            && string.Equals((e.PlaylistName ?? "").Trim(), wanted, StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+        }
+    }
+
     /// <summary>
     /// Insert or update the entry for <paramref name="sourceKey"/> (case-insensitive)
     /// and persist. The original <see cref="LedgerEntry.AddedUtc"/> is kept on update.
+    /// Provenance follows the download that wrote the file: a later put without a
+    /// playlist name keeps the provenance already recorded rather than erasing it.
     /// </summary>
-    public void Put(string sourceKey, string path, string title, string artist)
+    public void Put(
+        string sourceKey,
+        string path,
+        string title,
+        string artist,
+        string? playlistName = null,
+        MediaSource? playlistSource = null)
     {
         if (string.IsNullOrWhiteSpace(sourceKey))
         {
@@ -125,8 +211,17 @@ public class LibraryLedger
 
         lock (_gate)
         {
-            var added = _entries.TryGetValue(key, out var existing) ? existing.AddedUtc : DateTime.UtcNow;
-            _entries[key] = new LedgerEntry(key, path ?? "", title ?? "", artist ?? "", added);
+            var hasPrior = _entries.TryGetValue(key, out var existing);
+            var added = hasPrior ? existing!.AddedUtc : DateTime.UtcNow;
+
+            var name = string.IsNullOrWhiteSpace(playlistName)
+                ? existing?.PlaylistName
+                : playlistName.Trim();
+            var source = string.IsNullOrWhiteSpace(playlistName)
+                ? existing?.PlaylistSource
+                : playlistSource ?? existing?.PlaylistSource;
+
+            _entries[key] = new LedgerEntry(key, path ?? "", title ?? "", artist ?? "", added, name, source);
             Save();
         }
     }
@@ -141,6 +236,81 @@ public class LibraryLedger
             if (!_entries.Remove(sourceKey.Trim())) return false;
             Save();
             return true;
+        }
+    }
+
+    /// <summary>
+    /// Drop every entry pointing at <paramref name="path"/> (case-insensitive),
+    /// used when a downloaded file is deleted from disk. Returns true when
+    /// something was removed.
+    /// </summary>
+    public bool RemoveByPath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return false;
+
+        var wanted = path.Trim();
+
+        lock (_gate)
+        {
+            var keys = _entries
+                .Where(pair => PathMatches(pair.Value.Path, wanted))
+                .Select(pair => pair.Key)
+                .ToList();
+
+            if (keys.Count == 0) return false;
+
+            foreach (var key in keys) _entries.Remove(key);
+            Log.Info($"LibraryLedger forgot {keys.Count} entr{(keys.Count == 1 ? "y" : "ies")} for '{wanted}'");
+            Save();
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Repoint every entry recorded at <paramref name="oldPath"/> to
+    /// <paramref name="newPath"/>, keeping its remote identity, metadata,
+    /// timestamp and playlist provenance. Used after a library file was renamed or
+    /// moved. Returns how many entries changed; nothing is written when none did,
+    /// so the call is idempotent.
+    /// </summary>
+    public int RepointPath(string oldPath, string newPath)
+    {
+        if (string.IsNullOrWhiteSpace(oldPath) || string.IsNullOrWhiteSpace(newPath)) return 0;
+
+        lock (_gate)
+        {
+            var keys = _entries
+                .Where(pair => PathMatches(pair.Value.Path, oldPath.Trim()))
+                .Select(pair => pair.Key)
+                .ToList();
+
+            if (keys.Count == 0) return 0;
+
+            foreach (var key in keys)
+                _entries[key] = _entries[key] with { Path = newPath.Trim() };
+
+            Save();
+            return keys.Count;
+        }
+    }
+
+    /// <summary>Case-insensitive path comparison, tolerating relative vs absolute forms.</summary>
+    private static bool PathMatches(string? candidate, string wanted)
+    {
+        if (string.IsNullOrWhiteSpace(candidate)) return false;
+
+        var trimmed = candidate.Trim();
+        if (string.Equals(trimmed, wanted, StringComparison.OrdinalIgnoreCase)) return true;
+
+        try
+        {
+            return string.Equals(
+                Path.GetFullPath(trimmed), Path.GetFullPath(wanted), StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception)
+        {
+            // An unusable path can only be compared literally, which already failed.
+            return false;
         }
     }
 
@@ -196,14 +366,84 @@ public class LibraryLedger
             var added = 0;
             foreach (var (key, path, title, artist) in pending)
             {
-                var addedUtc = _entries.TryGetValue(key, out var prior) ? prior.AddedUtc : now;
-                _entries[key] = new LedgerEntry(key, path, title, artist, addedUtc);
+                var prior = _entries.TryGetValue(key, out var recorded) ? recorded : null;
+                _entries[key] = new LedgerEntry(
+                    key, path, title, artist, prior?.AddedUtc ?? now, prior?.PlaylistName, prior?.PlaylistSource);
                 added++;
             }
 
             Log.Info($"LibraryLedger seeded {added} entr{(added == 1 ? "y" : "ies")} from the library index");
             Save();
             return added;
+        }
+    }
+
+    /// <summary>
+    /// Fill in provenance for entries written before the ledger had any.
+    ///
+    /// Two sources, both conservative:
+    /// <list type="bullet">
+    /// <item><paramref name="fromQueue"/> - queue.json still names the playlist for
+    /// rows that were queued but not finished at upgrade time. Exact: same key.</item>
+    /// <item><paramref name="fromPlaylists"/> - an imported playlist that still
+    /// holds the row and can prove the file is in the library. Used only to name an
+    /// entry that already exists, never to invent one, and only when the entry has
+    /// no provenance yet (first playlist wins).</item>
+    /// </list>
+    /// Nothing is guessed from tags: title/artist are already written at download
+    /// time, and a source that is not known stays null. Returns the number of
+    /// entries named.
+    /// </summary>
+    public int BackfillProvenance(
+        IReadOnlyDictionary<string, (string PlaylistName, MediaSource Source)>? fromQueue = null,
+        IEnumerable<(string SourceKey, string PlaylistName, MediaSource Source)>? fromPlaylists = null)
+    {
+        lock (_gate)
+        {
+            var named = 0;
+
+            if (fromQueue is { Count: > 0 })
+            {
+                foreach (var (key, hint) in fromQueue)
+                {
+                    if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(hint.PlaylistName)) continue;
+                    if (!_entries.TryGetValue(key.Trim(), out var entry)) continue;
+                    if (entry.HasPlaylistProvenance) continue;
+
+                    _entries[entry.SourceKey] = entry with
+                    {
+                        PlaylistName = hint.PlaylistName.Trim(),
+                        PlaylistSource = hint.Source,
+                    };
+                    named++;
+                }
+            }
+
+            if (fromPlaylists is not null)
+            {
+                foreach (var hint in fromPlaylists)
+                {
+                    if (string.IsNullOrWhiteSpace(hint.SourceKey) || string.IsNullOrWhiteSpace(hint.PlaylistName))
+                        continue;
+                    if (!_entries.TryGetValue(hint.SourceKey.Trim(), out var entry)) continue;
+                    if (entry.HasPlaylistProvenance) continue;
+
+                    _entries[entry.SourceKey] = entry with
+                    {
+                        PlaylistName = hint.PlaylistName.Trim(),
+                        PlaylistSource = hint.Source,
+                    };
+                    named++;
+                }
+            }
+
+            if (named > 0)
+            {
+                Log.Info($"LibraryLedger back-filled playlist provenance on {named} entr{(named == 1 ? "y" : "ies")}");
+                Save();
+            }
+
+            return named;
         }
     }
 
@@ -272,6 +512,11 @@ public class LibraryLedger
                 var json = File.ReadAllText(FilePath);
                 if (string.IsNullOrWhiteSpace(json)) return;
 
+                // A file without the provenance property was written before it
+                // existed: every entry in it is a candidate for the back-fill.
+                var legacy = !json.Contains("\"PlaylistName\"", StringComparison.Ordinal)
+                             && !json.Contains("\"PlaylistSource\"", StringComparison.Ordinal);
+
                 var loaded = JsonSerializer.Deserialize<List<LedgerEntry>>(json, JsonOptions);
                 if (loaded is null) return;
 
@@ -279,6 +524,14 @@ public class LibraryLedger
                 {
                     if (entry is null || string.IsNullOrWhiteSpace(entry.SourceKey)) continue;
                     _entries[entry.SourceKey.Trim()] = entry;
+                }
+
+                if (legacy && _entries.Count > 0)
+                {
+                    // queue.json is the only surviving record of which playlist a
+                    // track that was mid-download came from; ReadPersistedProvenance
+                    // never throws and returns nothing when the file is absent.
+                    BackfillProvenance(Downloads.DownloadQueue.ReadPersistedProvenance());
                 }
             }
             catch (Exception ex)

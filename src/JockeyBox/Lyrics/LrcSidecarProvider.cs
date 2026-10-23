@@ -9,6 +9,8 @@ namespace JockeyBox.Lyrics;
 /// </summary>
 public class LrcSidecarProvider : ILyricsProvider
 {
+    public string Id => "lrc";
+
     public string Name => "Local .lrc";
 
     public Task<LyricsDocument?> GetLyricsAsync(TrackEntry track, CancellationToken ct)
@@ -24,7 +26,7 @@ public class LrcSidecarProvider : ILyricsProvider
                 // Sanity cap: real .lrc files are a few KB; refuse absurd ones.
                 if (new FileInfo(lrcPath).Length > 2 * 1024 * 1024) continue;
 
-                var doc = LrcParser.Parse(File.ReadAllText(lrcPath), Name);
+                var doc = LrcParser.Parse(File.ReadAllText(lrcPath), Name, Id);
                 if (doc != null) return Task.FromResult<LyricsDocument?>(doc);
             }
             catch

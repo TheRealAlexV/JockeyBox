@@ -26,6 +26,8 @@ public class SpotifyColorLyricsProvider : ILyricsProvider
         _oauth = new SpotifyOAuthService(settings);
     }
 
+    public string Id => "spotify-color";
+
     public string Name => "Spotify Color Lyrics";
 
     public async Task<LyricsDocument?> GetLyricsAsync(TrackEntry track, CancellationToken ct)
@@ -122,6 +124,6 @@ public class SpotifyColorLyricsProvider : ILyricsProvider
         }
 
         if (parsed.Count == 0) return null;
-        return new LyricsDocument { Synced = synced, Lines = parsed, Source = Name };
+        return new LyricsDocument { Synced = synced, Lines = parsed, Source = Name, SourceId = Id };
     }
 }

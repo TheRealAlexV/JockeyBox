@@ -1,10 +1,13 @@
+using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
+using System.Windows.Threading;
 using JockeyBox.Library;
+using JockeyBox.Playback;
 using JockeyBox.ViewModels;
 
 namespace JockeyBox.Views;
@@ -19,16 +22,16 @@ public partial class MainWindow : Window
         _vm = new MainViewModel();
         DataContext = _vm;
 
-        // Play/Pause glyph + waveforms follow VM changes.
+        // Play/Pause glyph follows VM changes; each deck card owns its waveform.
         UpdatePlayGlyph();
         _vm.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName == nameof(MainViewModel.IsPlaying)) UpdatePlayGlyph();
-            if (e.PropertyName is nameof(MainViewModel.WaveformAData)
-                                 or nameof(MainViewModel.WaveformBData)
-                                 or nameof(MainViewModel.WaveformProgress))
-                DrawWaveforms();
+            // Turning word-follow on/off changes which line needs measuring.
+            if (e.PropertyName == nameof(MainViewModel.IsWordFollow)) ScheduleBallMeasure();
         };
+        _vm.DeckA.PropertyChanged += OnDeckPropertyChanged;
+        _vm.DeckB.PropertyChanged += OnDeckPropertyChanged;
 
         // Seek bar: suspend timer updates while the user is interacting, then
         // commit the seek on release. Preview events cover both thumb drags
@@ -40,6 +43,26 @@ public partial class MainWindow : Window
 
         // Keep the highlighted lyric centered in the panel.
         _vm.CurrentLyricChanged += ScrollLyricIntoCenter;
+
+        // The bouncing ball's geometry is a view concern: only the view can read
+        // where glyphs actually landed. Re-measure whenever the list scrolls or
+        // resizes, and whenever the VM reports a new active word.
+        _vm.CurrentWordChanged += ScheduleBallMeasure;
+        _vm.LyricLines.CollectionChanged += (_, _) => { _vm.ClearLyricWordGeometry(); ScheduleBallMeasure(); };
+        LyricsList.AddHandler(ScrollViewer.ScrollChangedEvent,
+            new ScrollChangedEventHandler((_, _) => ScheduleBallMeasure()), handledEventsToo: true);
+        LyricsBallCanvas.SizeChanged += (_, _) => ScheduleBallMeasure();
+
+        // Same rule as the browser tree: WPF does not select on right-click, and
+        // the timing menu acts on the selection. Keep a multi-row selection when
+        // the right-click lands on one of its rows.
+        LyricsList.PreviewMouseRightButtonDown += (_, e) =>
+        {
+            var item = FindAncestor<ListBoxItem>(e.OriginalSource as DependencyObject);
+            if (item == null || item.IsSelected) return;
+            LyricsList.SelectedItems.Clear();
+            item.IsSelected = true;
+        };
 
         // Karaoke generation flows that need dialogs.
         _vm.SettingsRequested += () => OpenSettings();
@@ -196,6 +219,24 @@ public partial class MainWindow : Window
             _vm.MakeKaraokeCommand.Execute(track);
     }
 
+    /// <summary>
+    /// "Set timing for selected lines": the ListBox owns the selection, so the
+    /// view maps the selected line view models back to their line indexes and
+    /// hands them to the view model. No lyrics, no synced times - the view model
+    /// reports why instead of guessing.
+    /// </summary>
+    private void OnSetLyricTimingForSelection(object sender, RoutedEventArgs e)
+    {
+        var indexes = new List<int>(LyricsList.SelectedItems.Count);
+        foreach (var item in LyricsList.SelectedItems)
+        {
+            var index = LyricsList.Items.IndexOf(item);
+            if (index >= 0) indexes.Add(index);
+        }
+
+        _vm.SetTimingForSelectedLines(indexes);
+    }
+
     /// <summary>Smoothly scroll the lyrics list so the current line sits centered.</summary>
     private void ScrollLyricIntoCenter(LyricLineViewModel line)
     {
@@ -204,6 +245,7 @@ public partial class MainWindow : Window
         if (container == null || scrollViewer == null)
         {
             LyricsList.ScrollIntoView(line); // fallback
+            ScheduleBallMeasure();
             return;
         }
 
@@ -212,6 +254,119 @@ public partial class MainWindow : Window
         var target = scrollViewer.VerticalOffset + topInViewport
                      - scrollViewer.ViewportHeight / 2 + container.ActualHeight / 2;
         scrollViewer.ScrollToVerticalOffset(Math.Max(0, target));
+        ScheduleBallMeasure();
+    }
+
+    // ---- bouncing ball geometry -------------------------------------------
+    //
+    // Measuring text is genuinely a view concern: only the visual tree knows
+    // where a word's glyphs landed after wrapping and scaling, and the
+    // ScrollViewer owns the vertical offset. The view model keeps the policy
+    // (which word, what motion); this half only reports boxes.
+
+    private bool _ballMeasureQueued;
+
+    /// <summary>
+    /// Queue one measurement pass. Loaded priority runs after the layout/render
+    /// pass that a scroll, resize or bold-word change just scheduled, so the
+    /// transforms read are the final ones. Coalesces bursts (30 Hz ticks,
+    /// scroll storms) into a single pass.
+    /// </summary>
+    private void ScheduleBallMeasure()
+    {
+        if (_ballMeasureQueued) return;
+        _ballMeasureQueued = true;
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(MeasureBallGeometry));
+    }
+
+    /// <summary>
+    /// Report the current line's word boxes to the view model, in the ball
+    /// canvas's coordinate space. Anything missing (container not realised,
+    /// mid-rebuild, words still collapsed) hides the ball instead of guessing.
+    /// </summary>
+    private void MeasureBallGeometry()
+    {
+        _ballMeasureQueued = false;
+
+        var line = _vm.CurrentLyricLine;
+        if (!_vm.IsWordFollow || line is null || !line.HasWords)
+        {
+            _vm.ClearLyricWordGeometry();
+            return;
+        }
+
+        if (LyricsList.ItemContainerGenerator.ContainerFromItem(line) is not FrameworkElement lineContainer)
+        {
+            _vm.ClearLyricWordGeometry(); // line not realised (list rebuilt)
+            return;
+        }
+
+        var wordsControl = FindDescendant<ItemsControl>(lineContainer);
+        if (wordsControl is null || wordsControl.Items.Count != line.Words.Count)
+        {
+            _vm.ClearLyricWordGeometry();
+            return;
+        }
+
+        var centres = new double[line.Words.Count];
+        double top = double.NaN;
+        for (int i = 0; i < centres.Length; i++)
+        {
+            if (wordsControl.ItemContainerGenerator.ContainerFromIndex(i) is not FrameworkElement wordBox
+                || !TryGetRectInBallCanvas(wordBox, out var rect))
+            {
+                _vm.ClearLyricWordGeometry();
+                return;
+            }
+
+            centres[i] = rect.Left + rect.Width / 2;
+            if (i == 0) top = rect.Top;
+        }
+
+        if (double.IsNaN(top))
+        {
+            _vm.ClearLyricWordGeometry();
+            return;
+        }
+
+        _vm.SetLyricWordGeometry(line, top, centres);
+    }
+
+    /// <summary>
+    /// A word's box in the ball canvas's coordinates. The canvas overlays the
+    /// list rather than containing it, so both are mapped into their common
+    /// parent and the canvas origin is subtracted.
+    /// </summary>
+    private bool TryGetRectInBallCanvas(FrameworkElement element, out Rect rect)
+    {
+        rect = Rect.Empty;
+        if (element.ActualWidth <= 0 || element.ActualHeight <= 0) return false;
+        if (LyricsBallCanvas.Parent is not Visual root) return false;
+
+        try
+        {
+            var origin = element.TransformToAncestor(root).Transform(new Point(0, 0));
+            var canvasOrigin = LyricsBallCanvas.TransformToAncestor(root).Transform(new Point(0, 0));
+            rect = new Rect(origin.X - canvasOrigin.X, origin.Y - canvasOrigin.Y,
+                            element.ActualWidth, element.ActualHeight);
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            // Detached / reparented while the pass was queued.
+            return false;
+        }
+    }
+
+    private static T? FindDescendant<T>(DependencyObject root) where T : DependencyObject
+    {
+        if (root is T match) return match;
+        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
+        {
+            var found = FindDescendant<T>(VisualTreeHelper.GetChild(root, i));
+            if (found != null) return found;
+        }
+        return null;
     }
 
     private static ScrollViewer? FindScrollViewer(DependencyObject root)
@@ -225,36 +380,95 @@ public partial class MainWindow : Window
         return null;
     }
 
-    // ---- waveform rendering ------------------------------------------------
+    // ---- per-deck waveform rendering ---------------------------------------
 
-    private void OnWaveformSizeChanged(object sender, SizeChangedEventArgs e) => DrawWaveforms();
+    private readonly List<Canvas> _deckWaveforms = new();
+    private readonly Dictionary<Canvas, Line> _deckPlayheads = new();
 
-    private void DrawWaveforms()
+    private void OnDeckWaveformLoaded(object sender, RoutedEventArgs e)
     {
-        var w = WaveformCanvas.ActualWidth;
-        var h = WaveformCanvas.ActualHeight;
-        if (w <= 0 || h <= 0) return;
-
-        WaveformCanvas.Children.Clear();
-
-        RenderWaveform(_vm.WaveformAData, w, h, Color.FromRgb(0x00, 0xC8, 0xFF), 0, h / 2);
-        RenderWaveform(_vm.WaveformBData, w, h, Color.FromRgb(0xFF, 0x3D, 0xAD), h / 2, h / 2);
-
-        // Playhead line
-        var px = _vm.WaveformProgress * w;
-        WaveformCanvas.Children.Add(new System.Windows.Shapes.Line
-        {
-            X1 = px, Y1 = 0, X2 = px, Y2 = h,
-            Stroke = new SolidColorBrush(Color.FromRgb(0xE8, 0xEA, 0xED)),
-            StrokeThickness = 1.5,
-        });
+        if (sender is not Canvas canvas) return;
+        if (!_deckWaveforms.Contains(canvas)) _deckWaveforms.Add(canvas);
+        DrawDeckWaveform(canvas);
     }
 
-    private void RenderWaveform(List<float> data, double canvasW, double canvasH,
-                                Color color, double yOffset, double stripH)
+    private void OnDeckWaveformSizeChanged(object sender, SizeChangedEventArgs e)
     {
-        if (data.Count < 2) return;
-        var polyline = new System.Windows.Shapes.Polyline
+        if (sender is Canvas canvas) DrawDeckWaveform(canvas);
+    }
+
+    /// <summary>A deck's wave data changed (load / karaoke partner found).</summary>
+    private void OnDeckPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(DeckViewModel.Waveform)
+                             or nameof(DeckViewModel.KaraokeWaveform))
+        {
+            DrawDeckWaveforms();
+            return;
+        }
+
+        // The 30 Hz clock only moves the playhead: no need to rebuild the peaks.
+        if (e.PropertyName == nameof(DeckViewModel.WaveformProgress))
+            MoveDeckPlayheads();
+    }
+
+    private void DrawDeckWaveforms()
+    {
+        foreach (var canvas in _deckWaveforms) DrawDeckWaveform(canvas);
+    }
+
+    private void MoveDeckPlayheads()
+    {
+        foreach (var (canvas, line) in _deckPlayheads)
+        {
+            var x = canvas.ActualWidth * GetProgress(canvas);
+            line.X1 = x;
+            line.X2 = x;
+        }
+    }
+
+    private static double GetProgress(Canvas canvas) =>
+        canvas.DataContext is DeckViewModel deck ? deck.WaveformProgress : 0;
+
+    private void DrawDeckWaveform(Canvas canvas)
+    {
+        var w = canvas.ActualWidth;
+        var h = canvas.ActualHeight;
+        if (w <= 0 || h <= 0) return;
+
+        canvas.Children.Clear();
+
+        var isKaraoke = canvas.Tag as string == "karaoke";
+        var deck = canvas.DataContext as DeckViewModel;
+        var data = isKaraoke ? deck?.KaraokeWaveform : deck?.Waveform;
+
+        var accent = deck?.DeckTarget == PlaybackDeck.B
+            ? Color.FromRgb(0xFF, 0x3D, 0xAD)
+            : Color.FromRgb(0x00, 0xC8, 0xFF);
+        // The karaoke stem is the same colour, a shade softer, so the two strips
+        // read as one track without the sub-stem competing for attention.
+        var color = isKaraoke
+            ? Color.FromArgb(0xB0, accent.R, accent.G, accent.B)
+            : accent;
+
+        if (data != null && data.Count > 1)
+            RenderWaveform(canvas, data, w, h, color);
+
+        var x = w * GetProgress(canvas);
+        var playhead = new Line
+        {
+            X1 = x, Y1 = 0, X2 = x, Y2 = h,
+            Stroke = new SolidColorBrush(Color.FromRgb(0xE8, 0xEA, 0xED)),
+            StrokeThickness = 1.5,
+        };
+        canvas.Children.Add(playhead);
+        _deckPlayheads[canvas] = playhead;
+    }
+
+    private static void RenderWaveform(Canvas canvas, IReadOnlyList<float> data,
+                                      double canvasW, double canvasH, Color color)
+    {
+        var polyline = new Polyline
         {
             Stroke = new SolidColorBrush(color),
             StrokeThickness = 1,
@@ -266,22 +480,41 @@ public partial class MainWindow : Window
         {
             double x = i / (double)(data.Count - 1) * canvasW;
             double amp = data[i];
-            double y = yOffset + (1 - amp) * (stripH * 0.9) + stripH * 0.05;
+            double y = (1 - amp) * (canvasH * 0.9) + canvasH * 0.05;
             points.Add(new Point(x, y));
         }
         polyline.Points = points;
 
         // Fill polygon (mirrors the peak shape)
-        var fillPoints = new PointCollection(points);
-        fillPoints.Add(new Point(canvasW, yOffset + stripH));
-        fillPoints.Add(new Point(0, yOffset + stripH));
-        var polygon = new System.Windows.Shapes.Polygon
+        var fillPoints = new PointCollection(points)
+        {
+            new Point(canvasW, canvasH),
+            new Point(0, canvasH),
+        };
+        var polygon = new Polygon
         {
             Points = fillPoints,
             Fill = new SolidColorBrush(Color.FromArgb(30, color.R, color.G, color.B)),
         };
 
-        WaveformCanvas.Children.Add(polygon);
-        WaveformCanvas.Children.Add(polyline);
+        canvas.Children.Add(polygon);
+        canvas.Children.Add(polyline);
+    }
+
+    // ---- deck seek bars (inside the deck card template) --------------------
+
+    private void OnDeckSeekStart(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is FrameworkElement { DataContext: DeckViewModel deck }) deck.BeginSeek();
+    }
+
+    private void OnDeckSeekEnd(object sender, MouseButtonEventArgs e) => CommitDeckSeek(sender);
+
+    private void OnDeckSeekLostCapture(object sender, MouseEventArgs e) => CommitDeckSeek(sender);
+
+    private static void CommitDeckSeek(object sender)
+    {
+        if (sender is Slider { DataContext: DeckViewModel deck } slider)
+            deck.EndSeek(slider.Value);
     }
 }
