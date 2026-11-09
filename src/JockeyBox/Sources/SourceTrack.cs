@@ -50,11 +50,19 @@ public partial class SourceTrack : ObservableObject
     public string? VideoId { get; set; }
 
     /// <summary>
-    /// Musical key ("8A", "Am") when a remote API or a local tag supplies one.
-    /// Null when unknown: the remote row falls back to its em dash rather than
-    /// inventing a key.
+    /// Musical key in Camelot notation ("8A", "12B") when a remote API or a
+    /// local tag supplies one. The setter normalises a note name ("Am") into
+    /// the same dialect as everything else and keeps an unrecognised value
+    /// verbatim. Null when unknown: the remote row falls back to its em dash
+    /// rather than inventing a key.
     /// </summary>
-    public string? Key { get; set; }
+    public string? Key
+    {
+        get => _key;
+        set => _key = KeyNotation.Normalize(value, out _);
+    }
+
+    private string? _key;
 
     /// <summary>Name of the playlist this track was imported from - used by the playlist layout preset.</summary>
     public string? PlaylistName { get; set; }

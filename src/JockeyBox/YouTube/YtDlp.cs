@@ -3,7 +3,6 @@ using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 using JockeyBox.Settings;
 using JockeyBox.Tools;
 
@@ -73,9 +72,6 @@ public static class YtDlp
 {
     private const int BufferSize = 4096;
     private const int StderrTailLines = 20;
-
-    private static readonly Regex BareVideoIdRegex =
-        new("^[A-Za-z0-9_-]{11}$", RegexOptions.Compiled);
 
     /// <summary>
     /// Searches YouTube. The query is turned into "ytsearchN:query" unless it
@@ -594,7 +590,7 @@ public static class YtDlp
         if (input.Length == 0)
             throw new ArgumentException("A video id or URL is required.", nameof(urlOrId));
 
-        if (BareVideoIdRegex.IsMatch(input))
+        if (YouTubeId.Video.IsMatch(input))
             return $"https://www.youtube.com/watch?v={input}";
 
         if (input.StartsWith("http", StringComparison.OrdinalIgnoreCase)) return input;

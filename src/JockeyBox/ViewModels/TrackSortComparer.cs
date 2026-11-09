@@ -68,7 +68,7 @@ public sealed class TrackSortComparer : IComparer, IComparer<TrackEntry>
     {
         TrackSortField.Artist => CompareText(a.Artist, b.Artist),
         TrackSortField.Bpm => CompareNumber(Number(a.Bpm), Number(b.Bpm)),
-        TrackSortField.Key => CompareText(NonEmpty(a.Key), NonEmpty(b.Key)),
+        TrackSortField.Key => CompareKey(NonEmpty(a.Key), NonEmpty(b.Key)),
         TrackSortField.Length => CompareNumber(Number(a.Duration), Number(b.Duration)),
         _ => CompareText(a.Title, b.Title),
     };
@@ -78,7 +78,7 @@ public sealed class TrackSortComparer : IComparer, IComparer<TrackEntry>
     {
         TrackSortField.Artist => CompareText(a.Artist, b.Artist),
         TrackSortField.Bpm => CompareNumber(SourceBpm(a), SourceBpm(b)),
-        TrackSortField.Key => CompareText(SourceKey(a), SourceKey(b)),
+        TrackSortField.Key => CompareKey(SourceKey(a), SourceKey(b)),
         TrackSortField.Length => CompareNumber(Number(a.DurationMs), Number(b.DurationMs)),
         _ => CompareText(a.Title, b.Title),
     };
@@ -98,6 +98,25 @@ public sealed class TrackSortComparer : IComparer, IComparer<TrackEntry>
         var bMissing = b is null;
         if (aMissing || bMissing) return aMissing == bMissing ? 0 : aMissing ? 1 : -1;
         return _descending ? Text(b!, a!) : Text(a!, b!);
+    }
+
+    /// <summary>
+    /// Camelot order: number first, then letter, so the column reads
+    /// 1A, 1B, 2A ... 12B instead of the lexicographic 10A, 11A, 12A, 1A.
+    /// A missing or unparseable key groups last in both directions and
+    /// compares equal within the group, exactly like the other fields.
+    /// Note names are accepted here as well, so a value that skipped
+    /// normalisation still sorts on the wheel rather than as text.
+    /// </summary>
+    private int CompareKey(string? a, string? b)
+    {
+        var hasA = KeyNotation.TryParseCamelot(a, out var aNumber, out var aLetter);
+        var hasB = KeyNotation.TryParseCamelot(b, out var bNumber, out var bLetter);
+        if (!hasA || !hasB) return hasA == hasB ? 0 : hasA ? -1 : 1;
+
+        var byNumber = aNumber.CompareTo(bNumber);
+        var result = byNumber != 0 ? byNumber : aLetter.CompareTo(bLetter);
+        return _descending ? -result : result;
     }
 
     /// <summary>Missing numbers sort last both ways; present numbers swap operands for descending.</summary>

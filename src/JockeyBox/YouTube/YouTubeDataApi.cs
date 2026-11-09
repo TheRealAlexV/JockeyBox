@@ -521,9 +521,7 @@ public sealed class YouTubeDataApi
     }
 
     private static bool IsVideoId(string? videoId) =>
-        videoId is { Length: 11 } && VideoIdRegex.IsMatch(videoId);
-
-    private static readonly Regex VideoIdRegex = new("^[A-Za-z0-9_-]{11}$", RegexOptions.Compiled);
+        videoId is { Length: 11 } && YouTubeId.Video.IsMatch(videoId);
 
     private static string NormalizePrivacy(string privacy) =>
         privacy?.Trim().ToLowerInvariant() switch
