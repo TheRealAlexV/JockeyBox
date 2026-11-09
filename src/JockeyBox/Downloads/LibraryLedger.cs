@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using JockeyBox.Library;
@@ -62,9 +62,7 @@ public class LibraryLedger
     private readonly Dictionary<string, LedgerEntry> _entries = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>%APPDATA%\JockeyBox\downloads\ledger.json</summary>
-    public static string FilePath { get; } = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-        "JockeyBox", DirectoryName, FileName);
+    public static string FilePath { get; } = Path.Combine(AppPaths.Home, DirectoryName, FileName);
 
     /// <summary>Load the ledger from disk; a missing or corrupt file yields an empty ledger.</summary>
     public LibraryLedger()
@@ -217,9 +215,11 @@ public class LibraryLedger
             var name = string.IsNullOrWhiteSpace(playlistName)
                 ? existing?.PlaylistName
                 : playlistName.Trim();
-            var source = string.IsNullOrWhiteSpace(playlistName)
-                ? existing?.PlaylistSource
-                : playlistSource ?? existing?.PlaylistSource;
+            // Provenance is independent of the playlist *name*: a single video
+            // downloaded outside any playlist still came from YouTube (or
+            // Spotify), and that is the only evidence the Downloaded view has.
+            // A put that knows no source keeps whatever was recorded before.
+            var source = playlistSource ?? existing?.PlaylistSource;
 
             _entries[key] = new LedgerEntry(key, path ?? "", title ?? "", artist ?? "", added, name, source);
             Save();

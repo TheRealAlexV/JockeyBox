@@ -1,5 +1,7 @@
+using System.Collections;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Windows;
@@ -7,6 +9,7 @@ using System.Windows.Data;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using JockeyBox.Downloads;
+using JockeyBox.Data;
 using JockeyBox.Lyrics;
 using JockeyBox.Playback;
 using JockeyBox.Settings;
@@ -39,6 +42,12 @@ public partial class SpotifyViewModel : ObservableObject
     private readonly Func<SourceTrack, Task> _play;
     private readonly Action<SourceTrack>? _addToQueue;
 
+    /// <summary>
+    /// Library-side verbs for a remote row (own playlists, karaoke facts, reveal,
+    /// separate). Owned by MainViewModel; null only in design-time/unit contexts.
+    /// </summary>
+    private readonly RemoteTrackHost? _remote;
+
     /// <summary>Streams auditions through yt-dlp | ffplay; owns no deck state.</summary>
     private readonly StreamPreviewTransport _stream;
 
@@ -47,6 +56,9 @@ public partial class SpotifyViewModel : ObservableObject
 
     /// <summary>Cancels the previous playlist's track fetch when the selection changes.</summary>
     private CancellationTokenSource? _loadCts;
+
+    /// <summary>Selection -> painted rows, for the switch timing line.</summary>
+    private System.Diagnostics.Stopwatch? _switchWatch;
 
     /// <summary>The playlist whose tracks are currently in <see cref="Tracks"/>; null while loading.</summary>
     private string? _tracksOwnerId;
@@ -64,7 +76,8 @@ public partial class SpotifyViewModel : ObservableObject
                             Func<SourceTrack, Task> play,
                             IPreviewTransport? previewTransport = null,
                             Action<SourceTrack>? addToQueue = null,
-                            StreamPreviewTransport? streamPreview = null)
+                            StreamPreviewTransport? streamPreview = null,
+                            RemoteTrackHost? remoteHost = null)
     {
         _settings = settings;
         _store = store;
@@ -74,6 +87,12 @@ public partial class SpotifyViewModel : ObservableObject
         _api = new SpotifyApi(settings, oauth);
         _play = play;
         _addToQueue = addToQueue;
+        _remote = remoteHost;
+
+        // "Add to playlist ▸" on the track menu: the user's own playlists, plus
+        // create-and-add. A row only needs to exist, not to be downloaded.
+        if (_remote is not null)
+            LibraryPlaylists = new RemotePlaylistTargets(store, _remote.AddToPlaylist);
 
         // Preview = a real stream (yt-dlp piped into ffplay, nothing written to
         // disk). The deck transport can no longer be the preview transport:
@@ -88,6 +107,7 @@ public partial class SpotifyViewModel : ObservableObject
 
         TracksView = CollectionViewSource.GetDefaultView(Tracks);
         TracksView.Filter = FilterTrack;
+        ApplySortOrder();
 
         _queue.ItemFinished += item => Dispatcher(() =>
         {
@@ -117,7 +137,7 @@ public partial class SpotifyViewModel : ObservableObject
     public PreviewBarViewModel Preview { get; }
 
     public ObservableCollection<SpotifyPlaylistInfo> Playlists { get; } = new();
-    public ObservableCollection<SourceTrack> Tracks { get; } = new();
+    public BulkObservableCollection<SourceTrack> Tracks { get; } = new();
     public ICollectionView TracksView { get; }
 
     [ObservableProperty]
@@ -156,9 +176,20 @@ public partial class SpotifyViewModel : ObservableObject
     [ObservableProperty]
     [NotifyCanExecuteChangedFor(nameof(AddSelectedToSpotifyPlaylistCommand))]
     [NotifyCanExecuteChangedFor(nameof(RemoveSelectedFromSpotifyPlaylistCommand))]
+    [NotifyCanExecuteChangedFor(nameof(SeparateSelectedKaraokeCommand))]
+    [NotifyCanExecuteChangedFor(nameof(RevealSelectedFileCommand))]
+    [NotifyPropertyChangedFor(nameof(HasLocalFileForSelected))]
     private SourceTrack? _selectedTrack;
 
     [ObservableProperty] private string _filterText = "";
+
+    /// <summary>
+    /// The shared strip's sort state, applied to <see cref="TracksView"/> by
+    /// <see cref="ApplySortOrder"/>. Kept here because the view is what is bound:
+    /// the strip only holds the intent while the collection is replaced.
+    /// </summary>
+    private TrackSortField _sortField = TrackSortField.TrackName;
+    private bool _sortDescending;
 
     /// <summary>Name typed into the "+ New" box on the Spotify tab.</summary>
     [ObservableProperty]
@@ -924,6 +955,7 @@ public partial class SpotifyViewModel : ObservableObject
         // and silently replaces the table - and "Download all" then queues it.
         CancelTrackLoad();
         if (value == null) return;
+        _switchWatch = System.Diagnostics.Stopwatch.StartNew();
         _ = LoadTracksAsync(value);
     }
 
@@ -944,14 +976,28 @@ public partial class SpotifyViewModel : ObservableObject
         try
         {
             StatusText = $"Loading {info.Name}\u2026";
+            var fromCache = _trackCache.ContainsKey(info.Id);
             var list = await FetchTracksAsync(info.Id, info.Name, info.IsLikedSongs, cts.Token).ConfigureAwait(true);
             if (cts.IsCancellationRequested || !ReferenceEquals(SelectedPlaylist, info)) return;
 
-            Tracks.Clear();
-            foreach (var track in list) Tracks.Add(track);
+            // One Reset instead of n Adds: a several-thousand-track list costs one
+            // layout pass in the grid.
+            Tracks.ReplaceAll(list);
             _tracksOwnerId = info.Id;
+            // The view survives the swap; re-apply the strip's order so a reload
+            // (playlist switch or sync) lands sorted instead of in API order.
+            ApplySortOrder();
             UpdateCounts();
             StatusText = $"{info.Name} \u00b7 {list.Count} track(s).";
+
+            var watch = _switchWatch;
+            _switchWatch = null;
+            if (watch is not null)
+            {
+                Log.Info(
+                    $"playlist switch '{info.Name}': {list.Count} rows in " +
+                    $"{watch.Elapsed.TotalMilliseconds:F0} ms (source={(fromCache ? "cache" : "api")})");
+            }
         }
         catch (OperationCanceledException)
         {
@@ -991,15 +1037,125 @@ public partial class SpotifyViewModel : ObservableObject
     /// <summary>Mark tracks the library already holds so the grid shows ticks immediately.</summary>
     private List<SourceTrack> Reconcile(IEnumerable<SourceTrack> tracks)
     {
+        // Disk first: ReconcileTrack may adopt the ledger's path for a row that
+        // never stored one, and the karaoke pass then matches on that path.
         foreach (var track in tracks) ReconcileTrack(track);
+
+        // Karaoke availability comes from the scan index, not from the disk: one
+        // dictionary hit per row, once per fetched playlist, never per repaint.
+        _remote?.Karaoke.Apply(tracks);
         return tracks.ToList();
+    }
+
+    // ---- library verbs on a remote row -------------------------------------
+
+    /// <summary>
+    /// "Add to playlist ▸" data: the user's own playlists plus create-and-add.
+    /// Null only when the host was not supplied (design-time, unit tests).
+    /// </summary>
+    public RemotePlaylistTargets? LibraryPlaylists { get; }
+
+    /// <summary>True when the selected row's file is on disk, so reveal/separate work.</summary>
+    public bool HasLocalFileForSelected => SelectedTrack?.LocalEntry is not null;
+
+    /// <summary>Re-read the internal playlists (another window/tab wrote one).</summary>
+    public void RefreshLibraryPlaylists() => LibraryPlaylists?.Refresh();
+
+    /// <summary>Repaint karaoke availability on every row after a library scan.</summary>
+    public void ApplyLibraryFacts()
+    {
+        _remote?.Karaoke.Apply(Tracks);
+        OnPropertyChanged(nameof(HasLocalFileForSelected));
+    }
+
+    /// <summary>
+    /// Add the selected Spotify row to one of the user's own playlists. The row
+    /// need not be downloaded: the playlist keeps its Spotify/YouTube identity
+    /// and picks up the library file once one exists.
+    /// </summary>
+    [RelayCommand]
+    private void AddToInternalPlaylist(RemotePlaylistChoice? choice)
+    {
+        if (SelectedTrack is not { } track || LibraryPlaylists is null || choice is null) return;
+
+        LibraryPlaylists.Choose(choice, track);
+        if (choice.Playlist is { } playlist)
+            StatusText = $"Added \u201c{track.DisplayName}\u201d to {playlist.Name}.";
+        else
+            StatusText = $"Created a playlist with \u201c{track.DisplayName}\u201d.";
+    }
+
+    /// <summary>Separate karaoke for the selected row's local file (disabled until it exists).</summary>
+    [RelayCommand(CanExecute = nameof(HasLocalFileForSelected))]
+    private void SeparateSelectedKaraoke()
+    {
+        if (SelectedTrack is not { } track) return;
+        _remote?.MakeKaraoke(track);
+    }
+
+    /// <summary>Show the selected row's local file in Explorer (disabled until it exists).</summary>
+    [RelayCommand(CanExecute = nameof(HasLocalFileForSelected))]
+    private void RevealSelectedFile()
+    {
+        if (SelectedTrack is not { } track) return;
+        _remote?.RevealLocalFile(track);
+    }
+
+    /// <summary>Copy the selected row's link (its resolved YouTube upload).</summary>
+    [RelayCommand]
+    private void CopySelectedLink()
+    {
+        var url = string.IsNullOrWhiteSpace(SelectedTrack?.VideoId)
+            ? null
+            : $"https://www.youtube.com/watch?v={SelectedTrack!.VideoId}";
+        if (url is null)
+        {
+            StatusText = "No link for that row yet \u2014 find versions first.";
+            return;
+        }
+
+        try
+        {
+            Clipboard.SetText(url);
+            StatusText = "Link copied.";
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Could not copy the link: {ex.Message}";
+        }
+    }
+
+    /// <summary>Open the selected row on Spotify's web player (no API call, just the id).</summary>
+    [RelayCommand]
+    private void OpenSelectedInSpotify()
+    {
+        var id = SelectedTrack?.Id;
+        if (string.IsNullOrWhiteSpace(id))
+        {
+            StatusText = "That row has no Spotify id.";
+            return;
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo($"https://open.spotify.com/track/{id}")
+            {
+                UseShellExecute = true,
+            });
+            StatusText = "Opened in the browser.";
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Could not open the browser: {ex.Message}";
+        }
     }
 
     /// <summary>
     /// Re-derive every visible row after the library changed underneath it (a
-    /// download deleted from the Downloads window). These are this tab's own
-    /// track objects - the playlist store's sanitize pass cannot reach them -
-    /// and the delete arrives on a worker thread, hence the dispatcher hop.
+    /// download deleted from the status console's Downloads tab). These are this
+    /// tab's own track objects - the playlist store's sanitize pass cannot
+    /// reach them - and the delete arrives on a worker thread, hence the
+    /// dispatcher hop.
     /// </summary>
     public void ReconcileFromLibrary()
     {
@@ -1016,6 +1172,32 @@ public partial class SpotifyViewModel : ObservableObject
     /// Downloading row that no worker owns is stale and gets re-derived here, so
     /// a cancelled or failed download cannot wedge the row forever.
     /// </summary>
+    /// <summary>
+    /// artist+title view of the download ledger, rebuilt only when the ledger's
+    /// entry count changes. A per-row <c>FindPathByLibraryKey</c> is a full walk of
+    /// the ledger (the ledger is keyed by remote id), so re-deriving 5 000 rows
+    /// used to cost 5 000 walks; this makes each row one dictionary hit.
+    /// </summary>
+    private LibraryLedgerIndex LedgerIndex
+    {
+        get
+        {
+            var count = _ledger.Entries.Count;
+            if (_ledgerIndex is null || _ledgerIndexCount != count)
+            {
+                _ledgerIndex = LibraryLedgerIndex.Build(_ledger);
+                _ledgerIndexCount = count;
+            }
+            return _ledgerIndex;
+        }
+    }
+
+    /// <summary>Index over <see cref="LedgerIndex"/>; invalidated by the entry count.</summary>
+    private LibraryLedgerIndex? _ledgerIndex;
+
+    /// <summary>Ledger entry count the cached index was built from.</summary>
+    private int _ledgerIndexCount = -1;
+
     private void ReconcileTrack(SourceTrack track)
     {
         if (track.IsTransferring) return;
@@ -1025,7 +1207,7 @@ public partial class SpotifyViewModel : ObservableObject
         // falls through to the disk re-derivation below.
         if (track.IsBusy && QueueOwns(track)) return;
 
-        var existing = _ledger.FindPathByLibraryKey(track.Artist, track.Title);
+        var existing = LedgerIndex.FindPath(track.Artist, track.Title);
         if (!string.IsNullOrWhiteSpace(existing) && File.Exists(existing))
         {
             track.State = SourceTrackState.InLibrary;
@@ -1078,6 +1260,41 @@ public partial class SpotifyViewModel : ObservableObject
     // ---- helpers ----------------------------------------------------------
 
     partial void OnFilterTextChanged(string value) => TracksView.Refresh();
+
+    /// <summary>
+    /// The shared strip's sort callback. Ordering is a comparer on the view rather
+    /// than SortDescriptions because the sort keys a Spotify row reaches are not
+    /// all properties of the row: BPM and key live on its library entry
+    /// (<see cref="SourceTrack.LocalEntry"/>), and the comparer is what keeps rows
+    /// with no value grouped instead of scattered by the view's null handling.
+    /// </summary>
+    public void ApplySort(TrackSortField field, bool descending)
+    {
+        _sortField = field;
+        _sortDescending = descending;
+        ApplySortOrder();
+    }
+
+    private void ApplySortOrder()
+    {
+        // GetDefaultView over an ObservableCollection is a ListCollectionView, and
+        // CustomSort is re-set after every reload so new rows are never left in
+        // API order. Filtering still runs through FilterTrack, so the survivors of
+        // a filter are the only rows this order applies to.
+        //
+        // WPF sorts CustomSort with ArrayList.Sort (introsort, unstable), so tied
+        // rows need the arrival rank to keep playlist order here and match the
+        // library tree. The map is rebuilt from the current list every time the
+        // sort is applied; the list itself is never reordered by the view, so its
+        // index is the arrival order.
+        if (TracksView is ListCollectionView view)
+        {
+            var rank = new Dictionary<object, int>(
+                Tracks.Count, ReferenceEqualityComparer.Instance);
+            for (var i = 0; i < Tracks.Count; i++) rank[Tracks[i]] = i;
+            view.CustomSort = new TrackSortComparer(_sortField, _sortDescending, rank);
+        }
+    }
 
     private bool FilterTrack(object obj)
     {

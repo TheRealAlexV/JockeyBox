@@ -1,10 +1,11 @@
-using System.IO;
+﻿using System.IO;
 using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using JockeyBox.Library;
 using JockeyBox.Settings;
+using JockeyBox.Tools;
 
 namespace JockeyBox.Lyrics;
 
@@ -57,9 +58,7 @@ public class LyricsService
         SourceNames = _providers.Select(p => p.Name).ToArray();
         SourceIds = _providers.Select(p => p.Id).ToArray();
 
-        _cacheDir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-            "JockeyBox", "lyrics");
+        _cacheDir = Path.Combine(AppPaths.Home, "lyrics");
         Directory.CreateDirectory(_cacheDir);
     }
 

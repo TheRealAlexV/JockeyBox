@@ -13,19 +13,52 @@
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- Preview player is win-x64 only; skip the 32-bit libVLC payload. -->
+    <VlcWindowsX86Enabled>false</VlcWindowsX86Enabled>
   </PropertyGroup>
+
+  <!--
+    libVLC resolves its plugins relative to libvlc.dll on disk, so the native
+    payload must stay loose next to the exe. Left alone, PublishSingleFile folds
+    it into the bundle and extracts it to a directory libVLC never searches.
+  -->
+  <Target Name="KeepLibVlcPayloadLoose" BeforeTargets="_ComputeFilesToBundle">
+    <ItemGroup>
+      <ResolvedFileToPublish Update="@(ResolvedFileToPublish)"
+          Condition="$([System.String]::Copy('%(ResolvedFileToPublish.RelativePath)').Contains('libvlc'))">
+        <ExcludeFromSingleFile>true</ExcludeFromSingleFile>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
 
   <ItemGroup>
     <!-- Audio engine: WASAPI multi-device output, sample providers, resampling -->
     <PackageReference Include="NAudio" Version="2.2.1" />
     <!-- ID3 / metadata reading (mp3, flac, m4a, ...) -->
     <PackageReference Include="TagLibSharp" Version="2.3.0" />
+    <!-- Preview auditioning: seekable playback of a yt-dlp -g direct URL.
+         libVLC is LGPL-2.1+; the unmodified native DLLs ship alongside the app. -->
+    <PackageReference Include="LibVLCSharp" Version="3.9.5" />
+    <PackageReference Include="LibVLCSharp.WPF" Version="3.9.5" />
+    <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.21" />
     <!-- MVVM helpers (ObservableObject, RelayCommand) -->
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.2.2" />
     <!-- Installer/update framework (Setup.exe built from WSL via vpk) -->
     <PackageReference Include="Velopack" Version="0.0.1298" />
     <!-- DPAPI (CurrentUser) encryption for stored credentials -->
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+    <!-- 2.0: key-locked tempo (time-stretch) with an NAudio bridge; LGPL-2.1, see docs/research-2.0.md -->
+    <PackageReference Include="SoundTouch.Net" Version="2.3.2" />
+    <PackageReference Include="SoundTouch.Net.NAudioSupport.Core" Version="2.3.2" />
+    <!-- 2.0: embedded track/playlist database (WAL + FTS5) -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.32" />
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.14" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Ships the offline BPM/beat-grid + key analysers next to the app (run with the app's own venv python). -->
+    <None Include="AnalysisScripts\analysis\bpm_scan.py" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="AnalysisScripts\analysis\key_scan.py" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

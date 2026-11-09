@@ -1,4 +1,4 @@
-using System.Collections.ObjectModel;
+﻿using System.Collections.ObjectModel;
 using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
@@ -100,11 +100,9 @@ public sealed class DownloadQueue : IDisposable
     }
 
     /// <summary>%APPDATA%\JockeyBox\downloads\queue.json</summary>
-    public static string FilePath { get; } = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-        "JockeyBox", DownloadsDirectoryName, QueueFileName);
+    public static string FilePath { get; } = Path.Combine(AppPaths.Home, DownloadsDirectoryName, QueueFileName);
 
-    /// <summary>Every queued/completed item, newest last. Bound by the Downloads window.</summary>
+    /// <summary>Every queued/completed item, newest last. Bound by the status console's Downloads tab.</summary>
     public ObservableCollection<DownloadItem> Items { get; } = new();
 
     /// <summary>Raised (on a worker thread) after an item reaches any terminal state.</summary>
@@ -174,6 +172,10 @@ public sealed class DownloadQueue : IDisposable
 
         if (kind == DownloadKind.Stream)
             item.Completion = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        // Report into the shared activity feed straight away, so a queued item is
+        // visible in the status console before a worker picks it up.
+        item.PublishActivity();
 
         // Already on disk? Skip the network entirely, before the item ever reaches a worker.
         if (kind == DownloadKind.Library && _settings.DownloadSkipExisting)
@@ -445,8 +447,8 @@ public sealed class DownloadQueue : IDisposable
                 .ToList();
         }
 
-        // Item state is observable and bound by the Downloads window, so flip it
-        // outside the queue lock.
+        // Item state is observable and bound by the Downloads tab of the status
+        // console, so flip it outside the queue lock.
         foreach (var item in victims)
         {
             item.State = DownloadState.Cancelled;

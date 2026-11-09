@@ -28,6 +28,14 @@ public partial class UserPlaylist : ObservableObject
 {
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
 
+    /// <summary>
+    /// Explicit rail position, persisted so neither a restart, a JSON reimport
+    /// nor a database round-trip can reshuffle the rail. The store keeps it a
+    /// contiguous run (0, 1, 2, ...) and gives legacy rows that predate the
+    /// field a value instead of leaving them all at zero.
+    /// </summary>
+    public int SortOrder { get; set; }
+
     [ObservableProperty]
     private string _name = "";
 
@@ -113,6 +121,25 @@ public partial class UserPlaylist : ObservableObject
     public bool IsImported => !IsInternal;
 
     public void NotifyTrackCountChanged() => OnPropertyChanged(nameof(TrackCount));
+
+    /// <summary>
+    /// Copy for a background JSON write: same scalar fields, a new list over the
+    /// same row objects. Rows are shared on purpose - cloning 11 000 of them on
+    /// the UI thread would cost more than the write it avoids - and the document
+    /// is only a mirror, so a row mutated during serialisation lands next time.
+    /// </summary>
+    public UserPlaylist ShallowCopy() => new()
+    {
+        Id = Id,
+        SortOrder = SortOrder,
+        Name = Name,
+        Source = Source,
+        Kind = Kind,
+        SourceId = SourceId,
+        SyncEnabled = SyncEnabled,
+        LastSyncedUtc = LastSyncedUtc,
+        Tracks = new ObservableCollection<SourceTrack>(Tracks),
+    };
 }
 
 /// <summary>

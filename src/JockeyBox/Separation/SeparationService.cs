@@ -1,6 +1,7 @@
 using System.IO;
 using System.Threading.Channels;
 using System.Windows.Threading;
+using JockeyBox.Activity;
 using JockeyBox.Downloads;
 using JockeyBox.Library;
 using JockeyBox.Settings;
@@ -21,6 +22,13 @@ public class SeparationService : IDisposable
         public SeparationState State { get; set; } = SeparationState.Queued;
         public int Progress { get; set; }
         public string ModelOverride { get; init; } = "";
+
+        /// <summary>Per-job cancel, linked to the service-wide shutdown token.</summary>
+        public CancellationTokenSource Cts { get; init; } = new();
+        /// <summary>Row in the shared activity feed.</summary>
+        public ActivityRow Activity { get; set; } = null!;
+        /// <summary>Last stage text pushed to the feed and the footer.</summary>
+        public string Detail { get; set; } = "";
     }
 
     private readonly SeparationEngine _engine = new();
@@ -78,9 +86,21 @@ public class SeparationService : IDisposable
             {
                 Entry = track,
                 ModelOverride = modelOverride ?? "",
+                Cts = CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token),
             };
             _jobs[track.RelativeKey] = job;
         }
+
+        // Report into the shared activity feed; the cancel hook lets the status
+        // console stop this job without knowing about separation internals.
+        job.Activity = ActivityFeed.Shared.Start(
+            ActivityKind.Karaoke,
+            ActivityKey(job.Key),
+            string.IsNullOrWhiteSpace(track.Title)
+                ? Path.GetFileNameWithoutExtension(job.MusicPath)
+                : track.Title,
+            canCancel: true,
+            cancel: () => Cancel(track.RelativeKey));
 
         track.Separation = SeparationState.Queued;
         track.SeparationProgress = 0;
@@ -112,14 +132,19 @@ public class SeparationService : IDisposable
         {
             await foreach (var job in _queue.Reader.ReadAllAsync(ct))
             {
-                await ProcessJobAsync(job, ct);
+                await ProcessJobAsync(job);
             }
         }
         catch (OperationCanceledException) { /* shutting down */ }
     }
 
-    private async Task ProcessJobAsync(Job job, CancellationToken ct)
+    private async Task ProcessJobAsync(Job job)
     {
+        // Per-job token, linked to the shutdown token: Dispose() stops everything,
+        // Cancel(key) stops just this job.
+        var ct = job.Cts.Token;
+        if (ct.IsCancellationRequested) { FinishCancelled(job); return; }
+
         UpdateJob(job, SeparationState.Running, 0);
         ReportStatus(job, "starting\u2026");
 
@@ -159,17 +184,64 @@ public class SeparationService : IDisposable
                 Completed?.Invoke(job.Entry, output);
                 StatusChanged?.Invoke($"Karaoke created: {Path.GetFileName(output)}"
                     + (PendingCount > 0 ? $" \u00b7 {PendingCount} in queue" : ""));
+                ActivityFeed.Shared.Finish(job.Activity, DownloadState.Done, "done");
             });
+        }
+        catch (OperationCanceledException) when (!_shutdown.IsCancellationRequested)
+        {
+            // Cancel(key): drop the job; the track simply has no karaoke.
+            FinishCancelled(job);
         }
         catch (OperationCanceledException) { throw; }
         catch (Exception ex)
         {
             var message = Compact(ex.Message);
             UpdateJob(job, SeparationState.Failed, 0);
+            ActivityFeed.Shared.Finish(job.Activity, DownloadState.Failed, message);
             await _dispatcher.InvokeAsync(() =>
                 StatusChanged?.Invoke($"Karaoke failed for {Path.GetFileName(job.MusicPath)}: {message}"));
         }
+        finally
+        {
+            job.Cts.Dispose();
+        }
     }
+
+    /// <summary>Cancel a queued or running separation. False when there is nothing to cancel.</summary>
+    public bool Cancel(string key)
+    {
+        Job? job;
+        lock (_lock)
+        {
+            if (!_jobs.TryGetValue(key, out job)) return false;
+        }
+
+        try { job.Cts.Cancel(); }
+        catch (ObjectDisposedException) { return false; }
+        return true;
+    }
+
+    private void FinishCancelled(Job job)
+    {
+        lock (_lock) _jobs.Remove(job.Key);
+        _dispatcher.InvokeAsync(() =>
+        {
+            job.Entry.Separation = SeparationState.None;
+            job.Entry.SeparationProgress = 0;
+            StatusChanged?.Invoke($"Karaoke cancelled: {Path.GetFileName(job.MusicPath)}");
+        });
+        ActivityFeed.Shared.Finish(job.Activity, DownloadState.Cancelled, "cancelled");
+    }
+
+    private static string ActivityKey(string key) => "karaoke:" + key;
+
+    private static DownloadState ActivityState(SeparationState state) => state switch
+    {
+        SeparationState.Queued => DownloadState.Queued,
+        SeparationState.Running => DownloadState.Converting,
+        SeparationState.Failed => DownloadState.Failed,
+        _ => DownloadState.Done,
+    };
 
     private void UpdateJob(Job job, SeparationState state, int progressPct)
     {
@@ -179,10 +251,13 @@ public class SeparationService : IDisposable
             job.Entry.Separation = state;
             job.Entry.SeparationProgress = progressPct;
         });
+        ActivityFeed.Shared.Update(job.Activity, ActivityState(state), progressPct, job.Detail);
     }
 
     private void ReportStatus(Job job, string detail)
     {
+        job.Detail = detail;
+        ActivityFeed.Shared.Update(job.Activity, DownloadState.Converting, job.Progress, detail);
         var title = string.IsNullOrWhiteSpace(job.Entry.Title)
             ? Path.GetFileNameWithoutExtension(job.MusicPath) : job.Entry.Title;
         var queued = PendingCount - 1;

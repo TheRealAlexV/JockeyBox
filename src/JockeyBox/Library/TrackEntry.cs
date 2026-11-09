@@ -58,6 +58,15 @@ public partial class TrackEntry : ObservableObject
     public string Title { get; set; } = "";
     public string Artist { get; set; } = "";
     public string Album { get; set; } = "";
+    /// <summary>
+    /// Musical key as the file's tag states it ("8A", "Am", "F#m"), or the
+    /// analysed estimate when the file has no key tag. Null when neither exists,
+    /// so the row shows its em-dash fallback rather than a guessed key.
+    /// Observable because analysis often finishes after the row is on screen.
+    /// </summary>
+    [ObservableProperty]
+    private string? _key;
+
     public double Bpm { get; set; }
     public TimeSpan Duration { get; set; }
 

@@ -8,6 +8,7 @@ using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using JockeyBox.Downloads;
+using JockeyBox.Data;
 using JockeyBox.Playback;
 using JockeyBox.Settings;
 using JockeyBox.Sources;
@@ -37,6 +38,12 @@ public partial class YouTubeViewModel : ObservableObject
     private readonly Func<SourceTrack, Task> _play;
     private readonly Action<SourceTrack>? _addToQueue;
 
+    /// <summary>
+    /// Library-side verbs for a remote row (own playlists, karaoke facts, reveal,
+    /// separate). Owned by MainViewModel; null only in design-time/unit contexts.
+    /// </summary>
+    private readonly RemoteTrackHost? _remote;
+
     /// <summary>Streams auditions through yt-dlp | ffplay; owns no deck state.</summary>
     private readonly StreamPreviewTransport _stream;
 
@@ -51,6 +58,21 @@ public partial class YouTubeViewModel : ObservableObject
 
     /// <summary>Re-entrancy guard for <see cref="SyncRail"/> (the rail feeds the picker).</summary>
     private bool _syncingRail;
+
+    /// <summary>Selection -> first painted row, for the switch timing line.</summary>
+    private System.Diagnostics.Stopwatch? _switchWatch;
+
+    /// <summary>Playlist id the watch belongs to (a later selection wins).</summary>
+    private string? _switchingTo;
+
+    /// <summary>Where the rows painted last came from (<c>db</c>/<c>json</c>/cache).</summary>
+    private string _rowsSource = "db";
+
+    /// <summary>Milliseconds spent reading the rows themselves (query or graph copy).</summary>
+    private double _rowsMs;
+
+    /// <summary>Milliseconds spent re-deriving each row's state from disk/library facts.</summary>
+    private double _reconcileMs;
 
     /// <summary>Generation token of the newest "my playlists" fetch; a new one cancels the old.</summary>
     private CancellationTokenSource? _remoteListCts;
@@ -72,7 +94,8 @@ public partial class YouTubeViewModel : ObservableObject
                             IPreviewTransport? previewTransport = null,
                             Action<SourceTrack>? addToQueue = null,
                             GoogleOAuthService? youtubeAuth = null,
-                            StreamPreviewTransport? streamPreview = null)
+                            StreamPreviewTransport? streamPreview = null,
+                            RemoteTrackHost? remoteHost = null)
     {
         _settings = settings;
         _store = store;
@@ -80,6 +103,12 @@ public partial class YouTubeViewModel : ObservableObject
         _ledger = ledger;
         _play = play;
         _addToQueue = addToQueue;
+        _remote = remoteHost;
+
+        // "Add to playlist ▸" on the playlist row menu: the user's own internal
+        // playlists plus create-and-add. A YouTube row need not be downloaded.
+        if (_remote is not null)
+            LibraryPlaylists = new RemotePlaylistTargets(store, _remote.AddToPlaylist);
         _auth = youtubeAuth ?? new GoogleOAuthService();
         _api = new YouTubeDataApi(_auth);
         // Token refreshes happen on a worker thread; every visual consequence
@@ -123,6 +152,10 @@ public partial class YouTubeViewModel : ObservableObject
         // UserPlaylist.Source is a plain property - nothing raises a change for
         // it - so a re-sourced playlist is only observable once the store saves.
         _store.Changed += () => Dispatcher(SyncRail);
+        // Rows written while a channel page could still be stored as a playlist
+        // SourceId ("@kavinsky") are unlistable and unsyncable; clear them before
+        // the rail is built so the phantom never renders again.
+        RepairBrokenYouTubeSources();
         SyncRail();
 
         UpdateCounts();
@@ -174,14 +207,18 @@ public partial class YouTubeViewModel : ObservableObject
     /// </summary>
     public ICollectionView RailView { get; }
 
-    public ObservableCollection<SourceTrack> PlaylistTracks { get; } = new();
+    public BulkObservableCollection<SourceTrack> PlaylistTracks { get; } = new();
     public ICollectionView PlaylistTracksView { get; }
 
     /// <summary>The rail selection; <see cref="SelectedPlaylist"/> follows it.</summary>
     [ObservableProperty] private YouTubeRailItem? _selectedRail;
 
     [ObservableProperty] private UserPlaylist? _selectedPlaylist;
-    [ObservableProperty] private SourceTrack? _selectedPlaylistTrack;
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(SeparateSelectedKaraokeCommand))]
+    [NotifyCanExecuteChangedFor(nameof(RevealSelectedFileCommand))]
+    [NotifyPropertyChangedFor(nameof(HasLocalFileForSelected))]
+    private SourceTrack? _selectedPlaylistTrack;
     [ObservableProperty] private string _newPlaylistName = "";
     [ObservableProperty] private string _playlistFilter = "";
     [ObservableProperty] private string _countsText = "";
@@ -196,9 +233,10 @@ public partial class YouTubeViewModel : ObservableObject
     // ---- import -----------------------------------------------------------
 
     [ObservableProperty] private string _importUrl = "";
-    [ObservableProperty] private bool _isImporting;
     [ObservableProperty] private string _statusText = "";
-    [ObservableProperty] private bool _isBusy;
+    [ObservableProperty]
+    [NotifyCanExecuteChangedFor(nameof(ImportMyPlaylistsCommand))]
+    private bool _isBusy;
 
     // ---- youtube account / remote write -----------------------------------
     //
@@ -219,6 +257,12 @@ public partial class YouTubeViewModel : ObservableObject
 
     /// <summary>True when the selected rail playlist has an id that belongs to the signed-in channel.</summary>
     [ObservableProperty] private bool _isSelectedPlaylistRemote;
+
+    /// <summary>
+    /// How many channel playlists the user removed from this rail, so a "show
+    /// removed" affordance can be offered (see <see cref="UnhideAllPlaylistsAsync"/>).
+    /// </summary>
+    [ObservableProperty] private int _removedPlaylistCount;
 
     [ObservableProperty] private string _remotePlaylistName = "";
     [ObservableProperty] private string _selectedRemotePrivacy = "private";
@@ -304,6 +348,11 @@ public partial class YouTubeViewModel : ObservableObject
         _railLoadCts?.Dispose();
         _railLoadCts = new CancellationTokenSource();
 
+        // Times the whole switch: selection -> store/DB read -> one collection
+        // reset -> rows bound. Logged by ReplaceRows.
+        _switchWatch = System.Diagnostics.Stopwatch.StartNew();
+        _switchingTo = value?.Id;
+
         if (value == null)
         {
             PlaylistTracks.Clear();
@@ -371,6 +420,7 @@ public partial class YouTubeViewModel : ObservableObject
             }
 
             HasPlaylists = Rail.Count > 0;
+            RemovedPlaylistCount = _cache.HiddenIds.Count;
 
             // Re-anchor the selection by key: a rebuild keeps the same playlist
             // selected, but a playlist that was deleted (or that lost its remote
@@ -481,7 +531,7 @@ public partial class YouTubeViewModel : ObservableObject
         // an import of someone else's list still goes through yt-dlp.
         if (remoteId == null)
         {
-            ReplaceRows(playlist, playlist.Tracks.ToList());
+            ReplaceRows(playlist, LoadStoreRows(playlist));
             return;
         }
 
@@ -497,10 +547,37 @@ public partial class YouTubeViewModel : ObservableObject
         }
         else if (playlist.Tracks.Count > 0)
         {
-            ReplaceRows(playlist, playlist.Tracks.ToList());
+            ReplaceRows(playlist, LoadStoreRows(playlist));
         }
 
         await FetchRemoteItemsAsync(playlist, remoteId, ct, force: false);
+    }
+
+    /// <summary>
+    /// The rows of a stored playlist. With a database in use this is one indexed
+    /// query (<see cref="PlaylistStore.LoadPlaylistRows"/>) materialised into a
+    /// list; the JSON path stays the fallback. Recorded in
+    /// <see cref="_rowsSource"/> for the switch timing line.
+    /// </summary>
+    private IReadOnlyList<SourceTrack> LoadStoreRows(UserPlaylist playlist)
+    {
+        var watch = System.Diagnostics.Stopwatch.StartNew();
+        try
+        {
+            var fromDb = _store.LoadPlaylistRows(playlist.Id);
+            if (fromDb is not null)
+            {
+                _rowsSource = "db";
+                return fromDb;
+            }
+
+            _rowsSource = _store.LoadSource;
+            return playlist.Tracks.ToList();
+        }
+        finally
+        {
+            _rowsMs = watch.Elapsed.TotalMilliseconds;
+        }
     }
 
     /// <summary>Forced re-read of the selected remote playlist (the strip's ↻).</summary>
@@ -647,6 +724,8 @@ public partial class YouTubeViewModel : ObservableObject
                 PlaylistTracks.Add(row);
                 ReconcileTrack(row);
             }
+
+            ApplyLibraryFacts();
             UpdateCounts();
         });
     }
@@ -680,6 +759,11 @@ public partial class YouTubeViewModel : ObservableObject
     /// Replace the pane's rows in one pass, then re-derive their state from disk.
     /// Runs on the dispatcher; the selection is re-anchored by video id so the
     /// strip keeps pointing at the same track across a refresh.
+    ///
+    /// <para>The pane is filled with a single Reset
+    /// (<see cref="BulkObservableCollection{T}.ReplaceAll"/>): a 5 000-row list
+    /// costs one layout pass, not 5 000. The store graph is updated only when it
+    /// differs, which it does not when the rows came from the store.</para>
     /// </summary>
     private void ReplaceRows(UserPlaylist? playlist, IReadOnlyList<SourceTrack> rows)
     {
@@ -687,27 +771,71 @@ public partial class YouTubeViewModel : ObservableObject
         {
             var selectedVideoId = SelectedPlaylistTrack?.VideoId;
 
-            PlaylistTracks.Clear();
-            foreach (var track in rows) PlaylistTracks.Add(track);
+            PlaylistTracks.ReplaceAll(rows);
 
+            var graph = System.Diagnostics.Stopwatch.StartNew();
             if (playlist != null)
             {
-                playlist.Tracks.Clear();
-                foreach (var track in rows)
+                if (!SameRows(playlist.Tracks, rows))
                 {
-                    track.PlaylistName = playlist.Name;
-                    playlist.Tracks.Add(track);
+                    playlist.Tracks.Clear();
+                    foreach (var track in rows)
+                    {
+                        track.PlaylistName = playlist.Name;
+                        playlist.Tracks.Add(track);
+                    }
+                }
+                else
+                {
+                    foreach (var track in rows) track.PlaylistName = playlist.Name;
                 }
             }
 
+            graph.Stop();
+            var reconcile = System.Diagnostics.Stopwatch.StartNew();
             ReconcileStates();
+            reconcile.Stop();
+            _reconcileMs = reconcile.Elapsed.TotalMilliseconds;
+            // A playlist loaded after the scan finished must still get its karaoke
+            // column: the scan's apply pass ran before these rows existed.
+            ApplyLibraryFacts();
             SelectedPlaylistTrack = string.IsNullOrWhiteSpace(selectedVideoId)
                 ? null
                 : PlaylistTracks.FirstOrDefault(t => t.VideoId == selectedVideoId);
             UpdateCounts();
             PlaylistTracksView.Refresh();
             RefreshWriteHints();
+
+            LogSwitchTiming(playlist, rows.Count, graph.Elapsed.TotalMilliseconds);
         });
+    }
+
+    /// <summary>Reference-equality check: the store already holds exactly these rows.</summary>
+    private static bool SameRows(IReadOnlyList<SourceTrack> stored, IReadOnlyList<SourceTrack> rows)
+    {
+        if (stored.Count != rows.Count) return false;
+        for (var i = 0; i < rows.Count; i++)
+            if (!ReferenceEquals(stored[i], rows[i])) return false;
+        return true;
+    }
+
+    /// <summary>
+    /// <c>playlist switch '&lt;name&gt;': &lt;n&gt; rows in &lt;ms&gt; ms
+    /// (source=db|json)</c> - the evidence line for requirement 12.
+    /// </summary>
+    private void LogSwitchTiming(UserPlaylist? playlist, int rowCount, double graphMs)
+    {
+        if (playlist is null || playlist.Id != _switchingTo) return;
+
+        var watch = _switchWatch;
+        _switchWatch = null;
+        if (watch is null) return;
+
+        Log.Info(
+            $"playlist switch '{playlist.Name}': {rowCount} rows in " +
+            $"{watch.Elapsed.TotalMilliseconds:F0} ms (source={_rowsSource} " +
+            $"load={_rowsMs:F0}ms graph={graphMs:F0}ms reconcile={_reconcileMs:F0}ms)");
+        _switchingTo = null;
     }
 
     /// <summary>
@@ -787,11 +915,15 @@ public partial class YouTubeViewModel : ObservableObject
         var query = SearchText.Trim();
         if (query.Length == 0) return;
 
-        // A pasted URL is an import, not a search.
-        if (YouTubeApi.TryParsePlaylistId(query, out _) || YouTubeApi.TryParseVideoId(query, out _))
+        // A pasted link or bare id is an import, not a search, wherever it is
+        // typed: one listing, one place to choose what to download. A channel
+        // link parses to the importer's one-line rejection instead of silently
+        // importing every upload.
+        if (YouTubeImportParser.TryParse(query, out _, out var pastedError)
+            || pastedError == YouTubeImportParser.ChannelMessage)
         {
             ImportUrl = query;
-            await ImportAsync();
+            await LoadImporterAsync();
             return;
         }
 
@@ -1000,79 +1132,6 @@ public partial class YouTubeViewModel : ObservableObject
         await Task.CompletedTask;
     }
 
-    // ---- commands: import -------------------------------------------------
-
-    [RelayCommand]
-    private async Task ImportAsync()
-    {
-        var input = ImportUrl.Trim();
-        if (input.Length == 0) return;
-
-        try
-        {
-            IsImporting = true;
-            StatusText = "Reading YouTube\u2026";
-
-            if (YouTubeApi.TryParsePlaylistId(input, out var listId))
-            {
-                var isChannel = YouTubeApi.IsChannelUrl(input);
-                var entries = await YtDlp.GetPlaylistAsync(
-                    input, _settings, CancellationToken.None,
-                    maxEntries: isChannel ? ChannelImportLimit : 0);
-                if (entries.Count == 0)
-                {
-                    StatusText = "That playlist has no playable entries.";
-                    return;
-                }
-
-                var derived = YouTubeApi.DeriveImportName(input);
-                var name = derived.Length > 0
-                    ? derived
-                    : $"YouTube playlist {DateTime.Now:yyyy-MM-dd HH:mm}";
-                var tracks = YouTubeApi.ToSourceTracks(entries, name, derived);
-                var playlist = CreatePlaylistInternal(name, MediaSource.YouTube);
-                playlist.SourceId = input;
-                _store.AddTracks(playlist, tracks);
-                _store.Save();
-
-                SelectedPlaylist = playlist;
-                OnSelectedPlaylistChanged(playlist);
-                StatusText = $"Imported {tracks.Count} track(s) into {name}.";
-            }
-            else if (YouTubeApi.TryParseVideoId(input, out var videoId))
-            {
-                var entry = await YtDlp.GetVideoAsync(videoId, _settings, CancellationToken.None);
-                if (entry == null)
-                {
-                    StatusText = "Could not read that video.";
-                    return;
-                }
-
-                var playlist = CurrentPlaylist ?? CreatePlaylistInternal("YouTube Picks");
-                var track = ToTrack(entry);
-                track.PlaylistName = playlist.Name;
-                var added = _store.AddTracks(playlist, new[] { track });
-                SelectedPlaylist = playlist;
-                OnSelectedPlaylistChanged(playlist);
-                StatusText = added > 0
-                    ? $"Added \"{entry.Title}\" to {playlist.Name}."
-                    : "That video is already in the playlist.";
-            }
-            else
-            {
-                StatusText = "That does not look like a YouTube video or playlist link.";
-            }
-        }
-        catch (Exception ex)
-        {
-            StatusText = $"Import failed: {ex.Message}";
-        }
-        finally
-        {
-            IsImporting = false;
-        }
-    }
-
     // ---- commands: playlists ---------------------------------------------
 
     [RelayCommand]
@@ -1117,20 +1176,101 @@ public partial class YouTubeViewModel : ObservableObject
         NewPlaylistName = "";
     }
 
+    /// <summary>
+    /// Remove the selected rail row. Every kind of row goes: a local list (the
+    /// store row is deleted), a channel playlist mirrored by a store row (the row
+    /// is deleted, the playlist stays on YouTube), and a channel playlist that was
+    /// never opened here - that one has no store row at all, so it is remembered as
+    /// hidden in the cache, or the next <c>mine=true</c> would put it straight back.
+    /// </summary>
     [RelayCommand]
     private void RemovePlaylist()
     {
-        if (CurrentPlaylist is not { } playlist) return;
-        var name = playlist.Name;
-        var remoteId = RemoteIdFor(playlist);
-        _store.Remove(playlist);
+        // A row that has left the rail (a refresh, a delete elsewhere) must not be
+        // acted on: fall back to the playlist the pane actually shows.
+        if (SelectedRail is not { } row || !Rail.Contains(row))
+        {
+            if (CurrentPlaylist is not { } current) return;
+            var currentName = current.Name;
+            if (!_store.Delete(current))
+            {
+                StatusText = $"{currentName} is not in this rail any more.";
+                return;
+            }
+
+            SyncRail();
+            SelectPlaylist(Rail.FirstOrDefault()?.Playlist);
+            StatusText = $"Deleted {currentName}." + DatabaseWarning();
+            return;
+        }
+
+        var name = string.IsNullOrWhiteSpace(row.Title) ? "playlist" : row.Title;
+        var isRemote = row.RemoteId != null || RemoteIdFor(row.Playlist) != null;
+        var removed = false;
+
+        if (row.Playlist is { } playlist) removed = _store.Delete(playlist);
+
+        if (row.IsRemote && !string.IsNullOrWhiteSpace(row.RemoteId))
+        {
+            _cache.Hide(row.RemoteId);
+            RemotePlaylistIds.Remove(row.RemoteId);
+            var cached = RemotePlaylists.FirstOrDefault(p => p.Id == row.RemoteId);
+            if (cached != null) RemotePlaylists.Remove(cached);
+            removed = true;   // hidden in the cache, so the rail drops it
+        }
+
+        if (!removed)
+        {
+            // No store row and not a remote row: there is nothing to delete, and
+            // saying "Deleted" would be a lie.
+            StatusText = $"{name} is not in this rail any more.";
+            return;
+        }
+
         // _store.Remove already raises the store's CollectionChanged, but call it
         // here too so the rail is correct even if that arrived off the dispatcher.
         SyncRail();
+        if (Rail.FirstOrDefault() is { } next) SelectedRail = next;
         SelectPlaylist(Rail.FirstOrDefault()?.Playlist);
-        StatusText = remoteId != null
+
+        StatusText = (isRemote
             ? $"Removed {name} from JockeyBox. It is still on your YouTube channel."
-            : $"Deleted {name}.";
+            : $"Deleted {name}.") + DatabaseWarning();
+    }
+
+    /// <summary>
+    /// The sentence a delete appends when the SQLite mirror failed: the database wins
+    /// on load, so the row can come back next start and the user should hear it.
+    /// </summary>
+    private string DatabaseWarning() =>
+        _store.LastDatabaseWriteFailed
+            ? " library.db could not be updated, so it may return on the next start."
+            : "";
+
+    /// <summary>
+    /// Bring one removed channel playlist back to the rail. A removal is hidden in
+    /// the cache rather than deleted on YouTube, so undoing it is a cache write plus
+    /// a list refresh: <see cref="ApplyRemoteList"/> stops filtering the id.
+    /// </summary>
+    [RelayCommand]
+    private async Task UnhidePlaylistAsync(string? remoteId)
+    {
+        if (string.IsNullOrWhiteSpace(remoteId) || !_cache.IsHidden(remoteId)) return;
+
+        _cache.Unhide(remoteId);
+        await RefreshRemotePlaylistsAsync(report: false);
+        StatusText = "Playlist restored to the rail.";
+    }
+
+    /// <summary>Undo every removal on this rail (the "show removed" affordance).</summary>
+    [RelayCommand]
+    private async Task UnhideAllPlaylistsAsync()
+    {
+        if (_cache.HiddenIds.Count == 0) return;
+
+        _cache.UnhideAll();
+        await RefreshRemotePlaylistsAsync(report: false);
+        StatusText = "Removed playlists are back on the rail.";
     }
 
     [RelayCommand]
@@ -1218,7 +1358,7 @@ public partial class YouTubeViewModel : ObservableObject
     private async Task SyncPlaylistsAsync()
     {
         var targets = _store.Playlists
-            .Where(p => p.Source == MediaSource.YouTube && !string.IsNullOrWhiteSpace(p.SourceId))
+            .Where(p => p.Source == MediaSource.YouTube && YouTubeApi.IsPlaylistSource(p.SourceId))
             .ToList();
         if (targets.Count == 0)
         {
@@ -1415,14 +1555,101 @@ public partial class YouTubeViewModel : ObservableObject
     [RelayCommand(CanExecute = nameof(CanImportMyPlaylists))]
     private async Task ImportMyPlaylistsAsync()
     {
+        // Not connected: the account's own playlists cannot be listed at all
+        // (playlists?mine=true needs OAuth - an API key can never see a private
+        // account), so offer the static list instead of an empty rail.
+        if (!IsYouTubeConnected)
+        {
+            await AddFallbackPlaylistsAsync();
+            return;
+        }
+
         await RefreshRemotePlaylistsAsync(report: false, force: true);
 
         var matched = _store.Playlists.Count(p => InRail(p) && PlaylistIdOf(p) is { Length: > 0 } id
                                                   && RemotePlaylistIds.Contains(id));
         StatusText = RemotePlaylists.Count == 0
-            ? "Your channel has no playlists yet - + Remote creates the first one."
+            ? "Your channel has no playlists yet - + Remote creates the first one, " +
+              "or press the button again for the built-in lists."
             : $"{RemotePlaylists.Count} playlist(s) on your channel" +
               (matched > 0 ? $", {matched} local import(s) matched to it." : ".");
+    }
+
+    /// <summary>
+    /// The static fallback the user asked for: when account playlists cannot be
+    /// listed, add a fixed set of lists that still load. Each becomes an ordinary
+    /// local playlist filled by one YouTube search, so it plays, downloads and
+    /// deletes exactly like every other row, and survives a restart because it is
+    /// a normal store row. Re-running it reuses a list already there.
+    /// </summary>
+    private async Task AddFallbackPlaylistsAsync()
+    {
+        IsBusy = true;
+        var added = 0;
+        try
+        {
+            foreach (var entry in YouTubeFallbackPlaylists.Entries)
+            {
+                // Skip a list that is already filled, and never adopt a row that is
+                // bound to a real source: adding search results to it would pollute
+                // a channel playlist that merely shares the built-in name.
+                if (_store.FindByName(entry.Title) is { } existing
+                    && (existing.Tracks.Count > 0 || !string.IsNullOrWhiteSpace(existing.SourceId)))
+                    continue;
+
+                StatusText = $"Loading {entry.Title}\u2026";
+                try
+                {
+                    var entries = await YtDlp.SearchAsync(
+                        entry.Query, YouTubeFallbackPlaylists.TracksPerEntry, _settings, CancellationToken.None);
+                    var tracks = YouTubeApi.ToSourceTracks(entries, entry.Title, entry.Title);
+
+                    // Nothing found is not a list: creating the row anyway leaves an
+                    // Imported (read-only) row with no SourceId that can never load,
+                    // be renamed or be deleted - and an empty search must never
+                    // detach a binding that a real row already has.
+                    if (tracks.Count == 0)
+                    {
+                        Log.Warn($"YouTube: built-in list \"{entry.Title}\" came back empty; nothing added.");
+                        continue;
+                    }
+
+                    var playlist = _store.FindByName(entry.Title);
+                    if (playlist == null)
+                    {
+                        playlist = _store.Create(entry.Title, MediaSource.Manual);
+                        playlist.SyncEnabled = false;
+                    }
+
+                    _store.AddTracks(playlist, tracks);
+                    added++;
+                }
+                catch (Exception ex)
+                {
+                    // One entry failing must not cost the others their results.
+                    Log.Warn($"YouTube: couldn't fill the built-in list \"{entry.Title}\": {ex.Message}");
+                }
+            }
+
+            _store.Save();
+            SyncRail();
+            var first = Rail.FirstOrDefault();
+            if (first != null) SelectedRail = first;
+
+            StatusText = added > 0
+                ? $"Added {added} built-in list(s) from YouTube search. Account playlists need " +
+                  "YouTube sign-in - press Connect YouTube to list your own."
+                : "Couldn't load the built-in lists - check that yt-dlp is working in Settings.";
+        }
+        catch (Exception ex)
+        {
+            Log.Error("YouTube: building the built-in playlist list failed", ex);
+            StatusText = $"Couldn't add the built-in lists: {ex.Message}";
+        }
+        finally
+        {
+            IsBusy = false;
+        }
     }
 
     /// <summary>
@@ -1560,7 +1787,20 @@ public partial class YouTubeViewModel : ObservableObject
         {
             // Background refresh: log it; an explicit action surfaces it in the status line.
             Log.Warn($"YouTube: could not list your playlists: {ex.Message}");
-            if (report) StatusText = $"YouTube: {ex.Message}";
+
+            // Say what actually happened. An expired refresh token is the common
+            // case - an unverified OAuth app is capped at 7 days - and it must not
+            // read as "you have no playlists": the rail showing nothing while the
+            // account has plenty is exactly the confusion this tab must not create.
+            var signInNeeded = ex is YouTubeApiException { IsAuth: true }
+                               || ex is GoogleAuthException;
+            var message = signInNeeded
+                ? "YouTube sign-in expired or was never granted - press Connect YouTube " +
+                  "to list your account playlists again."
+                : $"YouTube: {ex.Message}";
+
+            if (signInNeeded) RemoteStampText = "sign-in needed";
+            if (report) StatusText = message;
             // Keep whatever is painted (cache or the previous list) - a quota
             // failure must not empty the rail.
         }
@@ -1621,6 +1861,10 @@ public partial class YouTubeViewModel : ObservableObject
         RemotePlaylistIds.Clear();
         foreach (var playlist in playlists)
         {
+            // Removed here by the user: mine=true keeps returning it, so the
+            // removal is remembered in the cache instead (see RemovePlaylist).
+            if (_cache.IsHidden(playlist.Id)) continue;
+
             RemotePlaylists.Add(playlist);
             RemotePlaylistIds.Add(playlist.Id);
         }
@@ -1739,7 +1983,11 @@ public partial class YouTubeViewModel : ObservableObject
     private bool CanCreateRemotePlaylist =>
         IsYouTubeConnected && !IsYouTubeBusy && !string.IsNullOrWhiteSpace(RemotePlaylistName);
 
-    private bool CanImportMyPlaylists => IsYouTubeConnected && !IsYouTubeBusy;
+    // Enabled while signed out too: that is when the built-in list is the only
+    // thing this button can offer, and a dead button would hide that option.
+    // IsBusy too: the built-in-list import is not a YouTube request, so IsYouTubeBusy
+    // never covers it, and a second click would run the searches twice.
+    private bool CanImportMyPlaylists => !IsYouTubeBusy && !IsBusy;
 
     private bool CanAddSelectedToYouTube =>
         IsYouTubeConnected && !IsYouTubeBusy
@@ -1761,13 +2009,87 @@ public partial class YouTubeViewModel : ObservableObject
         return id.Length > 0 && RemotePlaylistIds.Contains(id) ? id : null;
     }
 
+    /// <summary>
+    /// Clears rows written while a channel page could still be stored as a
+    /// playlist <c>SourceId</c>: <c>TryParsePlaylistId</c> returned true with an
+    /// empty id for <c>/@handle</c>, <c>/channel/</c>, <c>/c/</c> and <c>/user/</c>
+    /// pages, and the empty id fell back to the raw <c>SourceId</c> - so the
+    /// handle became the playlist's id and, with a blank title, its rail name.
+    ///
+    /// A row with nothing in it is the phantom itself: dropped. A row that holds
+    /// tracks keeps every track and becomes a plain local list - the unusable
+    /// source id is cleared so it can never be synced as a playlist, and the row
+    /// stays on the rail, fully removable.
+    /// </summary>
+    private void RepairBrokenYouTubeSources()
+    {
+        var broken = _store.Playlists
+            .Where(p => p.Source is MediaSource.YouTube or MediaSource.Manual)
+            .Where(p => IsBrokenYouTubeSource(p.SourceId))
+            .ToList();
+        if (broken.Count == 0) return;
+
+        // Mutate every row first, then persist once: this runs on the UI thread in
+        // the constructor, and one write per phantom row is a full JSON serialise
+        // plus a transaction each - a multi-second startup stall on a large library.
+        var phantoms = new List<UserPlaylist>();
+        var detached = new List<string>();
+        foreach (var playlist in broken)
+        {
+            if (playlist.Tracks.Count == 0)
+            {
+                Log.Warn($"YouTube: dropping phantom playlist \"{playlist.Name}\" - " +
+                         $"SourceId \"{playlist.SourceId}\" is a channel page, not a playlist.");
+                phantoms.Add(playlist);
+                continue;
+            }
+
+            Log.Warn($"YouTube: detaching \"{playlist.Name}\" from channel source " +
+                     $"\"{playlist.SourceId}\" - kept as a local list with " +
+                     $"{playlist.Tracks.Count} track(s).");
+            playlist.SourceId = null;
+            playlist.SyncEnabled = false;
+            detached.Add(playlist.Name);
+        }
+
+        // RemoveMany writes the whole graph once, detached rows included.
+        if (phantoms.Count > 0) _store.RemoveMany(phantoms);
+        else _store.Save();
+
+        // A dropped sync binding is a user-visible change, not just a log line.
+        if (detached.Count > 0)
+            StatusText = $"Detached {detached.Count} playlist(s) from a channel link that is not a playlist: " +
+                         string.Join(", ", detached.Take(3)) + (detached.Count > 3 ? ", …" : "") + ".";
+    }
+
+    /// <summary>
+    /// The startup repair's only decision: true when a <see cref="UserPlaylist.SourceId"/>
+    /// is a channel page (or a bare <c>@handle</c>) that was stored as a playlist id.
+    /// Such a row is dropped when it has no tracks and detached when it has some.
+    ///
+    /// <para>Everything else is left alone. An id the importer accepts is a playlist
+    /// even when <see cref="YouTubeApi.IsPlaylistSource"/> does not recognise its
+    /// prefix (<c>WL…</c>, <c>TL…</c>, <c>PU…</c>, <c>SP…</c>, <c>EC…</c>, <c>VL…</c>),
+    /// and a shape this method does not name is never repaired away.</para>
+    /// </summary>
+    public static bool IsBrokenYouTubeSource(string? sourceId)
+    {
+        if (string.IsNullOrWhiteSpace(sourceId)) return false;
+
+        var id = sourceId.Trim();
+        if (YouTubeApi.IsPlaylistSource(id)) return false;
+        if (YouTubeImportParser.TryParse(id, out var target, out _) && target is { IsPlaylist: true }) return false;
+
+        return id.StartsWith("@", StringComparison.Ordinal) || YouTubeApi.IsChannelUrl(id);
+    }
+
     private static string PlaylistIdOf(UserPlaylist playlist)
     {
         if (string.IsNullOrWhiteSpace(playlist.SourceId)) return "";
         // SourceId is a bare id for rows this tab created, a URL for imports.
-        return YouTubeApi.TryParsePlaylistId(playlist.SourceId, out var id) && id.Length > 0
-            ? id
-            : playlist.SourceId.Trim();
+        // Anything else - a channel handle, a /@name page - is not a playlist id
+        // and must never be shown or synced as one.
+        return YouTubeApi.TryParsePlaylistId(playlist.SourceId, out var id) ? id : "";
     }
 
     /// <summary>Recompute every write button's enabled state and explanatory tooltip.</summary>
@@ -1866,14 +2188,119 @@ public partial class YouTubeViewModel : ObservableObject
     /// </summary>
     private void ReconcileStates()
     {
+        // Disk first: ReconcileTrack may adopt the ledger's path for a row that
+        // never stored one, and the karaoke pass then matches on that path.
         foreach (var track in PlaylistTracks) ReconcileTrack(track);
+
+        // Karaoke availability per row from the scan index (one dictionary hit
+        // each), after the per-row state re-derivation above.
+        _remote?.Karaoke.Apply(PlaylistTracks);
+    }
+
+    // ---- library verbs on a remote row -------------------------------------
+
+    /// <summary>
+    /// "Add to playlist ▸" data: the user's own playlists plus create-and-add.
+    /// Null only when the host was not supplied (design-time, unit tests).
+    /// </summary>
+    public RemotePlaylistTargets? LibraryPlaylists { get; }
+
+    /// <summary>True when the selected row's file is on disk, so reveal/separate work.</summary>
+    public bool HasLocalFileForSelected => SelectedPlaylistTrack?.LocalEntry is not null;
+
+    /// <summary>Re-read the internal playlists (another window/tab wrote one).</summary>
+    public void RefreshLibraryPlaylists() => LibraryPlaylists?.Refresh();
+
+    /// <summary>Repaint karaoke availability on every row after a library scan.</summary>
+    public void ApplyLibraryFacts()
+    {
+        _remote?.Karaoke.Apply(PlaylistTracks);
+        OnPropertyChanged(nameof(HasLocalFileForSelected));
+    }
+
+    /// <summary>
+    /// Add the selected YouTube row to one of the user's own playlists. The row
+    /// need not be downloaded: the playlist keeps its video id and picks up the
+    /// library file once one exists.
+    /// </summary>
+    [RelayCommand]
+    private void AddToInternalPlaylist(RemotePlaylistChoice? choice)
+    {
+        if (SelectedPlaylistTrack is not { } track || LibraryPlaylists is null || choice is null) return;
+
+        LibraryPlaylists.Choose(choice, track);
+        if (choice.Playlist is { } playlist)
+            StatusText = $"Added \u201c{track.DisplayName}\u201d to {playlist.Name}.";
+        else
+            StatusText = $"Created a playlist with \u201c{track.DisplayName}\u201d.";
+    }
+
+    /// <summary>Separate karaoke for the selected row's local file (disabled until it exists).</summary>
+    [RelayCommand(CanExecute = nameof(HasLocalFileForSelected))]
+    private void SeparateSelectedKaraoke()
+    {
+        if (SelectedPlaylistTrack is not { } track) return;
+        _remote?.MakeKaraoke(track);
+    }
+
+    /// <summary>Show the selected row's local file in Explorer (disabled until it exists).</summary>
+    [RelayCommand(CanExecute = nameof(HasLocalFileForSelected))]
+    private void RevealSelectedFile()
+    {
+        if (SelectedPlaylistTrack is not { } track) return;
+        _remote?.RevealLocalFile(track);
+    }
+
+    /// <summary>Copy the selected row's YouTube link.</summary>
+    [RelayCommand]
+    private void CopySelectedLink()
+    {
+        var videoId = SelectedPlaylistTrack?.VideoId;
+        if (string.IsNullOrWhiteSpace(videoId))
+        {
+            StatusText = "That row has no video id.";
+            return;
+        }
+
+        try
+        {
+            Clipboard.SetText($"https://www.youtube.com/watch?v={videoId}");
+            StatusText = "Link copied.";
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Could not copy the link: {ex.Message}";
+        }
+    }
+
+    /// <summary>Open the selected playlist row on YouTube (same rule as the result list).</summary>
+    [RelayCommand]
+    private void OpenPlaylistTrackOnYouTube()
+    {
+        var videoId = SelectedPlaylistTrack?.VideoId;
+        if (string.IsNullOrWhiteSpace(videoId))
+        {
+            StatusText = "That row has no video id to open.";
+            return;
+        }
+
+        var url = $"https://www.youtube.com/watch?v={videoId}";
+        try
+        {
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+            StatusText = $"Opened {url} in the browser.";
+        }
+        catch (Exception ex)
+        {
+            StatusText = $"Could not open the browser: {ex.Message}";
+        }
     }
 
     /// <summary>
     /// Re-derive every visible row after the library changed underneath it (a
-    /// download deleted from the Downloads window). The delete arrives on a
-    /// worker thread and the rows are this tab's own objects, so this hops to
-    /// the dispatcher and re-reads the disk.
+    /// download deleted from the status console's Downloads tab). The delete
+    /// arrives on a worker thread and the rows are this tab's own objects, so
+    /// this hops to the dispatcher and re-reads the disk.
     /// </summary>
     public void ReconcileFromLibrary()
     {
@@ -1883,6 +2310,32 @@ public partial class YouTubeViewModel : ObservableObject
             UpdateCounts();
         });
     }
+
+    /// <summary>
+    /// artist+title view of the download ledger, rebuilt only when the ledger's
+    /// entry count changes. A per-row <c>FindPathByLibraryKey</c> is a full walk of
+    /// the ledger (the ledger is keyed by remote id), so re-deriving 5 000 rows
+    /// used to cost 5 000 walks; this makes each row one dictionary hit.
+    /// </summary>
+    private LibraryLedgerIndex LedgerIndex
+    {
+        get
+        {
+            var count = _ledger.Entries.Count;
+            if (_ledgerIndex is null || _ledgerIndexCount != count)
+            {
+                _ledgerIndex = LibraryLedgerIndex.Build(_ledger);
+                _ledgerIndexCount = count;
+            }
+            return _ledgerIndex;
+        }
+    }
+
+    /// <summary>Index over <see cref="LedgerIndex"/>; invalidated by the entry count.</summary>
+    private LibraryLedgerIndex? _ledgerIndex;
+
+    /// <summary>Ledger entry count the cached index was built from.</summary>
+    private int _ledgerIndexCount = -1;
 
     private void ReconcileTrack(SourceTrack track)
     {
@@ -1899,7 +2352,7 @@ public partial class YouTubeViewModel : ObservableObject
         // Cheap, same lookups the method always did: ledger first, then the
         // file the row remembers. A ledger hit means the track is on disk under
         // its artist/title whatever this particular row claims.
-        var existing = _ledger.FindPathByLibraryKey(track.Artist, track.Title);
+        var existing = LedgerIndex.FindPath(track.Artist, track.Title);
         if (!string.IsNullOrWhiteSpace(existing) && File.Exists(existing))
         {
             track.State = SourceTrackState.InLibrary;

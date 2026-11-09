@@ -3,6 +3,7 @@ using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using JockeyBox.Audio;
+using JockeyBox.Audio.Beat;
 using JockeyBox.Playback;
 
 namespace JockeyBox.ViewModels;
@@ -47,12 +48,27 @@ public partial class DeckViewModel : ObservableObject
     [ObservableProperty] private List<float> _waveform = new();
     [ObservableProperty] private List<float> _karaokeWaveform = new();
 
+    // --- 2.0 tempo / BPM (plan item 5) -------------------------------------
+    /// <summary>Tempo slider position in percent, negative = slower. Centre (0) = original.</summary>
+    [ObservableProperty] private double _tempoPercent;
+    /// <summary>Effective playback ratio shown next to the slider (1.000 = untouched).</summary>
+    [ObservableProperty] private double _tempoRatio = 1.0;
+    /// <summary>Analysed BPM of the loaded track, or 0 when unknown.</summary>
+    [ObservableProperty] private double _bpm;
+    /// <summary>BPM the deck is actually producing (BPM x ratio); this is the number a DJ mixes with.</summary>
+    [ObservableProperty] private double _effectiveBpm;
+    /// <summary>"128.0 BPM" / "BPM —" readout text.</summary>
+    [ObservableProperty] private string _bpmText = "BPM \u2014";
+    /// <summary>True when the tempo slider is away from centre (lights the reset button).</summary>
+    [ObservableProperty] private bool _isTempoModified;
+    /// <summary>Beat positions across the track as 0..1 fractions, for the waveform's beat ticks.</summary>
+    [ObservableProperty] private List<double> _beatMarkers = new();
+
     public DeckViewModel(string title, PlaybackDeck deckTarget, DeckChannel channel,
                           DualDeckTransport transport,
                           Action persistSettings,
                           Func<string?, double> getDeviceDelay, Action<string?, double> setDeviceDelay)
-    {
-        Title = title;
+    {        Title = title;
         DeckTarget = deckTarget;
         _channel = channel;
         _transport = transport;
@@ -116,6 +132,10 @@ public partial class DeckViewModel : ObservableObject
         KaraokeWaveform = new List<float>();
         WaveformProgress = 0;
 
+        // The previous track's grid (and its beat ticks) must not survive onto
+        // this one; the caller attaches the right grid right after loading.
+        SetBeatGrid(null);
+
         if (string.IsNullOrWhiteSpace(musicPath))
         {
             _transport.LoadOnDeck(DeckTarget, null, null);
@@ -167,7 +187,11 @@ public partial class DeckViewModel : ObservableObject
         IsPlaying = playing;
         PlayGlyph = playing ? "\u23F8" : "\u25B6";
         TimeReadout = $"{Format(pos)} / {Format(duration)}";
-        DurationSeconds = duration.TotalSeconds;
+        if (Math.Abs(DurationSeconds - duration.TotalSeconds) > 0.05)
+        {
+            DurationSeconds = duration.TotalSeconds;
+            RebuildBeatMarkers(); // beat ticks are relative to the track length
+        }
 
         if (!_isUserSeeking)
             PositionSeconds = pos.TotalSeconds;
@@ -176,6 +200,9 @@ public partial class DeckViewModel : ObservableObject
             ? Math.Clamp(pos.TotalSeconds / duration.TotalSeconds, 0, 1)
             : 0;
     }
+
+    /// <summary>Path of the track loaded on this deck, or null when empty.</summary>
+    public string? TrackPath => _channel.PrimaryPath;
 
     /// <summary>Called by the view when a deck seek drag starts.</summary>
     public void BeginSeek() => _isUserSeeking = true;
@@ -192,12 +219,85 @@ public partial class DeckViewModel : ObservableObject
     [RelayCommand]
     private void PlayPause() => _transport.TogglePlayPause(DeckTarget);
 
+    [RelayCommand]
+    private void SkipBack() => _transport.SkipBackDeck(DeckTarget);
+
+    [RelayCommand]
+    private void SkipForward() => _transport.SkipForwardDeck(DeckTarget);
+
+    [RelayCommand]
+    private void Stop() => _transport.StopDeck(DeckTarget);
+
+    /// <summary>Park this deck at the start of its track (not a track change).</summary>
+    [RelayCommand]
+    private void Restart() => _transport.SeekDeck(DeckTarget, TimeSpan.Zero);
+
     /// <summary>Make this deck the one the shared transport surface follows.</summary>
     [RelayCommand]
     private void Activate() => _transport.ActivateDeck(DeckTarget);
 
     private static string Format(TimeSpan t) => t.TotalHours >= 1
         ? t.ToString(@"h\:mm\:ss") : t.ToString(@"m\:ss");
+
+    /// <summary>Half-range of the tempo slider in percent (settings: ManualTempoRangePercent).</summary>
+    public double TempoRangePercent { get; private set; } = 16.0;
+
+    /// <summary>Set the slider range; re-clamps the current value.</summary>
+    public void SetTempoRange(double percent)
+    {
+        TempoRangePercent = Math.Clamp(percent, 1, 50);
+        if (Math.Abs(TempoPercent) > TempoRangePercent) TempoPercent = TempoRangePercent;
+    }
+
+    /// <summary>Beat grid of the loaded track, for beat markers and the mix automation.</summary>
+    public BeatGrid? BeatGrid { get; private set; }
+
+    /// <summary>Set (or clear) the analysed beat grid; rebuilds the waveform beat ticks.</summary>
+    public void SetBeatGrid(BeatGrid? grid)
+    {
+        BeatGrid = grid;
+        Bpm = grid?.Bpm ?? 0;
+        UpdateBpmText();
+        RebuildBeatMarkers();
+    }
+
+    /// <summary>Return the tempo to centre (the auto-centre button).</summary>
+    [RelayCommand]
+    private void CenterTempo() => TempoPercent = 0;
+
+    [RelayCommand]
+    private void NudgeTempo(string step)
+    {
+        if (double.TryParse(step, out var delta))
+            TempoPercent = Math.Clamp(TempoPercent + delta, -TempoRangePercent, TempoRangePercent);
+    }
+
+    private void UpdateBpmText()
+    {
+        EffectiveBpm = Bpm > 0 ? Bpm * TempoRatio : 0;
+        BpmText = Bpm <= 0
+            ? "BPM \u2014"
+            : $"{EffectiveBpm:0.0} BPM";
+    }
+
+    private void RebuildBeatMarkers() =>
+        BeatMarkers = JockeyBox.Audio.Beat.BeatMarkers.Build(BeatGrid, DurationSeconds);
+
+    partial void OnTempoPercentChanged(double value)
+    {
+        double range = Math.Max(1, TempoRangePercent);
+        double clamped = Math.Clamp(value, -range, range);
+        if (Math.Abs(clamped - value) > 1e-9)
+        {
+            TempoPercent = clamped;
+            return;
+        }
+
+        TempoRatio = 1.0 + clamped / 100.0;
+        IsTempoModified = Math.Abs(clamped) > 0.01;
+        _channel.TempoRatio = TempoRatio;
+        UpdateBpmText();
+    }
 
     /// <summary>Nudge the karaoke delay from the +/- repeat buttons (step in ms).</summary>
     [RelayCommand]

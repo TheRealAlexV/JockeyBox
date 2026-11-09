@@ -16,6 +16,7 @@ using JockeyBox.Metadata;
 using JockeyBox.Playback;
 using JockeyBox.Separation;
 using JockeyBox.Settings;
+using JockeyBox.Selftest;
 using JockeyBox.Sources;
 using JockeyBox.Tools;
 using JockeyBox.Views;
@@ -149,11 +150,21 @@ public partial class MainViewModel : ObservableObject, IDisposable
         SyncDeckActivation();
         RefreshDevices();
 
+        // 2.0: master volume, output delay, transition automation, the
+        // soundboard, its hotkeys and the loopback API. Kept in
+        // MainViewModel.Audio2.cs so this file stays about the 1.x surface.
+        InitializeAudio2();
+
         _scanner = new LibraryScanner(_tagCache);
         _lyricsService = new LyricsService(_settings);
         _separation = new SeparationService(_settings,
             System.Windows.Application.Current.Dispatcher);
         _separation.StatusChanged += message => StatusText = message;
+
+        // Karaoke mode: reuses this same separation queue, so progress, the
+        // status line and the row glyph are the existing ones (MainViewModel.
+        // KaraokeMode.cs). The mode's engine flag is adopted here too.
+        InitializeKaraokeMode();
 
         // Lyrics header: the offset slider writes through to the metadata store
         // on every drag step (the store debounces its own save); the settings
@@ -212,6 +223,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
         // The store keeps only a remote id per row, so "is this on disk?" is
         // answered against the live download ledger plus the scanned library
         // instead of the store's read-only snapshot of ledger.json.
+        // Build the id index *before* anything can ask a row "are you on disk?".
+        // The first row's probe would otherwise pay for it (about 12 ms at
+        // 11 000 rows) inside a load loop, where it reads as a stuck UI.
+        EnsureSourceTrackIndex();
         _playlistStore.LibraryPathResolver = ResolveSourceLibraryPath;
 
         // Any write to playlists.json (this view model, Spotify, YouTube) rebuilds
@@ -281,12 +296,18 @@ public partial class MainViewModel : ObservableObject, IDisposable
         // the adapter reads the live transport and is ticked by OnUiTick.
         _previewTransport = new DeckPreviewTransport(_transport);
 
+        // Remote tabs get the library's verbs (own playlists, karaoke, reveal)
+        // through one host object built here; see MainViewModel.RemoteLists.cs.
+        InitializeRemoteLists();
+
         Spotify = new SpotifyViewModel(_settings, _playlistStore, _downloadQueue, _ledger,
             new SpotifyOAuthService(_settings), s => PlaySourceTrackAsync(s),
-            previewTransport: _previewTransport, addToQueue: AddSourceToQueue);
+            previewTransport: _previewTransport, addToQueue: AddSourceToQueue,
+            remoteHost: _remoteHost);
         YouTube = new YouTubeViewModel(_settings, _playlistStore, _downloadQueue, _ledger,
             s => PlaySourceTrackAsync(s),
-            previewTransport: _previewTransport, addToQueue: AddSourceToQueue);
+            previewTransport: _previewTransport, addToQueue: AddSourceToQueue,
+            remoteHost: _remoteHost);
         Downloads = new DownloadsViewModel(_settings, _downloadQueue);
 
         // Re-derive the remote rows once now that the store and the library
@@ -537,6 +558,24 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _transport.SetCrossfader(value);
     }
 
+    /// <summary>Snap the crossfader to a deck end or to the equal-power centre.</summary>
+    [RelayCommand] private void SnapCrossfaderA() => SnapCrossfader(0.0);
+    [RelayCommand] private void SnapCrossfaderCentre() => SnapCrossfader(0.5);
+    [RelayCommand] private void SnapCrossfaderB() => SnapCrossfader(1.0);
+
+    /// <summary>
+    /// Move the fader the way a drag does: the bound property is written first,
+    /// so <see cref="OnCrossfaderChanged"/> forwards it to the transport like any
+    /// user move. The explicit transport call covers the case where the property
+    /// already holds the target (the generated setter then no-ops): a snap is a
+    /// hand on the fader, so it must still stop a running crossfade ramp.
+    /// </summary>
+    private void SnapCrossfader(double value)
+    {
+        Crossfader = value;
+        _transport.SetCrossfader(value);
+    }
+
     /// <summary>Called by the view while the user drags the seek thumb.</summary>
     public void BeginSeek() => _isUserSeeking = true;
 
@@ -631,6 +670,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
             // not only the ones this app produced.
             _libraryIndex.Rebuild(list);
 
+            // Same pass feeds the remote tabs' "is it here / is there karaoke?"
+            // columns: one dictionary build per scan, not a ledger walk per row.
+            // The ledger is folded in as well - it remembers the remote id each
+            // file was fetched for, which is how a downloaded YouTube row is
+            // recognised even when the file's tags read differently.
+            _remoteFacts.Rebuild(list);
+            _remoteFacts.RebuildLedger(_ledger.Entries);
+            RefreshRemoteLibraryFacts();
+
             // Cached membership survives a rescan that returned the same files;
             // TrackEntry instances are looked up per rebuild, so the new ones are
             // picked up without re-resolving a single row.
@@ -649,6 +697,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
             StatusText = $"{list.Count} tracks \u00b7 {missing} need karaoke versions";
             _watcher.Watch(music, karaoke);
             ApplyPendingAutoKaraoke();
+
+            // Beat data for the whole library, once the scan has released the
+            // disk. Cached tracks are skipped inside the service, so a rescan
+            // costs a dictionary lookup per row, not a Python run.
+            StartLibraryAnalysisPass();
         }
         catch (OperationCanceledException) { /* superseded by a newer scan */ }
         catch (Exception ex)
@@ -752,7 +805,24 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     /// <summary>The membership the browser currently filters by, applied as one whole set.</summary>
     private HashSet<string> _frozenKeys = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Every leaf of the tree currently on screen. Kept as a flat list so the
+    /// rebuild's detach pass is O(leaves) instead of a recursive walk of every
+    /// folder, and so a future "which rows show progress?" query does not have
+    /// to walk the tree either.
+    /// </summary>
+    private List<BrowserNode> _treeLeaves = new();
     private bool _hasFrozenKeys;
+
+    /// <summary>
+    /// Rows of the open playlist that have no local file yet: a remote row added
+    /// from the Spotify / YouTube tab before it was downloaded. They live in the
+    /// store and show in that tab's list, but the library browser can only render
+    /// files, so the count is surfaced in the status line instead of silently
+    /// dropping them ("Dirty · 40 tracks · 2 not downloaded yet").
+    /// </summary>
+    private int _pendingPlaylistRows;
     private string? _frozenPlaylistId;
     private int _frozenLibraryGeneration = -1;
     private int _frozenStoreRevision = -1;
@@ -775,6 +845,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
     /// <summary>Generation counter for playlist loads; a newer load cancels the old one.</summary>
     private int _playlistLoadVersion;
     private CancellationTokenSource? _playlistLoadCts;
+
+    /// <summary>Click -> painted rows, for the switch timing line.</summary>
+    private System.Diagnostics.Stopwatch? _switchWatch;
+
+    /// <summary>Playlist id the running <see cref="_switchWatch"/> belongs to.</summary>
+    private string? _switchingTo;
 
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(IsNotCreatingPlaylist))]
@@ -812,7 +888,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         // The LIBRARY rail is internal-only by design: these are the user's own
         // lists of local files. Imported Spotify / YouTube mirrors keep their
         // rows in their own tabs, so no group headers and no source rows here.
-        foreach (var playlist in _playlistStore.Playlists.Where(p => p.IsInternal))
+        foreach (var playlist in _playlistStore.Playlists.Where(p => p.IsInternal).OrderBy(p => p.SortOrder))
             PlaylistRail.Add(new PlaylistRailItem(playlist));
 
         // Selection is derived from the view model's active playlist, so a row
@@ -960,9 +1036,51 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         if (row is null) return;
 
+        // JSON stays authoritative for external edits: one stat here costs
+        // nothing on the normal path and picks up a playlists.json edited by
+        // another process (the store reloads it and rewrites the database).
+        if (_playlistStore.RefreshFromDiskIfChanged())
+        {
+            RefreshPlaylistRail();
+            row = PlaylistRail.FirstOrDefault(r => r.Playlist?.Id == row.Playlist?.Id);
+            if (row is null) return;
+        }
+
+        // ALL TRACKS: its row carries no playlist, so selecting it means "no
+        // filter" - the teardown below is the whole library again.
+        if (row.Playlist is null)
+        {
+            _activePlaylist = null;
+            foreach (var item in PlaylistRail) item.IsSelected = ReferenceEquals(item, row);
+            ApplyPlaylistFilter(null);
+            return;
+        }
+
+        _switchWatch = System.Diagnostics.Stopwatch.StartNew();
+        _switchingTo = row.Playlist.Id;
+
         _activePlaylist = row.Playlist;
         foreach (var item in PlaylistRail) item.IsSelected = ReferenceEquals(item, row);
         ApplyPlaylistFilter(_activePlaylist);
+    }
+
+    /// <summary>
+    /// <c>playlist switch '&lt;name&gt;': &lt;n&gt; rows in &lt;ms&gt; ms
+    /// (source=db|json)</c> - measured from the click to the rows being on
+    /// screen. One line per switch, requirement 12's evidence.
+    /// </summary>
+    private void LogSwitch(UserPlaylist playlist, int rows)
+    {
+        if (playlist.Id != _switchingTo) return;      // superseded by a newer click
+        var watch = _switchWatch;
+        _switchWatch = null;
+        _switchingTo = null;
+        if (watch is null) return;
+
+        PerfTrace.Record("switch.vm-total", watch.Elapsed.TotalMilliseconds);
+        Log.Info(
+            $"playlist switch '{playlist.Name}': {rows} rows in " +
+            $"{watch.Elapsed.TotalMilliseconds:F0} ms (source={_playlistStore.LoadSource})");
     }
 
     /// <summary>
@@ -998,9 +1116,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             CancelPlaylistLoad();
             FreezeMembership(playlist, cached);
+            // The cache keeps resolved keys only; the difference to the stored
+            // rows is the remote-only tail (a remote row added before download).
+            _pendingPlaylistRows = Math.Max(0, playlist.Tracks.Count - cached.Count);
             IsPlaylistLoading = false;
             RebuildBrowser();
-            StatusText = $"{playlist.Name} \u00b7 {_frozenKeys.Count} tracks";
+            StatusText = PlaylistStatus(playlist);
+            LogSwitch(playlist, playlist.Tracks.Count);
             return;
         }
 
@@ -1008,7 +1130,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (HasFrozenMembership(playlist))
         {
             RebuildBrowser();
-            StatusText = $"{playlist.Name} \u00b7 {_frozenKeys.Count} tracks";
+            StatusText = PlaylistStatus(playlist);
+            LogSwitch(playlist, playlist.Tracks.Count);
             return;
         }
 
@@ -1043,14 +1166,18 @@ public partial class MainViewModel : ObservableObject, IDisposable
             var revision = _playlistStore.Revision;
             var stamp = _playlistStore.FileStamp;
 
-            var keys = await Task.Run<IReadOnlyList<string>>(() =>
+            var resolveWatch = Stopwatch.StartNew();
+            var (keys, pending) = await Task.Run<ValueTuple<IReadOnlyList<string>, int>>(() =>
             {
                 var resolved = snapshot.Resolve(request, ct);
                 var list = new List<string>(resolved);
                 // One cache write for this playlist; stamped with the generation it
                 // was resolved against, so a rescan mid-flight discards it.
                 _playlistCache.Put(playlist.Id, list, revision, stamp, generation);
-                return list;
+                // Rows the library cannot render (no file yet) still belong to
+                // this playlist - count them so the status line can say so.
+                var missing = Math.Max(0, request.Rows.Count - list.Count);
+                return (list, missing);
             }, ct);
 
             if (ct.IsCancellationRequested || version != _playlistLoadVersion) return;
@@ -1061,11 +1188,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
             // claim a membership the store no longer has.
             if (revision != _playlistStore.Revision || stamp != _playlistStore.FileStamp) return;
 
+            PerfTrace.Record("load.worker", resolveWatch.Elapsed.TotalMilliseconds);
             FreezeMembership(playlist, keys);
+            _pendingPlaylistRows = pending;
             IsPlaylistLoading = false;
             // One rebuild for the whole set: no per-row notifications, no flicker.
-            RebuildBrowser();
-            StatusText = $"{playlist.Name} \u00b7 {_frozenKeys.Count} tracks";
+            using (PerfTrace.Measure("load.ui-rebuild"))
+            {
+                RebuildBrowser();
+                StatusText = PlaylistStatus(playlist);
+            }
+            LogSwitch(playlist, playlist.Tracks.Count);
         }
         catch (OperationCanceledException) { /* superseded by a newer selection */ }
         catch (Exception ex)
@@ -1823,6 +1956,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         // No allocation: a scan unfreezes once per added row, and the stale set is
         // unreachable while _hasFrozenKeys is false.
         _hasFrozenKeys = false;
+        _pendingPlaylistRows = 0;
         _frozenPlaylistId = null;
         _frozenLibraryGeneration = -1;
         _frozenStoreRevision = -1;
@@ -1836,6 +1970,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _frozenPlaylistId = playlist.Id;
         _frozenLibraryGeneration = _libraryGeneration;
         _frozenStoreRevision = _playlistStore.Revision;
+    }
+
+    /// <summary>The playlist status line, naming rows that are still remote-only.</summary>
+    private string PlaylistStatus(UserPlaylist playlist)
+    {
+        var text = $"{playlist.Name} \u00b7 {_frozenKeys.Count} tracks";
+        return _pendingPlaylistRows > 0 ? $"{text} \u00b7 {_pendingPlaylistRows} not downloaded yet" : text;
     }
 
     /// <summary>True when the frozen set is the current playlist's and still current.</summary>
@@ -1892,7 +2033,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
-        BuildTree(Tracks.Where(FilterTrack).ToList(), Layout);
+        List<TrackEntry> filtered;
+        using (PerfTrace.Measure("tree.filter"))
+            filtered = Tracks.Where(FilterTrack).ToList();
+        BuildTree(filtered, Layout);
     }
 
     /// <summary>
@@ -1906,7 +2050,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         if (_activePlaylist is null || !_hasFrozenKeys) return false;
         if (Norm(SearchText).Length > 0) return false;
 
-        rows = MembershipSnapshot().TracksForKeys(_frozenKeys);
+        using (PerfTrace.Measure("tree.rows-for-keys"))
+            rows = MembershipSnapshot().TracksForKeys(_frozenKeys);
         return true;
     }
 
@@ -1919,25 +2064,38 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         var selectedKey = _lastSelectedTrackKey;
         var expanded = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var root in BrowserRoots)
-            CollectExpanded(root, expanded);
+        using (PerfTrace.Measure("tree.collect-expanded"))
+        {
+            foreach (var root in BrowserRoots)
+                CollectExpanded(root, expanded);
+        }
 
         // Old leaves hold live subscriptions into Tracks; release them before
         // dropping the tree (rebuilds happen on every search keystroke).
-        foreach (var root in BrowserRoots)
-            root.DetachFromTrack();
-        BrowserRoots.Clear();
+        using (PerfTrace.Measure("tree.detach"))
+        {
+            foreach (var leaf in _treeLeaves)
+                leaf.Detach();
+            _treeLeaves.Clear();
+            BrowserRoots.Clear();
+        }
 
         if (layout == LibraryLayout.Path)
             BuildPathTree(tracks);
         else
             BuildArtistAlbumTree(tracks);
 
-        foreach (var root in BrowserRoots)
-            _ = CountTracks(root);
+        using (PerfTrace.Measure("tree.count"))
+        {
+            foreach (var root in BrowserRoots)
+                _ = CountTracks(root);
+        }
 
-        foreach (var root in BrowserRoots)
-            RestoreExpanded(root, expanded);
+        using (PerfTrace.Measure("tree.restore-expanded"))
+        {
+            foreach (var root in BrowserRoots)
+                RestoreExpanded(root, expanded);
+        }
 
         var restored = selectedKey.Length == 0
             ? null
@@ -1945,6 +2103,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
         SelectedTreeNode = restored;
         if (restored != null)
             restored.IsSelected = true;
+
+        // The playlist commands answer from the leaves/frozen state just replaced.
+        QueueActivePlaylistCommand.NotifyCanExecuteChanged();
+        AddToQueueCommand.NotifyCanExecuteChanged();
     }
 
     /// <summary>
@@ -1954,6 +2116,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     /// </summary>
     private void BuildArtistAlbumTree(List<TrackEntry> tracks)
     {
+        using var _scope = PerfTrace.Measure("tree.build-album");
         var artists = tracks
             .GroupBy(t => GroupKey(t.Artist), StringComparer.Ordinal)
             .Select(g => new
@@ -1963,6 +2126,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 Tracks = g,
             })
             .OrderBy(a => a.Name, StringComparer.CurrentCultureIgnoreCase);
+
+        var roots = new List<BrowserNode>(tracks.Count > 0 ? 64 : 0);
 
         foreach (var artist in artists)
         {
@@ -1987,26 +2152,53 @@ public partial class MainViewModel : ObservableObject, IDisposable
                     FolderArtist = artist.Name,
                     FolderAlbum = album.Name,
                 };
-                foreach (var track in album.Tracks.OrderBy(t => t.Title, StringComparer.CurrentCultureIgnoreCase))
-                    albumNode.Children.Add(BrowserNode.FromTrack(track, TrackKey(track.RelativeKey)));
+                foreach (var track in album.Tracks.OrderBy(t => t, TrackOrder))
+                    albumNode.Children.Add(Leaf(track));
                 artistNode.Children.Add(albumNode);
             }
 
             // Album-less tracks sit directly under the artist, after the albums.
             var loose = artist.Tracks
                 .Where(t => GroupKey(t.Album).Length == 0)
-                .OrderBy(t => t.Title, StringComparer.CurrentCultureIgnoreCase);
+                .OrderBy(t => t, TrackOrder);
             foreach (var track in loose)
-                artistNode.Children.Add(BrowserNode.FromTrack(track, TrackKey(track.RelativeKey)));
+                artistNode.Children.Add(Leaf(track));
 
-            BrowserRoots.Add(artistNode);
+            roots.Add(artistNode);
         }
+
+        // One attach for the whole forest: the artist nodes were built detached,
+        // so their album/track children never reached the TreeView one by one.
+        foreach (var root in roots) BrowserRoots.Add(root);
     }
 
+    /// <summary>
+    /// The sort strip's leaf order. LINQ's OrderBy is stable, so equal keys keep
+    /// the order the rows arrived in (scan order, or playlist order).
+    /// </summary>
+    private IComparer<TrackEntry> TrackOrder =>
+        new TrackSortComparer(_librarySortField, _librarySortDescending);
+
     /// <summary>Path layout: folder tree straight from <see cref="TrackEntry.RelativePath"/> (unchanged behaviour).</summary>
+    /// <summary>Create a leaf node and remember it for the next rebuild's detach pass.</summary>
+    private BrowserNode Leaf(TrackEntry track)
+    {
+        var node = BrowserNode.FromTrack(track, TrackKey(track.RelativeKey));
+        _treeLeaves.Add(node);
+        return node;
+    }
+
     private void BuildPathTree(List<TrackEntry> tracks)
     {
+        using var _scope = PerfTrace.Measure("tree.build-path");
         var folders = new Dictionary<string, BrowserNode>(StringComparer.OrdinalIgnoreCase);
+
+        // The tree is built *detached* and attached in one step at the end.
+        // While a node is detached its Children collection has no WPF listener,
+        // so 5 000 row adds cost a list append each instead of 5 000
+        // CollectionChanged notifications the TreeView has to answer. Only the
+        // roots (tens, not thousands) are announced to the bound collection.
+        var roots = new List<BrowserNode>();
 
         foreach (var track in tracks)
         {
@@ -2025,15 +2217,116 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 {
                     folder = new BrowserNode(seg) { Key = "path:" + current.ToLowerInvariant() };
                     folders[current] = folder;
-                    (parent?.Children ?? BrowserRoots).Add(folder);
+                    (parent is null ? roots : (IList<BrowserNode>)parent.Children).Add(folder);
                 }
                 parent = folder;
             }
 
             // Leaf node for the file itself.
-            var leaf = BrowserNode.FromTrack(track, TrackKey(track.RelativeKey));
-            (parent?.Children ?? BrowserRoots).Add(leaf);
+            var leaf = Leaf(track);
+            (parent is null ? roots : (IList<BrowserNode>)parent.Children).Add(leaf);
         }
+
+        // Ordering happens while the forest is still detached: no TreeView answers
+        // a single move, and the roots are announced once below as before.
+        // The roots are siblings too, and SortPathForest only orders each node's
+        // children, so they are ordered here with the same comparer (stable, so
+        // equal keys keep scan order in both directions).
+        var orderedRoots = roots.OrderBy(root => root, PathSiblingOrder).ToList();
+        roots.Clear();
+        roots.AddRange(orderedRoots);
+        SortPathForest(roots);
+        foreach (var root in roots) BrowserRoots.Add(root);
+    }
+
+    /// <summary>
+    /// Explorer order at every level: folders before files, names in
+    /// case-insensitive natural order ("Album 2" before "Album 10"), and files by
+    /// the sort strip (by file name when that strip says "track name", because
+    /// the file name is the name Explorer shows). The sort direction applies at
+    /// each level, folders included; folders stay above files both ways.
+    /// </summary>
+    private void SortPathForest(IEnumerable<BrowserNode> nodes)
+    {
+        var order = PathSiblingOrder;
+        foreach (var node in nodes)
+        {
+            if (!node.IsFolder) continue;
+            if (node.Children.Count > 1)
+            {
+                var ordered = node.Children.OrderBy(child => child, order).ToList();
+                node.Children.Clear();
+                foreach (var child in ordered) node.Children.Add(child);
+            }
+            SortPathForest(node.Children);
+        }
+    }
+
+    private IComparer<BrowserNode> PathSiblingOrder
+    {
+        get
+        {
+            // Leaf rows go through the shared comparer, which owns the direction:
+            // negating here would lift missing values to the top on descending.
+            var tracks = new TrackSortComparer(_librarySortField, _librarySortDescending);
+            return Comparer<BrowserNode>.Create((a, b) =>
+            {
+                if (a.IsFolder != b.IsFolder) return a.IsFolder ? -1 : 1;
+
+                if (!a.IsFolder && _librarySortField != TrackSortField.TrackName)
+                    return tracks.Compare(a.Track!, b.Track!);
+
+                var result = a.IsFolder
+                    ? NaturalCompare(a.Name, b.Name)
+                    : NaturalCompare(PathLeafName(a.Track), PathLeafName(b.Track));
+                return _librarySortDescending ? -result : result;
+            });
+        }
+    }
+
+    /// <summary>Last segment of the relative path: the file name Explorer would show.</summary>
+    private static string PathLeafName(TrackEntry? track)
+    {
+        if (track is null) return "";
+        var path = track.RelativePath.Replace('\\', '/');
+        var slash = path.LastIndexOf('/');
+        return slash >= 0 ? path[(slash + 1)..] : path;
+    }
+
+    /// <summary>
+    /// Case-insensitive natural order: a run of digits compares as a number, so
+    /// "Album 2" sorts before "Album 10" the way Explorer does.
+    /// </summary>
+    private static int NaturalCompare(string? x, string? y)
+    {
+        x ??= "";
+        y ??= "";
+
+        int i = 0, j = 0;
+        while (i < x.Length && j < y.Length)
+        {
+            if (char.IsDigit(x[i]) && char.IsDigit(y[j]))
+            {
+                var startX = i;
+                var startY = j;
+                while (i < x.Length && char.IsDigit(x[i])) i++;
+                while (j < y.Length && char.IsDigit(y[j])) j++;
+
+                var digitsX = x.AsSpan(startX, i - startX).TrimStart('0');
+                var digitsY = y.AsSpan(startY, j - startY).TrimStart('0');
+                if (digitsX.Length != digitsY.Length) return digitsX.Length - digitsY.Length;
+                var byDigits = digitsX.SequenceCompareTo(digitsY);
+                if (byDigits != 0) return byDigits;
+                continue;
+            }
+
+            var byChar = char.ToUpperInvariant(x[i]).CompareTo(char.ToUpperInvariant(y[j]));
+            if (byChar != 0) return byChar;
+            i++;
+            j++;
+        }
+
+        return (x.Length - i) - (y.Length - j);
     }
 
     /// <summary>Post-order leaf count so folder rows can show "12 tracks".</summary>
@@ -2104,8 +2397,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
     ///
     /// Without an explicit target the free deck is used while the active deck is
     /// playing (queueing the next track without cutting the current one).
+    ///
+    /// <paramref name="activate"/> is what hands ACTIVE (and with it the shared
+    /// transport strip) to the target deck. It defaults to true for a load the
+    /// user asked for, but the arming path passes false: pre-loading the deck for
+    /// a planned transition must not take the controls away from the deck that is
+    /// actually being listened to. There <see cref="OnTransitionCompleted"/>'s
+    /// <c>ActivateDeck(arrived)</c> promotes the incoming deck at the fade.
     /// </summary>
-    private void LoadTrack(TrackEntry track, bool fromQueue = false, PlaybackDeck? targetDeck = null)
+    private void LoadTrack(TrackEntry track, bool fromQueue = false, PlaybackDeck? targetDeck = null,
+                           bool activate = true)
     {
         if (!fromQueue)
         {
@@ -2124,6 +2425,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var musicPath = track.MusicPath ?? track.KaraokePath;
         var karaokePath = track.MusicPath != null ? track.KaraokePath : null;
 
+        // Karaoke mode: the deck plays the stem on Main and the original on the
+        // operator's Karaoke Aid. A missing stem is queued for this track alone
+        // (never a library sweep) and attached in place when it lands, so the
+        // deck starts on the mix and flips to the split render mid-track.
+        karaokePath = ApplyKaraokePlan(deck, track, musicPath, karaokePath);
+
         try
         {
             target.SetTrack(musicPath, karaokePath, track.Title, track.Artist);
@@ -2134,9 +2441,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
-        _activeDeck = deck;
-        _transport.ActivateDeck(deck);
-        SyncDeckActivation();
+        if (activate)
+        {
+            _activeDeck = deck;
+            _transport.ActivateDeck(deck);
+            SyncDeckActivation();
+        }
+        // !activate: pre-load for a planned transition. The deck is prepared but
+        // the user is still listening to the other one, so ACTIVE stays where it
+        // is (OnTransitionCompleted promotes this deck when the fade lands).
 
         LoadedTrack = track;
         LoadedTrackTitle = string.IsNullOrWhiteSpace(track.Artist)
@@ -2164,6 +2477,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         _ = FetchLyricsAsync(track, lyricsSource);
         _ = GenerateWaveformsAsync(target, target.WaveformGeneration, musicPath, karaokePath);
+
+        // BPM/beat grid for what is now on this deck: cached grids appear at
+        // once, unknown ones are queued and arrive through OnBeatAnalysed.
+        AttachBeatGrid(target, musicPath);
     }
 
     private async Task GenerateWaveformsAsync(DeckViewModel deck, int generation,
@@ -2235,14 +2552,104 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private void AddToQueue()
     {
         var track = SelectedTreeNode?.Track ?? SelectedTrack;
-        if (track == null)
+        if (track != null)
         {
-            StatusText = "Select a track to queue.";
+            Enqueue(PlaybackQueueItem.FromTrack(track, AssignDeckForNewRow()));
             return;
         }
 
-        Enqueue(PlaybackQueueItem.FromTrack(track, AssignDeckForNewRow()));
+        // A folder row (or the playlist itself) while a playlist is open: queue
+        // what the playlist currently shows. The shared menu carries one "Add to
+        // Queue" item, so this is the playlist half of the same gesture.
+        if (CanQueueActivePlaylist())
+        {
+            QueueActivePlaylist();
+            return;
+        }
+
+        StatusText = "Select a track to queue.";
     }
+
+    /// <summary>
+    /// Queue the active playlist exactly as the browser shows it: the frozen
+    /// membership narrowed by the current search, in tree (sort) order. Reading
+    /// the built leaves, rather than the playlist store, means a filter or a
+    /// sort both apply and nothing hidden is queued.
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(CanQueueActivePlaylist))]
+    private void QueueActivePlaylist()
+    {
+        if (_activePlaylist is null)
+        {
+            StatusText = "Open a playlist to queue it.";
+            return;
+        }
+
+        var rows = VisibleTracks();
+        if (rows.Count == 0)
+        {
+            StatusText = $"No visible tracks in \u201c{_activePlaylist.Name}\u201d to queue.";
+            return;
+        }
+
+        EnqueueMany(rows);
+        StatusText = $"Queued {rows.Count} track{(rows.Count == 1 ? "" : "s")} from " +
+                     $"\u201c{_activePlaylist.Name}\u201d.";
+    }
+
+    private bool CanQueueActivePlaylist() => _activePlaylist is not null && _treeLeaves.Count > 0;
+
+    /// <summary>The leaves in tree order: exactly the rows the user can see.</summary>
+    private List<TrackEntry> VisibleTracks()
+    {
+        var rows = new List<TrackEntry>(_treeLeaves.Count);
+        Walk(BrowserRoots);
+        return rows;
+
+        void Walk(IEnumerable<BrowserNode> nodes)
+        {
+            foreach (var node in nodes)
+            {
+                if (node.Track is { } track) rows.Add(track);
+                else Walk(node.Children);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Append a whole playlist in order as one queue operation: one state pass
+    /// and one save, with the duplicate policy of <see cref="Enqueue"/> (an
+    /// already-queued row moves to the end instead of appearing twice).
+    /// </summary>
+    private void EnqueueMany(IReadOnlyList<TrackEntry> tracks)
+    {
+        var queued = new Dictionary<string, PlaybackQueueItem>(StringComparer.OrdinalIgnoreCase);
+        foreach (var row in Queue)
+            queued.TryAdd(QueueRowKey(row.Kind, row.Key), row);
+
+        foreach (var track in tracks)
+        {
+            var item = PlaybackQueueItem.FromTrack(track, AssignDeckForNewRow());
+            if (!queued.TryGetValue(QueueRowKey(item.Kind, item.Key), out var existing))
+            {
+                Queue.Add(item);
+                queued[QueueRowKey(item.Kind, item.Key)] = item;
+                continue;
+            }
+
+            var from = Queue.IndexOf(existing);
+            existing.IsPlayed = false;
+            if (!existing.IsCurrent) existing.DeckTarget = item.DeckTarget;
+            Queue.Move(from, Queue.Count - 1);
+            if (CurrentIndex == from) SetCurrentQueueIndex(Queue.Count - 1);
+            else if (CurrentIndex > from) SetCurrentQueueIndex(CurrentIndex - 1);
+        }
+
+        MarkQueueState();
+        SaveQueue();
+    }
+
+    private static string QueueRowKey(string kind, string key) => kind + "\u0000" + key;
 
     /// <summary>
     /// Deck for a freshly queued row. Rotation reads the live transport, never a
@@ -2260,6 +2667,26 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _lastAssignedDeck = deck;
         return deck;
     }
+
+    // ---- queue contract: enqueueing is not playback --------------------------
+    //
+    // Enqueue - and therefore AddToQueue and AddSourceToQueue - is additive and
+    // silent: it never touches the transport, so queueing a track neither starts
+    // it nor crossfades. A queued row is the "armed next" row purely by sitting
+    // unplayed after the current one; it is brought in only when the track that
+    // is playing now reaches its end:
+    //
+    //     OnUiTick -> ReachedEnd -> AdvanceQueueAfterEndAsync
+    //              -> StartQueueItemAsync(autoAdvance: true) -> StartDeckAfterLoad
+    //
+    // Playback still starts on user intent only: the row's Play command
+    // (PlayNowFromQueue), PlayNext / PlayPrevious, or that end-of-track advance.
+    // The advance keeps the existing 2 s CrossfadeToDeck hand-off, so the mix
+    // stays continuous until the real transition engine lands.
+    //
+    // There is deliberately no separate "armed" flag: CurrentIndex plus the rows'
+    // IsPlayed already say what is playing and what comes next, which is what
+    // PlayNext / PlayPrevious / SaveQueue / RestorePlaybackQueue round-trip.
 
     private void Enqueue(PlaybackQueueItem item)
     {
@@ -2288,7 +2715,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         Queue.Add(item);
         MarkQueueState();
-        StatusText = $"Queued \u201c{item.Title}\u201d for deck {item.DeckText}.";
+        // Queued, not started: the row plays when the current track ends (see the
+        // queue contract above), so the status line says so instead of implying
+        // it is already playing.
+        StatusText = _transport.AnyPlaying && CurrentIndex >= 0
+            ? $"Queued \u201c{item.Title}\u201d for deck {item.DeckText} \u2014 it starts when the current track ends."
+            : $"Queued \u201c{item.Title}\u201d for deck {item.DeckText}.";
         SaveQueue();
     }
 
@@ -2459,30 +2891,59 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var key = id.Trim();
 
         var entry = _ledger.TryGet(key);
-        if (entry != null && !string.IsNullOrWhiteSpace(entry.Path) && File.Exists(entry.Path))
-            return entry.Path;
+        if (entry is { Path: { Length: > 0 } ledgerPath })
+        {
+            // Warm path the library scan already proved: no stat. A 5 000-row
+            // playlist hits this for most rows, which is the difference between
+            // a load that probes the disk 5 000 times and one that does not.
+            if (_libraryIndex.ContainsPath(ledgerPath)) return ledgerPath;
+
+            // Miss: the file may be newer than the last scan (a fresh download
+            // lands here), so only then pay for the filesystem answer.
+            if (PathExistsNoThrow(ledgerPath)) return ledgerPath;
+        }
 
         var track = FindSourceTrackById(key);
         return track == null ? null : _libraryIndex.Resolve(track);
     }
 
-    private SourceTrack? FindSourceTrackById(string id)
+    /// <summary>File.Exists that swallows the "invalid path" case instead of throwing.</summary>
+    private static bool PathExistsNoThrow(string path)
     {
-        if (_sourceTracksById == null)
+        try
         {
-            var byId = new Dictionary<string, SourceTrack>(StringComparer.OrdinalIgnoreCase);
-            foreach (var playlist in _playlistStore.Playlists)
-            {
-                foreach (var track in playlist.Tracks)
-                {
-                    if (!string.IsNullOrWhiteSpace(track.Id)) byId.TryAdd(track.Id.Trim(), track);
-                }
-            }
+            return File.Exists(path);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
 
-            _sourceTracksById = byId;
+    private SourceTrack? FindSourceTrackById(string id) =>
+        EnsureSourceTrackIndex().TryGetValue(id, out var match) ? match : null;
+
+    /// <summary>
+    /// The store's own rows keyed by id, built once per library change (the
+    /// store's Changed handler clears it). Every per-row availability probe goes
+    /// through this, so a playlist load is a dictionary lookup per row instead of
+    /// a walk over every playlist.
+    /// </summary>
+    private Dictionary<string, SourceTrack> EnsureSourceTrackIndex()
+    {
+        if (_sourceTracksById is { } cached) return cached;
+
+        var byId = new Dictionary<string, SourceTrack>(StringComparer.OrdinalIgnoreCase);
+        foreach (var playlist in _playlistStore.Playlists)
+        {
+            foreach (var track in playlist.Tracks)
+            {
+                if (!string.IsNullOrWhiteSpace(track.Id)) byId.TryAdd(track.Id.Trim(), track);
+            }
         }
 
-        return _sourceTracksById.TryGetValue(id, out var match) ? match : null;
+        _sourceTracksById = byId;
+        return byId;
     }
 
     /// <summary>
@@ -2496,9 +2957,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _playlistStore.SanitizeStates();
         Spotify.ReconcileFromLibrary();
         YouTube.ReconcileFromLibrary();
+        // The karaoke column is the scan index's view of the same rows: one
+        // dictionary hit per row, so this can ride along with every state pass.
+        RefreshRemoteLibraryFacts();
     }
 
-    private bool CanAddToQueue() => SelectedTreeNode?.Track != null || SelectedTrack != null;
+    private bool CanAddToQueue() =>
+        SelectedTreeNode?.Track != null || SelectedTrack != null || CanQueueActivePlaylist();
 
     private bool CanPlayNext() => Queue.Count > 0;
 
@@ -2562,6 +3027,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
     /// Auto-advance hands the track to the deck that is not currently audible
     /// (and rewrites the row's deck target, so the persisted queue stays honest);
     /// a manual Next/Prev/Play now keeps the row's own target.
+    /// This is the only place a queue row starts playing, and it is reached from
+    /// user intent (PlayNowFromQueue, Next/Prev) or from the end-of-track advance
+    /// (AdvanceQueueAfterEndAsync) - never from the enqueue path.
     /// </summary>
     private async Task StartQueueItemAsync(PlaybackQueueItem item, bool autoAdvance = false)
     {
@@ -2588,14 +3056,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
-        StartDeckAfterLoad(deck);
+        StartDeckAfterLoad(deck, fromQueue: true, item: item);
     }
 
     /// <summary>
     /// Start a freshly loaded deck and, when the other deck is still running,
     /// hand the mix over with the default 2 s equal-power crossfade instead of a cut.
     /// </summary>
-    private void StartDeckAfterLoad(PlaybackDeck deck)
+    private void StartDeckAfterLoad(PlaybackDeck deck, bool fromQueue = false, PlaybackQueueItem? item = null)
     {
         // autoCue: false - the hand-off below owns the fader, so PlayDeck must
         // not snap it first.
@@ -2620,6 +3088,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
 
         SyncCrossfaderFromTransport();
+
+        // Queue rows arm the next row on the idle deck so the fade ends with this
+        // track instead of starting after it. Non-queue playback keeps the 1.x
+        // behaviour (a 2 s fade when a deck is already running).
+        if (fromQueue && item != null)
+            _ = ArmNextQueueItemAsync(deck);
     }
 
     /// <summary>
@@ -2745,7 +3219,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     /// </summary>
     public async Task<bool> PlaySourceTrackAsync(SourceTrack source, bool fromQueue = false,
                                                   PlaybackDeck? targetDeck = null,
-                                                  bool startPlayback = true)
+                                                  bool startPlayback = true, bool activate = true)
     {
         try
         {
@@ -2770,7 +3244,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 Duration = source.Duration,
             };
 
-            LoadTrack(entry, fromQueue, targetDeck);
+            LoadTrack(entry, fromQueue, targetDeck, activate);
             if (startPlayback)
             {
                 _transport.Play();
@@ -3462,14 +3936,38 @@ public partial class MainViewModel : ObservableObject, IDisposable
         // play state in step with the decks.
         _previewTransport.NotifyTick();
 
+        // 2.0 surfaces: what the transition scheduler is doing, how much of the
+        // library has a beat grid, and the state the Stream Deck keys mirror.
+        RefreshTransitionStatus();
+        RefreshAnalysisCounters();
+        PublishApiState();
+
         // Auto-stop the active deck once it (including its karaoke tail) has
         // finished. A track that came from the queue hands over to the next row;
         // the other deck keeps playing underneath, which is the mix.
         if (_transport.ReachedEnd)
         {
+            // A queued row is normally armed ahead of time: the transition
+            // scheduler has already faded this deck out at its last sample and
+            // OnTransitionCompleted promotes the new row.
             var fromQueue = CurrentIndex >= 0;
-            _transport.Stop();
-            if (fromQueue) _ = AdvanceQueueAfterEndAsync();
+            bool armed = _armedItem != null && _transport.Transitions?.IsActive == true;
+
+            if (armed)
+            {
+                // The armed fade *owns* the end of this deck - it is planned to
+                // finish exactly here. Stopping or cancelling it is what froze the
+                // fader mid-ramp and left the incoming deck silent; complete it
+                // instead so the hand-off still lands (and the row is promoted).
+                _transport.Transitions!.CompleteNow();
+            }
+            else
+            {
+                // Nothing armed means either a non-queue track (just stop) or a
+                // refused/failed transition (advance the old way, with a hard start).
+                _transport.Stop();
+                if (fromQueue) _ = AdvanceQueueAfterEndAsync();
+            }
         }
     }
 
@@ -3719,9 +4217,19 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _trackMeta.Changed -= OnTrackMetadataChanged;
         _trackMeta.Save();
         _trackMeta.Dispose();
+        ShutdownAudio2();
+        Soundboard?.Save();
+        // The playlist store mirrors every save into library.db on a coalescing
+        // writer; drain it and close it so the last add/rename of the session is
+        // on disk before the process exits.
+        _playlistStore.Dispose();
         _separation.Dispose();
         _watcher.Dispose();
         _transport.Dispose();
         _tagCache.Save();
+        // library.json was just rewritten by us. Mirror it into SQLite now and
+        // record its stamp, so the tags land in the database and the next start
+        // sees a matching file instead of reimporting what we wrote ourselves.
+        Data.LibraryBoot.SyncFromDisk("library.json saved at shutdown");
     }
 }

@@ -3,9 +3,18 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:views="clr-namespace:JockeyBox.Views"
              Unloaded="OnViewUnloaded"
+             DataContextChanged="OnViewDataContextChanged"
              Background="Transparent">
 
     <UserControl.Resources>
+        <ResourceDictionary>
+        <!-- Shared row design, context menu and filter/sort strip, identical to
+             the library and YouTube lists. -->
+        <ResourceDictionary.MergedDictionaries>
+            <ResourceDictionary Source="/Views/Shared/TrackRows.xaml"/>
+            <ResourceDictionary Source="/Views/Shared/TrackMenu.xaml"/>
+        </ResourceDictionary.MergedDictionaries>
+
         <SolidColorBrush x:Key="ErrorBrush" Color="#E06C7A"/>
         <views:InverseBoolToVisibilityConverter x:Key="InverseBoolToVisibility"/>
 
@@ -188,6 +197,7 @@
                 </Setter.Value>
             </Setter>
         </Style>
+        </ResourceDictionary>
     </UserControl.Resources>
 
     <Grid>
@@ -361,11 +371,12 @@
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="FILTER" Style="{StaticResource SectionLabel}"
-                                   Margin="0,0,6,0"/>
-                        <TextBox Grid.Column="1" FontSize="11" VerticalContentAlignment="Center"
-                                 Text="{Binding FilterText, UpdateSourceTrigger=PropertyChanged}"
-                                 ToolTip="Filter the track list by title, artist or album"/>
+                        <!-- Shared filter + sort strip; its DataContext is a
+                             TrackListView built in the code-behind so the filter
+                             still writes into FilterText. -->
+                        <ContentControl Grid.Column="0" Grid.ColumnSpan="2" VerticalAlignment="Center"
+                                        x:Name="FilterHost" Focusable="False"
+                                        ContentTemplate="{StaticResource FilterSortStrip}"/>
                         <Button Grid.Column="2" Content="&#x25B6;" Style="{StaticResource RowActionButton}"
                                 Margin="6,0,0,0"
                                 Command="{Binding PlaySelectedCommand}"
@@ -420,7 +431,13 @@
 
                     <!-- Table -->
                     <Grid Grid.Row="3" Margin="0,4,0,0">
-                        <ListView x:Name="TrackList" ItemsSource="{Binding TracksView}"
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+                        <ContentControl Grid.Row="0" Content="{StaticResource TrackColumnHeaders}"
+                                        Focusable="False" IsTabStop="False"/>
+                        <ListView Grid.Row="1" x:Name="TrackList" ItemsSource="{Binding TracksView}"
                                   SelectedItem="{Binding SelectedTrack}"
                                   ItemContainerStyle="{StaticResource TrackRow}"
                                   Background="Transparent" BorderThickness="0"
@@ -429,110 +446,9 @@
                                   VirtualizingPanel.VirtualizationMode="Standard"
                                   MouseDoubleClick="OnTrackDoubleClick"
                                   PreviewMouseRightButtonDown="OnTrackRightClick"
-                                  KeyDown="OnTrackKeyDown">
-                            <ListView.ContextMenu>
-                                <ContextMenu>
-                                    <MenuItem Header="Play"
-                                              Command="{Binding PlacementTarget.DataContext.PlaySelectedCommand,
-                                                  RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
-                                    <MenuItem Header="Add to queue"
-                                              Command="{Binding PlacementTarget.DataContext.AddToQueueCommand,
-                                                  RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
-                                    <MenuItem Header="Download"
-                                              Command="{Binding PlacementTarget.DataContext.DownloadSelectedCommand,
-                                                  RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
-                                    <MenuItem Header="Preview (stream)"
-                                              Command="{Binding PlacementTarget.DataContext.PreviewTrackCommand,
-                                                  RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
-                                    <MenuItem Header="Download &amp; play"
-                                              Command="{Binding PlacementTarget.DataContext.DownloadAndPlaySelectedCommand,
-                                                  RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
-                                    <MenuItem Header="Find versions on YouTube"
-                                              Command="{Binding PlacementTarget.DataContext.FindVersionsCommand,
-                                                  RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
-                                    <MenuItem Header="Open on YouTube"
-                                              Command="{Binding PlacementTarget.DataContext.OpenSelectedOnYouTubeCommand,
-                                                  RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
-                                </ContextMenu>
-                            </ListView.ContextMenu>
-                            <ListView.ItemTemplate>
-                                <DataTemplate>
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="78"/>
-                                            <ColumnDefinition Width="78"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                            <ColumnDefinition Width="18"/>
-                                            <ColumnDefinition Width="16"/>
-                                        </Grid.ColumnDefinitions>
-                                        <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                                            <TextBlock Text="{Binding Title}" FontSize="12"
-                                                       TextTrimming="CharacterEllipsis"
-                                                       ToolTip="{Binding DisplayName}"/>
-                                            <TextBlock Text="{Binding Error}" FontSize="10"
-                                                       Foreground="{StaticResource ErrorBrush}"
-                                                       TextTrimming="CharacterEllipsis">
-                                                <TextBlock.Style>
-                                                    <Style TargetType="TextBlock">
-                                                        <Setter Property="Visibility" Value="Collapsed"/>
-                                                        <Style.Triggers>
-                                                            <DataTrigger Binding="{Binding IsBusy}" Value="True">
-                                                                <Setter Property="Visibility" Value="Visible"/>
-                                                            </DataTrigger>
-                                                        </Style.Triggers>
-                                                    </Style>
-                                                </TextBlock.Style>
-                                            </TextBlock>
-                                        </StackPanel>
-                                        <TextBlock Grid.Column="1" Text="{Binding Artist}" FontSize="10.5"
-                                                   VerticalAlignment="Center" Margin="8,0,0,0"
-                                                   Foreground="{StaticResource TextDimBrush}"
-                                                   TextTrimming="CharacterEllipsis" ToolTip="{Binding Artist}"/>
-                                        <TextBlock Grid.Column="2" Text="{Binding Album}" FontSize="10.5"
-                                                   VerticalAlignment="Center" Margin="8,0,0,0"
-                                                   Foreground="{StaticResource TextDimBrush}"
-                                                   TextTrimming="CharacterEllipsis" ToolTip="{Binding Album}"/>
-                                        <TextBlock Grid.Column="3" Text="{Binding DurationText}"
-                                                   FontFamily="Consolas" FontSize="10.5"
-                                                   VerticalAlignment="Center" Margin="6,0,4,0"
-                                                   Foreground="{StaticResource TextDimBrush}"/>
-                                        <Button Grid.Column="4" Style="{StaticResource PreviewButton}"
-                                                Command="{Binding DataContext.PreviewTrackCommand,
-                                                    RelativeSource={RelativeSource AncestorType=ListView}}"
-                                                CommandParameter="{Binding}"/>
-                                        <Button Grid.Column="5" Content="&#x21C4;" Style="{StaticResource RowMiniButton}"
-                                                VerticalAlignment="Center" Margin="0,0,2,0"
-                                                Command="{Binding DataContext.FindVersionsCommand,
-                                                    RelativeSource={RelativeSource AncestorType=ListView}}"
-                                                CommandParameter="{Binding}"
-                                                ToolTip="Find YouTube versions of this track"/>
-                                        <TextBlock Grid.Column="6" Text="{Binding StateGlyph}" FontSize="10"
-                                                   HorizontalAlignment="Center" VerticalAlignment="Center">
-                                            <TextBlock.Style>
-                                                <Style TargetType="TextBlock">
-                                                    <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
-                                                    <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding State}" Value="InLibrary">
-                                                            <Setter Property="Foreground" Value="{StaticResource AccentABrush}"/>
-                                                        </DataTrigger>
-                                                        <DataTrigger Binding="{Binding State}" Value="Queued">
-                                                            <Setter Property="Foreground" Value="{StaticResource AccentBBrush}"/>
-                                                        </DataTrigger>
-                                                        <DataTrigger Binding="{Binding State}" Value="Downloading">
-                                                            <Setter Property="Foreground" Value="{StaticResource AccentBBrush}"/>
-                                                        </DataTrigger>
-                                                        <DataTrigger Binding="{Binding State}" Value="Failed">
-                                                            <Setter Property="Foreground" Value="{StaticResource ErrorBrush}"/>
-                                                        </DataTrigger>
-                                                    </Style.Triggers>
-                                                </Style>
-                                            </TextBlock.Style>
-                                        </TextBlock>
-                                    </Grid>
-                                </DataTemplate>
-                            </ListView.ItemTemplate>
+                                  KeyDown="OnTrackKeyDown"
+                                  ItemTemplate="{StaticResource RemoteTrackRow}"
+                                  ContextMenu="{StaticResource TrackMenu}">
                         </ListView>
 
                         <!-- Busy / empty / disconnected states, layered over the table -->

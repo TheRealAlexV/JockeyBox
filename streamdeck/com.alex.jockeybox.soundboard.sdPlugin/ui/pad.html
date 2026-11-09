@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>JockeyBox Soundboard</title>
+    <link rel="stylesheet" href="pi.css" />
+  </head>
+  <body>
+    <div class="pi">
+      <header class="pi__head">
+        <h1 id="title">JockeyBox pad</h1>
+        <span id="status" class="pill" data-kind="idle">starting…</span>
+      </header>
+
+      <section class="field" id="soundField">
+        <label for="sound">Sound</label>
+        <div class="field__row">
+          <select id="sound">
+            <option value="">— no pads —</option>
+          </select>
+          <button id="refresh" class="btn" type="button" title="Ask JockeyBox for its pad list again">
+            Refresh
+          </button>
+        </div>
+        <p id="hint" class="hint">
+          The list comes from JockeyBox over the plugin, so the app has to be running.
+        </p>
+      </section>
+
+      <section class="panel">
+        <h2>Connection</h2>
+        <p class="hint">
+          Both values are plugin-wide, so setting them once covers every key. Find the token in
+          JockeyBox settings (<code>ApiToken</code>); the port is the loopback API port, 17890
+          unless it was taken.
+        </p>
+
+        <div class="field field--split">
+          <div>
+            <label for="port">API port</label>
+            <input id="port" type="number" min="1" max="65535" step="1" placeholder="17890" />
+          </div>
+          <div class="grow">
+            <label for="token">API token</label>
+            <input id="token" type="password" autocomplete="off" spellcheck="false" placeholder="from JockeyBox settings" />
+          </div>
+        </div>
+
+        <div class="actions">
+          <button id="test" class="btn btn--primary" type="button">Test connection</button>
+        </div>
+      </section>
+
+      <footer class="foot" id="foot">
+        Pressing the key fires the pad; a lit key means that pad is playing.
+      </footer>
+    </div>
+
+    <script src="pi.js"></script>
+  </body>
+</html>

@@ -20,14 +20,8 @@ public static class YouTubeApi
         @"(?:[?&]v=|youtu\.be/|/shorts/|/embed/|/v/|/live/)([A-Za-z0-9_-]{11})",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-    private static readonly Regex BareVideoIdRegex = new(
-        "^[A-Za-z0-9_-]{11}$", RegexOptions.Compiled);
-
     private static readonly Regex ListParamRegex = new(
         @"[?&]list=([A-Za-z0-9_-]+)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
-
-    private static readonly Regex BarePlaylistIdRegex = new(
-        "^(PL|UU|OL|RD|LL|FL)[A-Za-z0-9_-]+$", RegexOptions.Compiled);
 
     /// <summary>
     /// Channel and user pages are importable too: yt-dlp treats
@@ -82,7 +76,7 @@ public static class YouTubeApi
 
         var text = input.Trim();
 
-        if (BareVideoIdRegex.IsMatch(text))
+        if (YouTubeId.Video.IsMatch(text))
         {
             videoId = text;
             return true;
@@ -98,42 +92,21 @@ public static class YouTubeApi
         return false;
     }
 
-    /// <summary>
-    /// A readable playlist name for an import target: "@Kavinsky" for a channel
-    /// page, "" when the link is a plain list id (caller falls back to a date).
-    /// </summary>
-    public static string DeriveImportName(string input)
-    {
-        var text = (input ?? "").Trim();
-        if (text.Length == 0) return "";
-
-        var match = Regex.Match(
-            text,
-            @"youtube\.com/(?:@([^/?#\s]+)|channel/(UC[A-Za-z0-9_-]+)|c/([^/?#\s]+)|user/([^/?#\s]+))",
-            RegexOptions.IgnoreCase);
-        if (!match.Success) return "";
-
-        for (var i = 1; i < match.Groups.Count; i++)
-        {
-            var value = match.Groups[i].Value;
-            if (value.Length == 0) continue;
-            return i == 1 ? "@" + value : value;
-        }
-        return "";
-    }
-
     /// <summary>True when the input is a channel or user page rather than a list.</summary>
     public static bool IsChannelUrl(string input) =>
         ChannelUrlRegex.IsMatch((input ?? "").Trim());
 
     /// <summary>
     /// Extracts a playlist id from a "list=" URL parameter, a "list=&lt;id&gt;"
-    /// fragment or a bare PL/UU/OL/RD/LL/FL id.
+    /// fragment or a bare list id (see <see cref="YouTubeId.Playlist"/>).
     /// </summary>
     /// <remarks>
-    /// A true list id comes back in <paramref name="listId"/>; for a channel or
-    /// user page (no list id) the method still returns true with an empty id —
-    /// the caller hands the original URL to yt-dlp, which reads it as a playlist.
+    /// A channel or user page returns false. It used to return true with an empty
+    /// id so the caller could hand the URL to yt-dlp ("every upload ever"), and
+    /// that is what let a handle become a playlist: the empty id was dropped, the
+    /// raw <c>SourceId</c> took its place, and the row rendered as a playlist
+    /// named "@handle" that could never be synced or removed. Channel imports go
+    /// through <see cref="IsChannelUrl"/> and a different, explicit path.
     /// </remarks>
     public static bool TryParsePlaylistId(string input, out string listId)
     {
@@ -155,21 +128,24 @@ public static class YouTubeApi
             return listId.Length > 0;
         }
 
-        if (BarePlaylistIdRegex.IsMatch(text))
+        if (YouTubeId.Playlist.IsMatch(text))
         {
             listId = text;
             return true;
         }
 
-        // Channel / user page: no list id, but still a playlist of uploads.
-        if (ChannelUrlRegex.IsMatch(text))
-        {
-            listId = "";
-            return true;
-        }
-
         return false;
     }
+
+    /// <summary>
+    /// True only for a value that actually names a playlist: a <c>list=</c> URL or
+    /// a bare list id (see <see cref="YouTubeId.Playlist"/>). The one rule every
+    /// caller uses before treating a <see cref="UserPlaylist.SourceId"/> as
+    /// something yt-dlp can fetch as a playlist, so a channel handle can never
+    /// re-enter the store as one.
+    /// </summary>
+    public static bool IsPlaylistSource(string? input) =>
+        TryParsePlaylistId(input ?? "", out var id) && id.Length > 0;
 
     /// <summary>
     /// Maps yt-dlp entries onto <see cref="SourceTrack"/>s for the download queue.

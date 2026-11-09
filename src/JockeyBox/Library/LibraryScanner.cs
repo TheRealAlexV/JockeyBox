@@ -1,4 +1,5 @@
 using System.IO;
+using JockeyBox.Audio.Beat;
 
 namespace JockeyBox.Library;
 
@@ -98,6 +99,13 @@ public class LibraryScanner
                 track.Artist = tags.Artist;
                 track.Album = tags.Album;
                 track.Bpm = tags.Bpm;
+
+                // Precedence: an explicit TKEY tag always wins. Only when the
+                // file states no key do we show the analysis estimate, which is
+                // marked as such on the grid so a later tag supersedes it.
+                if (!string.IsNullOrWhiteSpace(tags.Key)) BeatGridStore.Shared?.MarkTagKey(metaSource);
+                track.Key = TrackKeyResolver.Resolve(tags.Key, BeatGridStore.Shared?.Get(metaSource));
+
                 track.Duration = TimeSpan.FromMilliseconds(tags.DurationMs);
             }
             catch

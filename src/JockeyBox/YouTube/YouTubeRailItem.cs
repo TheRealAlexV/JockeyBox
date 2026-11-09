@@ -69,6 +69,13 @@ public sealed partial class YouTubeRailItem : ObservableObject
     }
 
     /// <summary>
+    /// The picker shows this row through an ItemTemplate, so the combo box itself
+    /// has no text to expose to accessibility tools or the live UI tree - they get
+    /// the object's type name. The title is what a reader needs.
+    /// </summary>
+    public override string ToString() => Title;
+
+    /// <summary>
     /// Copy the freshly computed fields of <paramref name="fresh"/> onto this
     /// row, keeping the row instance (and therefore the selection) alive.
     /// </summary>

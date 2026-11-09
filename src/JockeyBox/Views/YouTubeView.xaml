@@ -3,9 +3,17 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:views="clr-namespace:JockeyBox.Views"
              Unloaded="OnViewUnloaded"
+             DataContextChanged="OnViewDataContextChanged"
              Background="Transparent">
 
     <UserControl.Resources>
+        <ResourceDictionary>
+        <!-- Shared row design, context menu and filter/sort strip, identical to
+             the library and Spotify lists. -->
+        <ResourceDictionary.MergedDictionaries>
+            <ResourceDictionary Source="/Views/Shared/TrackRows.xaml"/>
+            <ResourceDictionary Source="/Views/Shared/TrackMenu.xaml"/>
+        </ResourceDictionary.MergedDictionaries>
         <views:YtDurationConverter x:Key="DurationText"/>
         <views:ViewCountConverter x:Key="ViewsText"/>
         <SolidColorBrush x:Key="ErrorBrush" Color="#E06C7A"/>
@@ -213,6 +221,7 @@
                 </Setter.Value>
             </Setter>
         </Style>
+        </ResourceDictionary>
     </UserControl.Resources>
 
     <Grid Margin="0,2,0,0">
@@ -313,7 +322,7 @@
 
                     <!-- Section head + search feedback -->
                     <Grid Grid.Row="0" Height="14">
-                        <TextBlock Text="SEARCH RESULTS" Style="{StaticResource SectionLabel}"/>
+                        <TextBlock Text="{Binding LeftPaneTitle}" Style="{StaticResource SectionLabel}"/>
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                             <TextBlock Text="Searching&#x2026;" FontSize="10.5"
                                        Foreground="{StaticResource AccentBBrush}" Margin="0,0,6,0"
@@ -329,44 +338,77 @@
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
                         <TextBox Grid.Column="0" FontSize="12" VerticalContentAlignment="Center"
                                  Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
                                  KeyDown="OnSearchKeyDown"
-                                 ToolTip="Search YouTube by title, artist or a phrase"/>
+                                 ToolTip="Search YouTube by title, artist, a phrase, or a video / playlist link"/>
                         <Button Grid.Column="1" Content="Search" Style="{StaticResource ToolButton}"
                                 Width="64" Margin="6,0,0,0"
                                 Command="{Binding SearchCommand}" ToolTip="Search YouTube"/>
-                        <ToggleButton Grid.Column="2" x:Name="ImportToggle" Content="&#x2B07;"
-                                      Style="{StaticResource StripToggle}" Margin="6,0,0,0"
-                                      ToolTip="Import a video or playlist by URL"/>
                     </Grid>
 
-                    <!-- Import strip, hidden until asked for -->
-                    <Grid Grid.Row="2" Height="24" Margin="0,6,0,0"
-                          Visibility="{Binding IsChecked, ElementName=ImportToggle,
-                                       Converter={StaticResource BoolToVisibility}}">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBlock Grid.Column="0" Text="URL" Style="{StaticResource SectionLabel}"
-                                   Margin="0,0,8,0"/>
-                        <TextBox Grid.Column="1" FontSize="11" VerticalContentAlignment="Center"
-                                 Text="{Binding ImportUrl, UpdateSourceTrigger=PropertyChanged}"
-                                 KeyDown="OnImportKeyDown"
-                                 ToolTip="Paste a YouTube video or playlist link"/>
-                        <Button Grid.Column="2" Content="Import" Style="{StaticResource ToolButton}"
-                                Width="56" Margin="6,0,0,0"
-                                Command="{Binding ImportCommand}"
-                                ToolTip="Add a YouTube video or playlist by URL"/>
-                    </Grid>
+                    <!-- Paste row: a link (or bare id) becomes a listing of what it holds -->
+                    <StackPanel Grid.Row="2" Margin="0,6,0,0">
+                        <Grid Height="24">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="URL" Style="{StaticResource SectionLabel}"
+                                       Margin="0,0,8,0"/>
+                            <TextBox Grid.Column="1" x:Name="ImportUrlBox" FontSize="11"
+                                     VerticalContentAlignment="Center"
+                                     Text="{Binding ImportUrl, UpdateSourceTrigger=PropertyChanged}"
+                                     KeyDown="OnImportKeyDown"
+                                     ToolTip="A YouTube video link, a playlist link, or a bare video / playlist id"/>
+                            <Button Grid.Column="2" Content="Load" Style="{StaticResource ToolButton}"
+                                    Width="52" Margin="6,0,0,0"
+                                    Command="{Binding LoadImporterCommand}"
+                                    ToolTip="List what this link contains (Enter does the same)"/>
+                            <ToggleButton Grid.Column="3" Content="Downloaded"
+                                          Style="{StaticResource StripToggle}" Margin="6,0,0,0"
+                                          IsChecked="{Binding IsDownloadedView, Mode=TwoWay}"
+                                          ToolTip="Browse the files that came from YouTube"/>
+                        </Grid>
 
-                    <!-- Results -->
+                        <!-- One short line, never a dialog -->
+                        <Grid Margin="0,3,0,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="{Binding ImportError}" FontSize="10.5"
+                                       TextWrapping="Wrap" Foreground="{StaticResource AccentBBrush}"
+                                       Visibility="{Binding HasImportError,
+                                                    Converter={StaticResource BoolToVisibility}}"/>
+                            <Button Grid.Column="1" Content="Retry" Style="{StaticResource ToolButton}"
+                                    Width="48" Margin="6,0,0,0" VerticalAlignment="Top"
+                                    Command="{Binding RetryImportCommand}"
+                                    Visibility="{Binding CanRetryImport,
+                                                 Converter={StaticResource BoolToVisibility}}"/>
+                        </Grid>
+                    </StackPanel>
+
+                    <!-- Content pane: search results, an importer listing, or the downloaded view -->
                     <Grid Grid.Row="3" Margin="0,4,0,0">
-                        <ListBox x:Name="ResultList" ItemsSource="{Binding Results}"
+
+                        <!-- Search results -->
+                        <Grid Visibility="{Binding ShowSearchResults,
+                                          Converter={StaticResource BoolToVisibility}}">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+                            <ContentControl Grid.Row="0" x:Name="FilterHost" Focusable="False"
+                                            ContentTemplate="{StaticResource FilterSortStrip}"/>
+                            <ContentControl Grid.Row="1" Content="{StaticResource TrackColumnHeaders}"
+                                            Focusable="False" IsTabStop="False"/>
+                        <ListBox Grid.Row="2" x:Name="ResultList" ItemsSource="{Binding Results}"
                                  SelectedItem="{Binding SelectedResult}"
                                  ItemContainerStyle="{StaticResource MediaRow}"
                                  Background="Transparent" BorderThickness="0"
@@ -375,83 +417,12 @@
                                  VirtualizingPanel.VirtualizationMode="Standard"
                                  MouseDoubleClick="OnResultDoubleClick"
                                  PreviewMouseRightButtonDown="OnResultRightClick"
-                                 KeyDown="OnResultKeyDown">
-                            <ListBox.ContextMenu>
-                                <ContextMenu>
-                                    <MenuItem Header="Play"
-                                              Command="{Binding PlacementTarget.DataContext.PlayResultCommand,
-                                                  RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
-                                    <MenuItem Header="Add to queue"
-                                              Command="{Binding PlacementTarget.DataContext.AddResultToQueueCommand,
-                                                  RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
-                                    <MenuItem Header="Preview (stream)"
-                                              Command="{Binding PlacementTarget.DataContext.PreviewResultCommand,
-                                                  RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
-                                    <MenuItem Header="Download"
-                                              Command="{Binding PlacementTarget.DataContext.DownloadResultCommand,
-                                                  RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
-                                    <MenuItem Header="Download &amp; play"
-                                              Command="{Binding PlacementTarget.DataContext.DownloadAndPlayResultCommand,
-                                                  RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
-                                    <MenuItem Header="Open on YouTube"
-                                              Command="{Binding PlacementTarget.DataContext.OpenResultOnYouTubeCommand,
-                                                  RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
-                                    <MenuItem Header="Add to playlist"
-                                              Command="{Binding PlacementTarget.DataContext.AddResultToPlaylistCommand,
-                                                  RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
-                                </ContextMenu>
-                            </ListBox.ContextMenu>
-                            <ListBox.ItemTemplate>
-                                <DataTemplate>
-                                    <Grid>
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <StackPanel Grid.Column="0">
-                                            <TextBlock Text="{Binding Title}" FontSize="12.5"
-                                                       TextTrimming="CharacterEllipsis" ToolTip="{Binding Title}"/>
-                                            <StackPanel Orientation="Horizontal" Margin="0,1,0,0">
-                                                <TextBlock Text="{Binding Uploader}" FontSize="10.5"
-                                                           Foreground="{StaticResource TextDimBrush}"
-                                                           TextTrimming="CharacterEllipsis" MaxWidth="180"/>
-                                                <TextBlock Text="  &#x00B7;  " FontSize="10.5"
-                                                           Foreground="{StaticResource TextDimBrush}"/>
-                                                <TextBlock Text="{Binding Duration, Converter={StaticResource DurationText}}"
-                                                           FontFamily="Consolas" FontSize="10.5"
-                                                           Foreground="{StaticResource TextDimBrush}"/>
-                                                <TextBlock Text="  &#x00B7;  " FontSize="10.5"
-                                                           Foreground="{StaticResource TextDimBrush}"/>
-                                                <TextBlock Text="{Binding ViewCount, Converter={StaticResource ViewsText}}"
-                                                           FontSize="10.5" Foreground="{StaticResource TextDimBrush}"/>
-                                                <TextBlock Text="LIVE" FontSize="9" FontWeight="Bold" Margin="8,0,0,0"
-                                                           Foreground="{StaticResource AccentBBrush}" VerticalAlignment="Center"
-                                                           Visibility="{Binding IsLive, Converter={StaticResource BoolToVisibility}}"/>
-                                            </StackPanel>
-                                        </StackPanel>
-                                        <StackPanel Grid.Column="1" Orientation="Horizontal"
-                                                    VerticalAlignment="Center" Margin="8,0,0,0">
-                                            <Button Style="{StaticResource PreviewButton}"
-                                                    Command="{Binding DataContext.PreviewEntryCommand,
-                                                        RelativeSource={RelativeSource AncestorType=ListBox}}"
-                                                    CommandParameter="{Binding}"/>
-                                            <Button Content="&#x2B07;" Style="{StaticResource RowMiniButton}"
-                                                    Command="{Binding DataContext.DownloadEntryCommand,
-                                                        RelativeSource={RelativeSource AncestorType=ListBox}}"
-                                                    CommandParameter="{Binding}"
-                                                    ToolTip="Download this result into the selected playlist"/>
-                                            <Button Content="&#x2197;" Style="{StaticResource RowMiniButton}"
-                                                    Command="{Binding DataContext.OpenEntryOnYouTubeCommand,
-                                                        RelativeSource={RelativeSource AncestorType=ListBox}}"
-                                                    CommandParameter="{Binding}"
-                                                    ToolTip="Open this result on YouTube in your browser"/>
-                                        </StackPanel>
-                                    </Grid>
-                                </DataTemplate>
-                            </ListBox.ItemTemplate>
+                                 KeyDown="OnResultKeyDown"
+                                 ItemTemplate="{StaticResource YouTubeResultRow}"
+                                 ContextMenu="{StaticResource TrackMenu}">
                         </ListBox>
 
-                        <TextBlock Text="Search YouTube, or import a link with &#x2B07;."
+                        <TextBlock Text="Search YouTube, or paste a video / playlist link."
                                    FontSize="11" TextWrapping="Wrap" TextAlignment="Center"
                                    Foreground="{StaticResource TextDimBrush}"
                                    HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="250">
@@ -470,6 +441,183 @@
                                 </Style>
                             </TextBlock.Style>
                         </TextBlock>
+                        </Grid>
+
+                        <!-- Importer listing: what the pasted link holds, in source order -->
+                        <Grid Visibility="{Binding ShowImporter, Converter={StaticResource BoolToVisibility}}">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <StackPanel Grid.Row="0" Margin="0,2,0,0">
+                                <TextBlock Text="{Binding ImportHeader}" Style="{StaticResource SectionLabel}"/>
+                                <TextBlock Text="{Binding ImportTitle}" FontSize="13" FontWeight="SemiBold"
+                                           TextTrimming="CharacterEllipsis" ToolTip="{Binding ImportTitle}"/>
+                                <TextBlock Text="{Binding ImportMeta}" Style="{StaticResource MetaText}"
+                                           TextTrimming="CharacterEllipsis" ToolTip="{Binding ImportMeta}"/>
+                            </StackPanel>
+
+                            <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,6,0,0">
+                                <Button Content="{Binding DownloadSelectedText}"
+                                        Style="{StaticResource ToolButton}"
+                                        Command="{Binding DownloadSelectedCommand}"
+                                        ToolTip="Queue the checked rows through the download queue"/>
+                                <Button Content="Download all" Style="{StaticResource ToolButton}"
+                                        Margin="6,0,0,0"
+                                        Command="{Binding DownloadAllCommand}"
+                                        Visibility="{Binding ShowDownloadAll,
+                                                     Converter={StaticResource BoolToVisibility}}"
+                                        ToolTip="Queue every row in this listing"/>
+                                <Button Content="Close" Style="{StaticResource ToolButton}" Margin="6,0,0,0"
+                                        Command="{Binding CloseImporterCommand}"
+                                        ToolTip="Leave the listing and go back to search results"/>
+                            </StackPanel>
+
+                            <ListBox Grid.Row="2" Margin="0,6,0,0" ItemsSource="{Binding ImporterRows}"
+                                     ItemContainerStyle="{StaticResource MediaRow}"
+                                     Background="Transparent" BorderThickness="0"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                     VirtualizingPanel.IsVirtualizing="True"
+                                     VirtualizingPanel.VirtualizationMode="Standard">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <CheckBox Grid.Column="0" IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                                      VerticalAlignment="Center" Margin="0,0,8,0"
+                                                      ToolTip="Include this row in Download selected"/>
+                                            <StackPanel Grid.Column="1">
+                                                <TextBlock Text="{Binding Title}" FontSize="12.5"
+                                                           TextTrimming="CharacterEllipsis"
+                                                           ToolTip="{Binding Title}"/>
+                                                <TextBlock Text="{Binding Artist}" FontSize="10.5"
+                                                           Foreground="{StaticResource TextDimBrush}"
+                                                           TextTrimming="CharacterEllipsis"/>
+                                            </StackPanel>
+                                            <TextBlock Grid.Column="2" Text="{Binding DurationText}"
+                                                       FontFamily="Consolas" FontSize="10.5"
+                                                       Foreground="{StaticResource TextDimBrush}"
+                                                       VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                            <TextBlock Grid.Column="3" Text="{Binding StateText}" FontSize="10.5"
+                                                       Width="100" TextAlignment="Right" Margin="8,0,0,0"
+                                                       VerticalAlignment="Center"
+                                                       Foreground="{StaticResource TextDimBrush}"/>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                        </Grid>
+
+                            <TextBlock Grid.Row="3" Text="{Binding ImportEmptyText}"
+                                       FontSize="11" TextWrapping="Wrap" TextAlignment="Center"
+                                       Foreground="{StaticResource TextDimBrush}"
+                                       HorizontalAlignment="Center" Margin="0,10,0,0" MaxWidth="250">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding ImporterRows.Count}" Value="0">
+                                                <Setter Property="Visibility" Value="Visible"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </Grid>
+
+                        <!-- Files that came from YouTube, resolved from the ledger, not the file name -->
+                        <Grid Visibility="{Binding IsDownloadedView,
+                                          Converter={StaticResource BoolToVisibility}}">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+
+                            <TextBlock Grid.Row="0" Text="{Binding DownloadedSummary}"
+                                       Style="{StaticResource MetaText}" TextWrapping="Wrap"
+                                       Margin="0,2,0,0" ToolTip="{Binding DownloadedSummary}"/>
+
+                            <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,6,0,0">
+                                <Button Content="Play" Style="{StaticResource ToolButton}"
+                                        Command="{Binding PlayDownloadedCommand}"
+                                        ToolTip="Load the selected file on a deck"/>
+                                <Button Content="Show in Explorer" Style="{StaticResource ToolButton}"
+                                        Margin="6,0,0,0"
+                                        Command="{Binding RevealDownloadedCommand}"
+                                        ToolTip="Reveal the selected file in Explorer"/>
+                                <Button Content="Refresh" Style="{StaticResource ToolButton}" Margin="6,0,0,0"
+                                        Command="{Binding RefreshDownloadedCommand}"
+                                        ToolTip="Re-read the ledger and the disk"/>
+                            </StackPanel>
+
+                            <ListBox Grid.Row="2" Margin="0,6,0,0" ItemsSource="{Binding DownloadedFiles}"
+                                     SelectedItem="{Binding SelectedDownloadedFile}"
+                                     ItemContainerStyle="{StaticResource MediaRow}"
+                                     Background="Transparent" BorderThickness="0"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                     VirtualizingPanel.IsVirtualizing="True"
+                                     VirtualizingPanel.VirtualizationMode="Standard">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+                                            <StackPanel Grid.Column="0">
+                                                <TextBlock Text="{Binding Title}" FontSize="12.5"
+                                                           TextTrimming="CharacterEllipsis"
+                                                           ToolTip="{Binding Path}"/>
+                                                <TextBlock Text="{Binding DetailText}" FontSize="10.5"
+                                                           Foreground="{StaticResource TextDimBrush}"
+                                                           TextTrimming="CharacterEllipsis"/>
+                                            </StackPanel>
+                                            <StackPanel Grid.Column="1" Orientation="Horizontal"
+                                                        VerticalAlignment="Center">
+                                                <Button Content="&#x25B6;"
+                                                        Style="{StaticResource RowMiniButton}"
+                                                        Command="{Binding DataContext.PlayDownloadedFileCommand,
+                                                            RelativeSource={RelativeSource AncestorType=ListBox}}"
+                                                        CommandParameter="{Binding}"
+                                                        ToolTip="Play this file on a deck"/>
+                                                <Button Content="&#x2197;"
+                                                        Style="{StaticResource RowMiniButton}"
+                                                        Command="{Binding DataContext.RevealDownloadedFileCommand,
+                                                            RelativeSource={RelativeSource AncestorType=ListBox}}"
+                                                        CommandParameter="{Binding}"
+                                                        ToolTip="Reveal this file in Explorer"/>
+                                            </StackPanel>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+
+                            <TextBlock Grid.Row="3" Text="No file from YouTube is in the library yet."
+                                       FontSize="11" TextWrapping="Wrap" TextAlignment="Center"
+                                       Foreground="{StaticResource TextDimBrush}"
+                                       HorizontalAlignment="Center" Margin="0,10,0,0" MaxWidth="250">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding DownloadedFiles.Count}" Value="0">
+                                                <Setter Property="Visibility" Value="Visible"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </Grid>
                     </Grid>
 
                     <!-- Preview strip: position / seek / play-pause for what the deck is playing -->
@@ -570,6 +718,8 @@
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
                         <ComboBox Grid.Column="0" FontSize="11" VerticalContentAlignment="Center"
+                                  x:Name="PlaylistPicker"
+                                  AutomationProperties.Name="YouTube playlist"
                                   HorizontalContentAlignment="Stretch"
                                   ItemsSource="{Binding RailView}"
                                   IsSynchronizedWithCurrentItem="False"
@@ -679,6 +829,8 @@
                         <TextBlock Grid.Column="2" Text="FILTER" Style="{StaticResource SectionLabel}"
                                    Margin="8,0,4,0"/>
                         <TextBox Grid.Column="3" Width="88" FontSize="11"
+                                 x:Name="PlaylistFilterBox"
+                                 AutomationProperties.Name="Filter playlist tracks"
                                  VerticalContentAlignment="Center"
                                  Text="{Binding PlaylistFilter, UpdateSourceTrigger=PropertyChanged}"
                                  ToolTip="Filter playlist tracks by title or artist"/>
@@ -728,6 +880,7 @@
                               VirtualizingPanel.VirtualizationMode="Standard"
                               MouseDoubleClick="OnPlaylistTrackDoubleClick"
                               PreviewMouseRightButtonDown="OnPlaylistTrackRightClick"
+                              ContextMenuOpening="OnPlaylistContextMenuOpening"
                               KeyDown="OnPlaylistTrackKeyDown">
                         <ListView.ContextMenu>
                             <ContextMenu>
@@ -739,6 +892,10 @@
                                               RelativeSource={RelativeSource AncestorType=ContextMenu}}"
                                           CommandParameter="{Binding PlacementTarget.SelectedItem,
                                               RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                <!-- Filled on open by OnPlaylistContextMenuOpening: one row per
+                                     internal playlist plus "New playlist…" (RemotePlaylistTargets). -->
+                                <MenuItem x:Name="AddToPlaylistMenu" Header="Add to playlist"
+                                          AutomationProperties.Name="Add to playlist"/>
                                 <MenuItem Header="Preview (stream)"
                                           Command="{Binding PlacementTarget.DataContext.PreviewPlaylistTrackCommand,
                                               RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
@@ -747,6 +904,22 @@
                                               RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
                                 <MenuItem Header="Download &amp; play"
                                           Command="{Binding PlacementTarget.DataContext.DownloadAndPlayPlaylistTrackCommand,
+                                              RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                <MenuItem Header="Separate karaoke"
+                                          AutomationProperties.Name="Separate karaoke"
+                                          Command="{Binding PlacementTarget.DataContext.SeparateSelectedKaraokeCommand,
+                                              RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                <MenuItem Header="Show in Explorer"
+                                          AutomationProperties.Name="Show in Explorer"
+                                          Command="{Binding PlacementTarget.DataContext.RevealSelectedFileCommand,
+                                              RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                <MenuItem Header="Copy link"
+                                          AutomationProperties.Name="Copy link"
+                                          Command="{Binding PlacementTarget.DataContext.CopySelectedLinkCommand,
+                                              RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                <MenuItem Header="Open on YouTube"
+                                          AutomationProperties.Name="Open on YouTube"
+                                          Command="{Binding PlacementTarget.DataContext.OpenPlaylistTrackOnYouTubeCommand,
                                               RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
                                 <MenuItem Header="Remove from playlist"
                                           Command="{Binding PlacementTarget.DataContext.RemoveTrackCommand,
@@ -770,9 +943,30 @@
                                         <ColumnDefinition Width="Auto"/>
                                         <ColumnDefinition Width="16"/>
                                     </Grid.ColumnDefinitions>
-                                    <TextBlock Grid.Column="0" Text="{Binding Title}"
-                                               FontSize="12" TextTrimming="CharacterEllipsis"
-                                               VerticalAlignment="Center" ToolTip="{Binding DisplayName}"/>
+                                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding Title}"
+                                                   FontSize="12" TextTrimming="CharacterEllipsis"
+                                                   ToolTip="{Binding DisplayName}"/>
+                                        <!-- Karaoke availability from the scan index: the same
+                                             text the local library's column shows, one
+                                             dictionary hit per row (LocalEntry). -->
+                                        <TextBlock Text="{Binding KaraokeStatus}" FontSize="10"
+                                                   Margin="0,1,0,0"
+                                                   Foreground="{StaticResource AccentABrush}"
+                                                   AutomationProperties.Name="{Binding KaraokeAutomationName}"
+                                                   ToolTip="Karaoke version: same state as the library column">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding LocalEntry}" Value="{x:Null}">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </StackPanel>
                                     <TextBlock Grid.Column="1" Text="{Binding Artist}"
                                                FontSize="10.5" VerticalAlignment="Center"
                                                Foreground="{StaticResource TextDimBrush}"
@@ -815,7 +1009,7 @@
 
                     <!-- Empty playlist hint, sits over the (empty) list -->
                     <TextBlock Grid.Row="3" Margin="0,4,0,0"
-                               Text="No tracks here yet. Import a link, or add a result with +."
+                               Text="No tracks here yet. Add a result with +."
                                FontSize="11" TextWrapping="Wrap" TextAlignment="Center"
                                Foreground="{StaticResource TextDimBrush}" IsHitTestVisible="False"
                                HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="230">
@@ -826,7 +1020,6 @@
                                     <MultiDataTrigger>
                                         <MultiDataTrigger.Conditions>
                                             <Condition Binding="{Binding PlaylistTracksView.IsEmpty}" Value="True"/>
-                                            <Condition Binding="{Binding IsImporting}" Value="False"/>
                                             <!-- With no rail row there is no "here" yet; the
                                                  picker's own hint says what to do instead. -->
                                             <Condition Binding="{Binding HasPlaylists}" Value="True"/>
@@ -875,7 +1068,6 @@
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
-                <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
             <TextBlock Grid.Column="0" Text="{Binding StatusText}" FontSize="10.5"
                        Foreground="{StaticResource TextDimBrush}" TextTrimming="CharacterEllipsis"
@@ -885,11 +1077,7 @@
                        VerticalAlignment="Center"
                        ToolTip="A YouTube Data API request is running"
                        Visibility="{Binding IsYouTubeBusy, Converter={StaticResource BoolToVisibility}}"/>
-            <TextBlock Grid.Column="2" Text="Importing&#x2026;" FontSize="10.5"
-                       Foreground="{StaticResource AccentBBrush}" Margin="8,0,0,0"
-                       VerticalAlignment="Center"
-                       Visibility="{Binding IsImporting, Converter={StaticResource BoolToVisibility}}"/>
-            <TextBlock Grid.Column="3" Text="Working&#x2026;" FontSize="10.5"
+            <TextBlock Grid.Column="2" Text="Working&#x2026;" FontSize="10.5"
                        Foreground="{StaticResource AccentABrush}" Margin="8,0,0,0"
                        VerticalAlignment="Center"
                        Visibility="{Binding IsBusy, Converter={StaticResource BoolToVisibility}}"/>

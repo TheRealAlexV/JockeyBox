@@ -1,6 +1,7 @@
-using System.IO;
+﻿using System.IO;
 using System.Text.Json;
 using JockeyBox.Library;
+using JockeyBox.Tools;
 
 namespace JockeyBox.Lyrics;
 
@@ -63,9 +64,7 @@ internal static class VideoIdLookup
 
             try
             {
-                var path = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                    "JockeyBox", "downloads", "ledger.json");
+                var path = Path.Combine(AppPaths.Home, "downloads", "ledger.json");
 
                 if (!File.Exists(path))
                 {

@@ -1,0 +1,66 @@
+{
+  "$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
+  "UUID": "com.alex.jockeybox.soundboard",
+  "Name": "JockeyBox Soundboard",
+  "Version": "1.0.0.0",
+  "Author": "Alex",
+  "Description": "JockeyBox soundboard pads on your Stream Deck. Each key fires one pad and lights up while it plays; a panic key stops everything.",
+  "Category": "JockeyBox Soundboard",
+  "CategoryIcon": "imgs/category-icon",
+  "Icon": "imgs/plugin-icon",
+  "CodePath": "bin/plugin.js",
+  "PropertyInspectorPath": "ui/pad.html",
+  "SDKVersion": 3,
+  "Software": {
+    "MinimumVersion": "7.1"
+  },
+  "OS": [
+    {
+      "Platform": "windows",
+      "MinimumVersion": "10"
+    }
+  ],
+  "Nodejs": {
+    "Version": "24",
+    "Debug": "enabled"
+  },
+  "Actions": [
+    {
+      "Name": "Soundboard Pad",
+      "UUID": "com.alex.jockeybox.soundboard.pad",
+      "Icon": "imgs/pad-icon",
+      "Tooltip": "Fire one JockeyBox pad. Pick the pad in the property inspector; the key is lit while that pad plays.",
+      "PropertyInspectorPath": "ui/pad.html",
+      "Controllers": ["Keypad"],
+      "UserTitleEnabled": false,
+      "DisableAutomaticStates": true,
+      "SupportedInMultiActions": true,
+      "States": [
+        {
+          "Image": "imgs/pad-key",
+          "TitleAlignment": "bottom",
+          "FontSize": 11
+        }
+      ]
+    },
+    {
+      "Name": "Panic — Stop All",
+      "UUID": "com.alex.jockeybox.soundboard.panic",
+      "Icon": "imgs/panic-icon",
+      "Tooltip": "Stop every playing pad in JockeyBox (POST /stop-all).",
+      "PropertyInspectorPath": "ui/pad.html",
+      "Controllers": ["Keypad"],
+      "UserTitleEnabled": false,
+      "DisableAutomaticStates": true,
+      "SupportedInMultiActions": true,
+      "States": [
+        {
+          "Image": "imgs/panic-key",
+          "Title": "STOP ALL",
+          "TitleAlignment": "bottom",
+          "FontSize": 11
+        }
+      ]
+    }
+  ]
+}

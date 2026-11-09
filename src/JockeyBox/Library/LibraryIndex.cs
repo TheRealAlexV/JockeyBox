@@ -85,7 +85,7 @@ public sealed class LibraryIndex
                 Add(byFileName, nameKey, candidate);
         }
 
-        _snapshot = new Snapshot(byArtistTitle, byTitle, byFileName, count);
+        _snapshot = new Snapshot(byArtistTitle, byTitle, byFileName, seenPaths, count);
     }
 
     /// <summary>
@@ -134,6 +134,21 @@ public sealed class LibraryIndex
 
     /// <summary>True when <see cref="Resolve"/> would find a playable file.</summary>
     public bool Contains(SourceTrack track) => Resolve(track) is not null;
+
+    /// <summary>
+    /// True when <paramref name="path"/> is one of the scanned library files.
+    /// This is the warm answer for "does this row's file still exist": a hash
+    /// lookup instead of a stat, for the 5 000 rows a playlist load walks.
+    /// A miss is not proof of absence (the file may be new since the scan), so
+    /// callers that need certainty still fall back to the filesystem.
+    /// </summary>
+    public bool ContainsPath(string? path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return false;
+
+        var snapshot = _snapshot;
+        return snapshot.Count != 0 && snapshot.Paths.Contains(path);
+    }
 
     /// <summary>Best existing candidate, or null when every candidate is gone from disk.</summary>
     private static string? PickBest(
@@ -287,23 +302,33 @@ public sealed class LibraryIndex
             new Dictionary<string, List<Candidate>>(0),
             new Dictionary<string, List<Candidate>>(0),
             new Dictionary<string, List<Candidate>>(0),
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase),
             0);
 
         public Snapshot(
             Dictionary<string, List<Candidate>> byArtistTitle,
             Dictionary<string, List<Candidate>> byTitle,
             Dictionary<string, List<Candidate>> byFileName,
+            HashSet<string> paths,
             int count)
         {
             ByArtistTitle = byArtistTitle;
             ByTitle = byTitle;
             ByFileName = byFileName;
+            Paths = paths;
             Count = count;
         }
 
         public Dictionary<string, List<Candidate>> ByArtistTitle { get; }
         public Dictionary<string, List<Candidate>> ByTitle { get; }
         public Dictionary<string, List<Candidate>> ByFileName { get; }
+
+        /// <summary>
+        /// Every music file the scan saw, so a caller can answer "is this path in
+        /// the library?" without a stat. The set is built by <see cref="Rebuild"/>
+        /// anyway (it is how duplicates are dropped), so keeping it costs nothing.
+        /// </summary>
+        public HashSet<string> Paths { get; }
         public int Count { get; }
     }
 }

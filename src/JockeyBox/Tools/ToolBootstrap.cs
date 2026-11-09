@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.IO;
 using System.IO.Compression;
 using System.Net.Http;
@@ -33,8 +33,7 @@ public static class ToolBootstrap
     private static readonly HttpClient Http = CreateHttpClient();
 
     /// <summary>Root of everything the app keeps outside the install folder: %APPDATA%\JockeyBox.</summary>
-    public static string AppDataDir => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "JockeyBox");
+    public static string AppDataDir => Path.Combine(AppPaths.Home);
 
     /// <summary>Where the self-managed yt-dlp / ffmpeg live.</summary>
     public static string ToolsDir => Path.Combine(AppDataDir, "tools");

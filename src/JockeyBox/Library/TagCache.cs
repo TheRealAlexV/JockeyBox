@@ -1,17 +1,29 @@
-using System.IO;
+﻿using System.IO;
 using System.Text.Json;
+using JockeyBox.Tools;
 
 namespace JockeyBox.Library;
 
 /// <summary>Cached tag data for one file, keyed by path + size + mtime.</summary>
 public class CachedTags
 {
+    /// <summary>
+    /// Version of the tag reader that filled this entry. Entries written by an
+    /// older reader lack newer fields (Key), so they are re-read once instead of
+    /// silently showing a blank.
+    /// </summary>
+    public int Version { get; set; }
+
     public long Size { get; set; }
     public long MTimeTicks { get; set; }
     public string Title { get; set; } = "";
     public string Artist { get; set; } = "";
     public string Album { get; set; } = "";
     public double Bpm { get; set; }
+
+    /// <summary>Musical key exactly as the file's tag states it ("8A", "Am", "F#m"), "" when the file has none.</summary>
+    public string Key { get; set; } = "";
+
     public double DurationMs { get; set; }
 }
 
@@ -23,14 +35,16 @@ public class TagCache
 {
     private static readonly JsonSerializerOptions JsonOpts = new() { WriteIndented = false };
 
+    /// <summary>Bump when ReadTags learns a new field, so existing cache entries are re-read.</summary>
+    private const int CacheVersion = 2;
+
     private Dictionary<string, CachedTags> _entries = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _lock = new(); // scans may overlap briefly during cancellation
     private readonly string _cachePath;
 
     public TagCache()
     {
-        var dir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "JockeyBox");
+        var dir = Path.Combine(AppPaths.Home);
         Directory.CreateDirectory(dir);
         _cachePath = Path.Combine(dir, "library.json");
         Load();
@@ -101,6 +115,7 @@ public class TagCache
         lock (_lock)
         {
             if (_entries.TryGetValue(filePath, out var cached)
+                && cached.Version == CacheVersion
                 && cached.Size == info.Length
                 && cached.MTimeTicks == info.LastWriteTimeUtc.Ticks)
             {
@@ -117,6 +132,7 @@ public class TagCache
     {
         var result = new CachedTags
         {
+            Version = CacheVersion,
             Size = info.Length,
             MTimeTicks = info.LastWriteTimeUtc.Ticks,
             Title = Path.GetFileNameWithoutExtension(filePath),
@@ -131,6 +147,7 @@ public class TagCache
                             ?? tag.FirstAlbumArtist?.Trim() ?? "";
             result.Album = tag.Album?.Trim() ?? "";
             result.Bpm = tag.BeatsPerMinute;
+            result.Key = tag.InitialKey?.Trim() ?? "";
             result.DurationMs = file.Properties?.Duration.TotalMilliseconds ?? 0;
         }
         catch

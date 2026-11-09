@@ -74,12 +74,18 @@ public partial class BrowserNode : ObservableObject
     /// <summary>Live-update subscription to <see cref="Track"/>, kept so a discarded tree can unsubscribe.</summary>
     private PropertyChangedEventHandler? _trackHandler;
 
-    /// <summary>Drop the live-update subscriptions for this node and its children.</summary>
-    public void DetachFromTrack()
+    /// <summary>Drop this node's live-update subscription (leaf only).</summary>
+    public void Detach()
     {
         if (Track != null && _trackHandler != null)
             Track.PropertyChanged -= _trackHandler;
         _trackHandler = null;
+    }
+
+    /// <summary>Drop the live-update subscriptions for this node and its children.</summary>
+    public void DetachFromTrack()
+    {
+        Detach();
         foreach (var child in Children)
             child.DetachFromTrack();
     }

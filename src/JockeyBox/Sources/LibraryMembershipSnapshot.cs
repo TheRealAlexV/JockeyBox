@@ -179,7 +179,20 @@ public sealed class LibraryMembershipSnapshot
         foreach (var key in keys)
         {
             if (string.IsNullOrWhiteSpace(key)) continue;
-            if (_trackByKey.TryGetValue(key, out var hit)) found.Add(hit);
+
+            // The hit path is the one that matters (5,000 keys resolve in a
+            // single pass), so the canonical form is only computed when the
+            // caller handed us a key the index does not literally hold - a
+            // Windows-style separator, a stale extension, stray case.
+            if (_trackByKey.TryGetValue(key, out var hit))
+            {
+                found.Add(hit);
+                continue;
+            }
+
+            var canonical = SourceTrack.NormalizeLocalKey(key);
+            if (canonical.Length > 0 && _trackByKey.TryGetValue(canonical, out var normalised))
+                found.Add(normalised);
         }
 
         found.Sort(static (a, b) => a.Order.CompareTo(b.Order));
@@ -221,20 +234,7 @@ public sealed class LibraryMembershipSnapshot
                 continue;
             }
 
-            if (row.LocalKey is { Length: > 0 } key && _libraryKeys.Contains(key))
-            {
-                resolved.Add(key);
-                continue;
-            }
-
-            if (TryKeyForPath(row.LibraryPath, out var byPath))
-            {
-                resolved.Add(byPath);
-                continue;
-            }
-
-            if (_metadataIndex.TryGetValue(MetadataKey(row.Artist, row.Title), out var byMeta))
-                resolved.Add(byMeta);
+            if (TryResolveRow(row, out var key)) resolved.Add(key);
         }
 
         // Imported lists also count the files the ledger says came from them: a
@@ -250,6 +250,35 @@ public sealed class LibraryMembershipSnapshot
         }
 
         return resolved;
+    }
+
+    /// <summary>
+    /// Resolve one app-owned playlist row to the library key it shows as: the
+    /// stored key, then the cached path, then artist/title. Exposed so the
+    /// browser can tell a row that <em>is</em> remote-only from one whose file
+    /// simply moved - exactly the same order <see cref="Resolve"/> uses, so the
+    /// two can never disagree.
+    /// </summary>
+    public bool TryResolveRow(MembershipRow row, out string key)
+    {
+        key = "";
+
+        if (row.LocalKey is { Length: > 0 } local && _libraryKeys.Contains(local))
+        {
+            key = local;
+            return true;
+        }
+
+        if (TryKeyForPath(row.LibraryPath, out key)) return true;
+
+        if (_metadataIndex.TryGetValue(MetadataKey(row.Artist, row.Title), out var byMeta))
+        {
+            key = byMeta;
+            return true;
+        }
+
+        key = "";
+        return false;
     }
 
     /// <summary>

@@ -6,6 +6,8 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
 using System.Windows.Threading;
+using CommunityToolkit.Mvvm.Input;
+using JockeyBox.Activity;
 using JockeyBox.Library;
 using JockeyBox.Playback;
 using JockeyBox.ViewModels;
@@ -16,11 +18,31 @@ public partial class MainWindow : Window
 {
     private readonly MainViewModel _vm;
 
+    /// <summary>
+    /// Console actions live on the window because the rows they act on are on
+    /// <see cref="ActivityFeed.Shared"/>, not on the view model. Initialised
+    /// before <c>InitializeComponent</c> so the XAML bindings find them.
+    /// </summary>
+    public IRelayCommand<string> CancelActivityCommand { get; } =
+        new RelayCommand<string>(key =>
+        {
+            if (!string.IsNullOrEmpty(key)) ActivityFeed.Shared.Cancel(key);
+        });
+
+    public IRelayCommand ClearFinishedActivityCommand { get; } =
+        new RelayCommand(() => ActivityFeed.Shared.ClearFinished(),
+                         () => ActivityFeed.Shared.Rows.Any(r => r.IsFinished));
+
     public MainWindow()
     {
         InitializeComponent();
         _vm = new MainViewModel();
         DataContext = _vm;
+
+        // Adopt the saved talk-over mic (device, gain, monitor) and start the
+        // peak meter. The transport may not have an engine yet; this is a no-op
+        // then and the settings dialog path re-applies it.
+        _vm.InitializeMic();
 
         // Play/Pause glyph follows VM changes; each deck card owns its waveform.
         UpdatePlayGlyph();
@@ -67,7 +89,19 @@ public partial class MainWindow : Window
         // Karaoke generation flows that need dialogs.
         _vm.SettingsRequested += () => OpenSettings();
         _vm.EngineInstallRequested += OnEngineInstallRequested;
-        _vm.DownloadsRequested += OpenDownloads;
+        _vm.DownloadsRequested += RevealConsoleDownloads;
+
+        // The queue's status line and cache figures used to tick only while the
+        // (now deleted) DownloadsWindow was open; the docked console is always
+        // there, so the main window owns the polling lifetime instead.
+        _vm.Downloads.StartPolling();
+        Closed += (_, _) => _vm.Downloads.StopPolling();
+
+        // "Clear finished" is only offered when a finished row exists. Rows are
+        // created by producers, so the window watches the feed rather than
+        // polling it.
+        ActivityFeed.Shared.Rows.CollectionChanged += OnActivityRowsChanged;
+        HookActivityRows();
 
         // Sync TreeView selection to the view model (SelectedItem is read-only
         // in XAML so we wire it in code-behind).
@@ -76,11 +110,31 @@ public partial class MainWindow : Window
             if (e.NewValue is BrowserNode node) _vm.SelectedTreeNode = node;
         };
 
-        // Build the "Make Karaoke Track" model submenu dynamically whenever
-        // the context menu opens, so it reflects the right-clicked tree node.
-        TrackContextMenu.Opened += OnTrackContextMenuOpened;
+        // The context menu is the shared one from Views/Shared/TrackMenu.xaml:
+        // its "Make Karaoke Version" entry is a command bound to the tree's
+        // TrackMenu capabilities, so it needs no menu-open handler here.
+
+        // The hotkey layer needs a window handle, and the view model is built
+        // before one exists; SourceInitialized is the first moment it is there.
+        SourceInitialized += (_, _) => _vm.AttachHotkeyWindow(this);
+
+        // Soundboard pad binding: while a pad is capturing, the next chord is
+        // consumed here before any window/command binding can act on it.
+        PreviewKeyDown += OnSoundboardHotkeyCapture;
 
         Closed += (_, _) => _vm.Dispose();
+    }
+
+    /// <summary>
+    /// Feed the pressed chord to the soundboard while a pad is waiting for its
+    /// binding. Entering capture mode is explicit (⌨ on the tile), so this never
+    /// steals ordinary typing.
+    /// </summary>
+    private void OnSoundboardHotkeyCapture(object sender, KeyEventArgs e)
+    {
+        var key = e.Key == Key.System ? e.SystemKey : e.Key;
+        if (_vm.Soundboard.TryCaptureHotkey(Keyboard.Modifiers, key))
+            e.Handled = true;
     }
 
     private void UpdatePlayGlyph() =>
@@ -98,43 +152,6 @@ public partial class MainWindow : Window
     {
         var item = FindAncestor<TreeViewItem>(e.OriginalSource as DependencyObject);
         if (item != null) item.IsSelected = true;
-    }
-
-    /// <summary>
-    /// Populate the "Make Karaoke Track" submenu with one entry per model
-    /// preset (filename + description), using the right-clicked node's track.
-    /// </summary>
-    private void OnTrackContextMenuOpened(object sender, RoutedEventArgs e)
-    {
-        var menu = (ContextMenu)sender;
-        var parentItem = menu.Items.OfType<MenuItem>()
-            .FirstOrDefault(i => (string)i.Header == "Make Karaoke Track");
-        if (parentItem == null) return;
-
-        parentItem.Items.Clear();
-
-        var node = TrackTree.SelectedItem as BrowserNode;
-        var track = node?.Track;
-        if (track?.NeedsKaraoke != true)
-        {
-            parentItem.IsEnabled = false;
-            return;
-        }
-        parentItem.IsEnabled = true;
-
-        foreach (var (filename, description) in Separation.SeparationModels.Presets)
-        {
-            var subItem = new MenuItem
-            {
-                Header = filename,
-                ToolTip = description,
-            };
-            var capturedTrack = track;
-            var capturedModel = filename;
-            subItem.Click += (_, _) =>
-                _vm.MakeKaraokeWithModel(capturedTrack, capturedModel);
-            parentItem.Items.Add(subItem);
-        }
     }
 
     private static T? FindAncestor<T>(DependencyObject? node) where T : DependencyObject
@@ -173,22 +190,40 @@ public partial class MainWindow : Window
 
     private void OnSettingsClick(object sender, RoutedEventArgs e) => OpenSettings();
 
-    private DownloadsWindow? _downloadsWindow;
-
-    /// <summary>One queue window per app run; a second request brings it forward.</summary>
-    private void OpenDownloads()
+    /// <summary>
+    /// The toolbar's Downloads button (raised by MainViewModel.ShowDownloads)
+    /// opens the console on its Downloads tab. Nothing here builds a window any
+    /// more: the queue is docked in the main window.
+    /// </summary>
+    private void RevealConsoleDownloads()
     {
-        if (_downloadsWindow is { IsLoaded: true })
+        ConsoleToggle.IsChecked = true;
+        ConsoleTabs.SelectedIndex = 1;
+        ConsoleToggle.Focus();
+    }
+
+    /// <summary>
+    /// Keep "Clear finished" in step with the feed: re-hook every row (finished
+    /// flags change in place) and re-query the command.
+    /// </summary>
+    private void HookActivityRows()
+    {
+        foreach (var row in ActivityFeed.Shared.Rows)
         {
-            if (_downloadsWindow.WindowState == WindowState.Minimized)
-                _downloadsWindow.WindowState = WindowState.Normal;
-            _downloadsWindow.Activate();
-            return;
+            row.PropertyChanged -= OnActivityRowChanged;
+            row.PropertyChanged += OnActivityRowChanged;
         }
 
-        _downloadsWindow = new DownloadsWindow(_vm.Downloads) { Owner = this };
-        _downloadsWindow.Closed += (_, _) => _downloadsWindow = null;
-        _downloadsWindow.Show();
+        ClearFinishedActivityCommand.NotifyCanExecuteChanged();
+    }
+
+    private void OnActivityRowsChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
+        => HookActivityRows();
+
+    private void OnActivityRowChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(ActivityRow.IsFinished))
+            ClearFinishedActivityCommand.NotifyCanExecuteChanged();
     }
 
     private void OpenSettings()
@@ -197,7 +232,14 @@ public partial class MainWindow : Window
         // settings dialog a getter rather than a second scan.
         var dialog = new SettingsWindow(_vm.SettingsRef, () => _vm.Tracks, _vm.PlaylistsRef) { Owner = this };
         if (dialog.ShowDialog() == true)
+        {
             _vm.OnSettingsSaved();
+            _vm.OnSettingsSavedMic();
+            // Six-bus routing, soundboard-follows-Main and Karaoke mode: the
+            // transport re-reads the saved document, so a Save is audible without
+            // restarting (outputs are only reopened when their ids changed).
+            _vm.ApplyAudioSettings();
+        }
     }
 
     /// <summary>
@@ -401,7 +443,11 @@ public partial class MainWindow : Window
     private void OnDeckPropertyChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName is nameof(DeckViewModel.Waveform)
-                             or nameof(DeckViewModel.KaraokeWaveform))
+                             or nameof(DeckViewModel.KaraokeWaveform)
+                             // Beat ticks ride the same invalidation: a new track
+                             // (or its beat grid arriving after analysis) redraws
+                             // peaks and ticks together.
+                             or nameof(DeckViewModel.BeatMarkers))
         {
             DrawDeckWaveforms();
             return;
@@ -451,6 +497,9 @@ public partial class MainWindow : Window
             ? Color.FromArgb(0xB0, accent.R, accent.G, accent.B)
             : accent;
 
+        // Ticks first, so the peaks and the playhead always sit on top of them.
+        if (deck != null) RenderBeatMarkers(canvas, deck, w, h, isKaraoke);
+
         if (data != null && data.Count > 1)
             RenderWaveform(canvas, data, w, h, color);
 
@@ -463,6 +512,67 @@ public partial class MainWindow : Window
         };
         canvas.Children.Add(playhead);
         _deckPlayheads[canvas] = playhead;
+    }
+
+    /// <summary>
+    /// Beat ticks for the loaded track, drawn behind the peaks and the playhead.
+    /// One geometry per class (plain beats, bar starts) keeps a thousand-tick grid
+    /// cheap: two path elements instead of a thousand Line objects.
+    /// </summary>
+    private static void RenderBeatMarkers(Canvas canvas, DeckViewModel deck,
+                                          double w, double h, bool isKaraoke)
+    {
+        // The karaoke sub-strip is 12 px of secondary detail; a beat ruler there
+        // would only add noise, so the ticks belong to the primary waveform.
+        if (isKaraoke) return;
+
+        var beats = deck.BeatMarkers;
+        if (beats == null || beats.Count == 0 || w <= 0 || h <= 0) return;
+
+        // Marks hang from the top edge: long enough to count against, short enough
+        // to leave the peak shape readable underneath.
+        var tickH = Math.Max(4.0, h * 0.32);
+        var barH = Math.Max(7.0, h * 0.60);
+
+        var beatGeo = new StreamGeometry();
+        var barGeo = new StreamGeometry();
+        using (var bc = beatGeo.Open())
+        using (var gc = barGeo.Open())
+        {
+            for (int i = 0; i < beats.Count; i++)
+            {
+                var p = beats[i];
+                if (double.IsNaN(p) || p < 0 || p > 1) continue;
+
+                var x = p * w;
+                var isBar = i % 4 == 0;
+                var ctx = isBar ? gc : bc;
+                ctx.BeginFigure(new Point(x, 0), false, false);
+                ctx.LineTo(new Point(x, isBar ? barH : tickH), true, false);
+            }
+        }
+        beatGeo.Freeze();
+        barGeo.Freeze();
+
+        // Light marks at roughly 35%, with every 4th beat longer and brighter so
+        // the bar structure reads at a glance without fighting the deck colour.
+        const byte beatAlpha = 90;
+        const byte barAlpha = 190;
+
+        canvas.Children.Add(new Path
+        {
+            Data = beatGeo,
+            Stroke = new SolidColorBrush(Color.FromArgb(beatAlpha, 0xE8, 0xEA, 0xED)),
+            StrokeThickness = 1,
+            IsHitTestVisible = false,
+        });
+        canvas.Children.Add(new Path
+        {
+            Data = barGeo,
+            Stroke = new SolidColorBrush(Color.FromArgb(barAlpha, 0xE8, 0xEA, 0xED)),
+            StrokeThickness = 1.4,
+            IsHitTestVisible = false,
+        });
     }
 
     private static void RenderWaveform(Canvas canvas, IReadOnlyList<float> data,
@@ -516,5 +626,40 @@ public partial class MainWindow : Window
     {
         if (sender is Slider { DataContext: DeckViewModel deck } slider)
             deck.EndSeek(slider.Value);
+    }
+
+    // ---- transport ---------------------------------------------------------
+
+    private DateTime _previousPressedAt = DateTime.MinValue;
+
+    /// <summary>
+    /// One press restarts the active track; a second press inside 450 ms steps
+    /// back a track. Same button, as on a CD deck.
+    /// </summary>
+    private void OnPreviousPress(object sender, RoutedEventArgs e)
+    {
+        if (DataContext is not MainViewModel vm) return;
+
+        var now = DateTime.UtcNow;
+        var secondPress = now - _previousPressedAt < TimeSpan.FromMilliseconds(450);
+        _previousPressedAt = now;
+
+        var command = secondPress ? (ICommand)vm.PlayPreviousCommand : vm.RestartTrackCommand;
+        if (command.CanExecute(null)) command.Execute(null);
+    }
+
+    // ---- deck card activation ---------------------------------------------
+
+    /// <summary>
+    /// Any click inside a deck card makes that deck the active one, so a deck's
+    /// own transport buttons never move the other deck.
+    /// </summary>
+    private void OnDeckInteract(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is FrameworkElement { DataContext: DeckViewModel deck } &&
+            deck.ActivateCommand.CanExecute(null))
+        {
+            deck.ActivateCommand.Execute(null);
+        }
     }
 }

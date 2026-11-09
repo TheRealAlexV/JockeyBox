@@ -1,8 +1,9 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
 using System.Text;
 using System.Text.RegularExpressions;
+using JockeyBox.Tools;
 
 namespace JockeyBox.Separation;
 
@@ -17,8 +18,7 @@ namespace JockeyBox.Separation;
 /// </summary>
 public partial class SeparationEngine
 {
-    private static string AppDataDir => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "JockeyBox");
+    private static string AppDataDir => Path.Combine(AppPaths.Home);
 
     public static string VenvDir => Path.Combine(AppDataDir, "uvr-venv");
     public static string ModelsDir => Path.Combine(AppDataDir, "uvr-models");
@@ -175,7 +175,7 @@ public partial class SeparationEngine
         // Well-known install locations. Checking these directly matters right
         // after an automated Python install: this process still has the old
         // PATH, so bare "python"/"py" may not resolve yet.
-        var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        string localAppData = AppPaths.LocalHome;
         var programFiles = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles);
         var windowsDir = Environment.GetFolderPath(Environment.SpecialFolder.Windows);
         foreach (var ver in new[] { "312", "311", "313", "310" })

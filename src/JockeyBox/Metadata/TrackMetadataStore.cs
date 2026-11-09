@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -214,10 +214,7 @@ public sealed class TrackMetadataStore : IDisposable
     // ---- construction / paths ---------------------------------------------
 
     /// <summary><c>%APPDATA%\JockeyBox\track-metadata.json</c>.</summary>
-    public static string DefaultPath => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-        "JockeyBox",
-        FileName);
+    public static string DefaultPath => Path.Combine(AppPaths.Home, FileName);
 
     /// <summary>File this store reads and writes.</summary>
     public string FilePath => _path;

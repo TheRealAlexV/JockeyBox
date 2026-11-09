@@ -1,0 +1,219 @@
+/* Property inspector styling.
+ *
+ * Stream Deck's inspector is a small fixed-width webview (~295 px), so this is a
+ * single column: no breakpoints, no floating layout. Colours follow the host's
+ * dark theme; the host owns the page background, so it stays transparent.
+ */
+
+:root {
+  --text: #e4e8ef;
+  --muted: #9aa4b4;
+  --line: #333a45;
+  --field: #1b1f26;
+  --field-focus: #5ab0ff;
+  --good: #56d08a;
+  --bad: #ff6b5e;
+  --pending: #e3b341;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--text);
+  font: 12px/1.45 "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+
+.pi {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 10px 12px 14px;
+}
+
+.pi__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+h1 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+h2 {
+  margin: 0 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+}
+
+.pill {
+  flex: none;
+  max-width: 60%;
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-size: 10.5px;
+  color: var(--muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pill[data-kind="good"] {
+  color: var(--good);
+  border-color: rgba(86, 208, 138, 0.45);
+}
+
+.pill[data-kind="bad"] {
+  color: var(--bad);
+  border-color: rgba(255, 107, 94, 0.45);
+}
+
+.pill[data-kind="pending"] {
+  color: var(--pending);
+  border-color: rgba(227, 179, 65, 0.45);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.field__row {
+  display: flex;
+  gap: 6px;
+  align-items: stretch;
+}
+
+.field--split {
+  flex-direction: row;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.field--split > div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 88px;
+}
+
+.field--split > .grow {
+  flex: 1;
+  width: auto;
+}
+
+label {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+select,
+input {
+  width: 100%;
+  min-height: 26px;
+  padding: 3px 6px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--field);
+  color: var(--text);
+  font: inherit;
+}
+
+select {
+  flex: 1;
+  /* Keep long pad names from stretching the inspector. */
+  max-width: 100%;
+  text-overflow: ellipsis;
+}
+
+select:focus,
+input:focus {
+  outline: none;
+  border-color: var(--field-focus);
+  box-shadow: 0 0 0 2px rgba(90, 176, 255, 0.18);
+}
+
+/* `hidden` must beat the layout rules above (e.g. .field's display:flex). */
+[hidden] {
+  display: none !important;
+}
+
+input[type="number"] {
+  appearance: textfield;
+}
+
+.btn {
+  flex: none;
+  min-height: 26px;
+  padding: 3px 10px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: #262c36;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.btn:hover {
+  border-color: #4a5361;
+  background: #2c333e;
+}
+
+.btn:active {
+  transform: translateY(1px);
+}
+
+.btn--primary {
+  border-color: rgba(90, 176, 255, 0.5);
+  background: rgba(90, 176, 255, 0.14);
+  color: #cfe6ff;
+}
+
+.panel {
+  padding: 9px 10px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+
+.hint {
+  margin: 0;
+  font-size: 10.5px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+code {
+  padding: 0 3px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.07);
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 10px;
+}
+
+.foot {
+  font-size: 10px;
+  color: var(--muted);
+  text-align: center;
+}

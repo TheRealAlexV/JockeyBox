@@ -437,6 +437,11 @@ public sealed class YouTubeDataApi
         var detail = string.IsNullOrWhiteSpace(message) ? text.Trim() : message;
         if (detail.Length > 300) detail = detail[..300] + "\u2026";
 
+        // The real failure, in full, for the log: the status and Google's own body
+        // are the only way to tell an expired token from a missing scope.
+        Log.Warn($"YouTube API {path} failed: {(int)status} {status}" +
+                 (reason.Length > 0 ? $" [{reason}]" : "") + $" - {text.Trim()}");
+
         if (reason is "quotaExceeded" or "dailyLimitExceeded")
         {
             return new YouTubeApiException(

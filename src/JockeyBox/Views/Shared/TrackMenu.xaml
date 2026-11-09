@@ -1,0 +1,95 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- ==========================================================================
+         One right-click menu for every track list. The order is fixed:
+
+             Play, Preview, Add to Queue, Add to Playlist, Download,
+             Make Karaoke Version, Show in Explorer, Tags,
+             Find on YouTube, Find on Spotify
+
+         A surface never edits this file to drop an entry it cannot perform.
+         Instead each host sets Tag to a vm:TrackMenuCapabilities object
+         (code-behind, or MainViewModel.TrackMenu for the library) and every item
+         shows only when that object carries a command for it. A null command
+         means the item is removed, not greyed out, so the menu never offers a
+         click that goes nowhere.
+
+         "Add to Playlist" renders twice: as a submenu when the surface supplies
+         playlist rows, as a single item when it only has a "add to the current
+         playlist" gesture. Exactly one of the two is ever visible.
+         ========================================================================== -->
+
+    <BooleanToVisibilityConverter x:Key="MenuVisibility"/>
+
+    <ContextMenu x:Key="TrackMenu" x:Shared="False"
+                 AutomationProperties.Name="Track actions">
+
+        <!-- 1. Play -->
+        <MenuItem Header="Play"
+                  Command="{Binding PlacementTarget.Tag.Play, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                  Visibility="{Binding PlacementTarget.Tag.CanPlay, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={StaticResource MenuVisibility}}"/>
+
+        <!-- 2. Preview (stream) -->
+        <MenuItem Header="Preview"
+                  Command="{Binding PlacementTarget.Tag.Preview, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                  Visibility="{Binding PlacementTarget.Tag.CanPreview, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={StaticResource MenuVisibility}}"/>
+
+        <!-- 3. Add to Queue: local playback only, so remote tabs never show it -->
+        <MenuItem Header="Add to Queue"
+                  InputGestureText="Ctrl+Q"
+                  Command="{Binding PlacementTarget.Tag.AddToQueue, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                  Visibility="{Binding PlacementTarget.Tag.CanAddToQueue, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={StaticResource MenuVisibility}}"/>
+
+        <!-- 4a. Add to Playlist, as a submenu of the user's playlists -->
+        <MenuItem Header="Add to Playlist"
+                  ItemsSource="{Binding PlacementTarget.Tag.PlaylistTargets, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                  Visibility="{Binding PlacementTarget.Tag.CanChoosePlaylist, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={StaticResource MenuVisibility}}">
+            <MenuItem.ItemContainerStyle>
+                <Style TargetType="MenuItem">
+                    <!-- Each row carries its own ready-made command, so nothing here
+                         has to reach back up the menu's visual tree. -->
+                    <Setter Property="Header" Value="{Binding Name}"/>
+                    <Setter Property="Command" Value="{Binding Command}"/>
+                </Style>
+            </MenuItem.ItemContainerStyle>
+        </MenuItem>
+
+        <!-- 4b. Add to Playlist, as one gesture, for surfaces without a playlist row list -->
+        <MenuItem Header="Add to Playlist"
+                  Command="{Binding PlacementTarget.Tag.AddToPlaylist, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                  Visibility="{Binding PlacementTarget.Tag.CanAddToPlaylistDirectly, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={StaticResource MenuVisibility}}"/>
+
+        <!-- 5. Download -->
+        <MenuItem Header="Download"
+                  Command="{Binding PlacementTarget.Tag.Download, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                  Visibility="{Binding PlacementTarget.Tag.CanDownload, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={StaticResource MenuVisibility}}"/>
+
+        <!-- 6. Make Karaoke Version: one label everywhere -->
+        <MenuItem Header="Make Karaoke Version"
+                  AutomationProperties.Name="Make Karaoke Version"
+                  Command="{Binding PlacementTarget.Tag.MakeKaraoke, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                  Visibility="{Binding PlacementTarget.Tag.CanMakeKaraoke, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={StaticResource MenuVisibility}}"/>
+
+        <!-- 7. Show in Explorer: one verb everywhere -->
+        <MenuItem Header="Show in Explorer"
+                  Command="{Binding PlacementTarget.Tag.ShowInExplorer, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                  Visibility="{Binding PlacementTarget.Tag.CanShowInExplorer, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={StaticResource MenuVisibility}}"/>
+
+        <!-- 8. Tags -->
+        <MenuItem Header="Tags"
+                  Command="{Binding PlacementTarget.Tag.Tags, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                  Visibility="{Binding PlacementTarget.Tag.CanEditTags, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={StaticResource MenuVisibility}}"/>
+
+        <!-- 9. Find on YouTube -->
+        <MenuItem Header="Find on YouTube"
+                  Command="{Binding PlacementTarget.Tag.FindOnYouTube, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                  Visibility="{Binding PlacementTarget.Tag.CanFindOnYouTube, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={StaticResource MenuVisibility}}"/>
+
+        <!-- 10. Find on Spotify -->
+        <MenuItem Header="Find on Spotify"
+                  Command="{Binding PlacementTarget.Tag.FindOnSpotify, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                  Visibility="{Binding PlacementTarget.Tag.CanFindOnSpotify, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={StaticResource MenuVisibility}}"/>
+    </ContextMenu>
+
+</ResourceDictionary>

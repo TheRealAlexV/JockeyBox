@@ -146,6 +146,96 @@ public static class YtDlp
     }
 
     /// <summary>
+    /// Lists what a pasted link points at, the way the YouTube tab's importer
+    /// needs it: the playlist title (or the video's) plus every entry that
+    /// resolved, in playlist order. A single video comes back as one entry with
+    /// <c>--no-playlist</c>, so a "watch" link never explodes into a mix.
+    /// </summary>
+    public static async Task<YtListing> GetListingAsync(
+        YouTubeImportTarget target, AppSettings settings, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(target);
+
+        var exe = RequireExe(settings);
+        var arguments = new List<string> { "-J", "--no-warnings" };
+        arguments.Add(target.IsPlaylist ? "--flat-playlist" : "--no-playlist");
+        arguments.Add(target.Url);
+        AppendCookieArgs(arguments, settings);
+
+        Log.Debug($"yt-dlp listing {target.Kind}: {target.Url}");
+        var json = await RunJsonAsync(exe, arguments, ct);
+        var listing = ParseListing(json);
+        Log.Info($"yt-dlp listing {target.Url}: {listing.Count} entries, {listing.SkippedCount} skipped");
+        return listing;
+    }
+
+    /// <summary>
+    /// Parses a listing response. Entries yt-dlp could not describe (private,
+    /// deleted, members-only stubs) are counted in
+    /// <see cref="YtListing.SkippedCount"/> rather than failing the listing, so
+    /// the tab can list what resolved and say what did not.
+    /// </summary>
+    internal static YtListing ParseListing(string json)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(json);
+            var root = document.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+                throw new YtDlpException("yt-dlp returned output that is not a YouTube listing.", 0, "");
+
+            var title = GetString(root, "title")
+                        ?? GetString(root, "playlist_title")
+                        ?? "";
+
+            var entries = new List<YtEntry>();
+            var skipped = 0;
+            if (root.TryGetProperty("entries", out var array) && array.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in array.EnumerateArray())
+                {
+                    var entry = ParseEntry(item);
+                    if (entry == null || IsUnavailable(entry))
+                    {
+                        skipped++;
+                        continue;
+                    }
+
+                    entries.Add(entry);
+                }
+            }
+            else
+            {
+                var single = ParseEntry(root);
+                if (single != null) entries.Add(single);
+            }
+
+            return new YtListing(title, entries, skipped);
+        }
+        catch (JsonException ex)
+        {
+            Log.Error("yt-dlp returned invalid JSON for a listing", ex);
+            throw new YtDlpException("yt-dlp returned output that is not valid JSON.", 0, ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// yt-dlp names an unplayable row "[Private video]" / "[Deleted video]" and
+    /// still gives it an id, so the id-based check in <see cref="ParseEntry"/>
+    /// does not catch it.
+    /// </summary>
+    private static bool IsUnavailable(YtEntry entry)
+    {
+        var title = (entry.Title ?? "").Trim();
+        if (title.StartsWith("[", StringComparison.Ordinal)
+            && title.EndsWith("]", StringComparison.Ordinal)
+            && title.Contains("video", StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        return string.IsNullOrWhiteSpace(entry.VideoId);
+    }
+
+    /// <summary>
     /// Downloads the best audio stream for <paramref name="videoId"/> next to
     /// <paramref name="targetPath"/> and returns the file that was actually
     /// written (yt-dlp picks the container, and an mp3 conversion renames it).

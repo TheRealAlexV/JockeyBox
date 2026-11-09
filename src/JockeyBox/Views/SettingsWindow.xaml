@@ -1,7 +1,8 @@
-<Window x:Class="JockeyBox.Views.SettingsWindow"
+﻿<Window x:Class="JockeyBox.Views.SettingsWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Settings" Height="720" Width="660" ResizeMode="NoResize"
+        Title="Settings" Height="720" Width="660" ResizeMode="CanResize"
+        MinHeight="420" MinWidth="560"
         Background="{StaticResource WindowBrush}" WindowStartupLocation="CenterOwner">
     <Grid Margin="16">
         <Grid.RowDefinitions>
@@ -11,6 +12,205 @@
 
         <ScrollViewer Grid.Row="0" VerticalScrollBarVisibility="Auto">
             <StackPanel>
+
+                <!-- ================= AUDIO ROUTING ================= -->
+                <TextBlock Text="AUDIO ROUTING" FontWeight="Bold"
+                           Foreground="{StaticResource AccentABrush}" Margin="0,0,0,10"/>
+
+                <Grid Margin="0,0,0,4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="Main output"
+                               TextWrapping="Wrap" VerticalAlignment="Center"
+                               ToolTip="Deck audio only, no microphones or soundboard. Karaoke mode sends the karaoke stem here."/>
+                    <ComboBox x:Name="MainOutputBox"
+                              AutomationProperties.Name="Main output" AutomationProperties.AutomationId="MainOutputBox" Grid.Column="1" Margin="0,4"
+                              Width="300" HorizontalAlignment="Left"
+                              ToolTip="Deck audio only, no microphones or soundboard. Karaoke mode sends the karaoke stem here."/>
+                </Grid>
+
+                <Grid Margin="0,0,0,4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="Karaoke aid output"
+                               TextWrapping="Wrap" VerticalAlignment="Center"
+                               ToolTip="The original vocal stem while Karaoke mode is on — set this to the operator's headphones."/>
+                    <ComboBox x:Name="KaraokeAidOutputBox"
+                              AutomationProperties.Name="Karaoke aid output" AutomationProperties.AutomationId="KaraokeAidOutputBox" Grid.Column="1" Margin="0,4"
+                              Width="300" HorizontalAlignment="Left"
+                              ToolTip="The original vocal stem while Karaoke mode is on — set this to the operator's headphones."/>
+                </Grid>
+
+                <Grid Margin="0,0,0,4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="Recording device output"
+                               TextWrapping="Wrap" VerticalAlignment="Center"
+                               ToolTip="Every unmuted recording device."/>
+                    <ComboBox x:Name="RecordingOutputBox"
+                              AutomationProperties.Name="Recording device output" AutomationProperties.AutomationId="RecordingOutputBox" Grid.Column="1" Margin="0,4"
+                              Width="300" HorizontalAlignment="Left"
+                              ToolTip="Every unmuted recording device."/>
+                </Grid>
+
+                <Grid Margin="0,0,0,2">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="Soundboard output"
+                               TextWrapping="Wrap" VerticalAlignment="Center"
+                               ToolTip="The soundboard."/>
+                    <ComboBox x:Name="SoundboardOutputBox"
+                              AutomationProperties.Name="Soundboard output" AutomationProperties.AutomationId="SoundboardOutputBox" Grid.Column="1" Margin="0,4"
+                              Width="300" HorizontalAlignment="Left"
+                              ToolTip="The soundboard."/>
+                </Grid>
+
+                <CheckBox x:Name="SoundboardFollowsMainCheck"
+                          AutomationProperties.Name="Play the soundboard on Main when it has no output of its own" AutomationProperties.AutomationId="SoundboardFollowsMainCheck" Margin="150,2,0,8"
+                          Foreground="{StaticResource TextBrush}"
+                          ToolTip="When the soundboard has no output of its own, mix it into Main instead of leaving it silent.">
+                    <TextBlock TextWrapping="Wrap" MaxWidth="420"
+                               Text="Play the soundboard on Main when it has no output of its own"/>
+                </CheckBox>
+
+                <Grid Margin="0,0,0,4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="Monitoring device output"
+                               TextWrapping="Wrap" VerticalAlignment="Center"
+                               ToolTip="Only recording devices with Monitor on. Never heard by the audience."/>
+                    <ComboBox x:Name="MonitorOutputBox"
+                              AutomationProperties.Name="Monitoring device output" AutomationProperties.AutomationId="MonitorOutputBox" Grid.Column="1" Margin="0,4"
+                              Width="300" HorizontalAlignment="Left"
+                              ToolTip="Only recording devices with Monitor on. Never heard by the audience."/>
+                </Grid>
+
+                <Grid Margin="0,0,0,4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="Master mix bridge (as microphone)"
+                               TextWrapping="Wrap" VerticalAlignment="Center"
+                               ToolTip="Main + unmuted microphones + soundboard, for other applications to record. Route it to a virtual cable and use the cable's capture side."/>
+                    <ComboBox x:Name="BridgeOutputBox"
+                              AutomationProperties.Name="Master mix bridge (as microphone)" AutomationProperties.AutomationId="BridgeOutputBox" Grid.Column="1" Margin="0,4"
+                              Width="300" HorizontalAlignment="Left"
+                              ToolTip="Main + unmuted microphones + soundboard, for other applications to record. Route it to a virtual cable and use the cable's capture side."/>
+                </Grid>
+
+                <TextBlock TextWrapping="Wrap" Foreground="{StaticResource TextDimBrush}"
+                           Margin="150,0,0,14"
+                           Text="Every output can be set to None. The monitoring and karaoke-aid buses are operator cues and are not delayed; the audience buses carry the output delay."/>
+
+                <!-- ================= KARAOKE MODE ================= -->
+                <TextBlock Text="KARAOKE MODE" FontWeight="Bold"
+                           Foreground="{StaticResource AccentABrush}" Margin="0,0,0,10"/>
+
+                <CheckBox x:Name="KaraokeModeCheck"
+                          AutomationProperties.Name="Karaoke mode" AutomationProperties.AutomationId="KaraokeModeCheck" Margin="0,0,0,14"
+                          Foreground="{StaticResource TextBrush}"
+                          ToolTip="Main gets the karaoke stem; the original goes to the Karaoke aid output.">
+                    <TextBlock TextWrapping="Wrap" MaxWidth="560"
+                               Text="Karaoke mode: play the karaoke stem on Main and send the original to the Karaoke aid output"/>
+                </CheckBox>
+
+                <!-- ========== MICROPHONES / RECORDING DEVICES ========== -->
+                <TextBlock Text="MICROPHONES / RECORDING DEVICES" FontWeight="Bold"
+                           Foreground="{StaticResource AccentABrush}" Margin="0,0,0,10"/>
+
+                <Border Background="{StaticResource PanelBrush}"
+                        BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                        CornerRadius="4" Padding="2" Margin="0,0,0,4">
+                    <ScrollViewer MaxHeight="260" VerticalScrollBarVisibility="Auto"
+                                  HorizontalScrollBarVisibility="Disabled">
+                        <StackPanel x:Name="MicListPanel" Margin="6,6,6,2"/>
+                    </ScrollViewer>
+                </Border>
+
+                <TextBlock TextWrapping="Wrap" Foreground="{StaticResource TextDimBrush}"
+                           Margin="0,2,0,14"
+                           Text="Volume is applied inside JockeyBox; the Windows recording level is never changed."/>
+
+                <!-- ================= OUTPUT DELAY ================= -->
+                <TextBlock Text="OUTPUT DELAY" FontWeight="Bold"
+                           Foreground="{StaticResource AccentABrush}" Margin="0,0,0,10"/>
+
+                <Grid Margin="0,0,0,2">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="Global output delay (ms)"
+                               TextWrapping="Wrap" VerticalAlignment="Center"
+                               ToolTip="0 to 2000 ms. The usual fix for audio that arrives before the video."/>
+                    <TextBox x:Name="OutputDelayBox" Grid.Column="1" Margin="0,4"
+                             Width="120" HorizontalAlignment="Left"/>
+                </Grid>
+
+                <TextBlock TextWrapping="Wrap" Foreground="{StaticResource TextDimBrush}"
+                           Margin="150,0,0,14"
+                           Text="Delays program audio to line up with camera video in OBS. The monitor output and the on-screen lyrics are not delayed."/>
+
+                <!-- ================= TEMPO ================= -->
+                <TextBlock Text="TEMPO" FontWeight="Bold"
+                           Foreground="{StaticResource AccentABrush}" Margin="0,0,0,10"/>
+
+                <Grid Margin="0,0,0,2">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="Tempo slider range (&#xB1;%)"
+                               TextWrapping="Wrap" VerticalAlignment="Center"
+                               ToolTip="1 to 50%. How far a deck's tempo slider can push a track away from its own BPM."/>
+                    <TextBox x:Name="TempoRangeBox" Grid.Column="1" Margin="0,4"
+                             Width="120" HorizontalAlignment="Left"/>
+                </Grid>
+
+                <TextBlock TextWrapping="Wrap" Foreground="{StaticResource TextDimBrush}"
+                           Margin="0,2,0,14"
+                           Text="How far the deck tempo sliders can push a track from its own BPM. The centre of the slider is always the track's original speed."/>
+
+                <!-- ================= AUTOMATIC MIXING ================= -->
+                <TextBlock Text="AUTOMATIC MIXING" FontWeight="Bold"
+                           Foreground="{StaticResource AccentABrush}" Margin="0,0,0,10"/>
+
+                <Grid Margin="0,0,0,4">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="Transition style" VerticalAlignment="Center"
+                               ToolTip="What happens when a queued track takes over from the one playing."/>
+                    <ComboBox x:Name="TransitionModeBox" Grid.Column="1" Margin="0,4"
+                              Width="300" HorizontalAlignment="Left"/>
+                </Grid>
+
+                <Grid Margin="0,0,0,2">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="150"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="Fade length (s)" VerticalAlignment="Center"
+                               ToolTip="0.2 to 30 seconds. Tracks with very different tempos get a shorter fade."/>
+                    <TextBox x:Name="TransitionFadeBox" Grid.Column="1" Margin="0,4"
+                             Width="120" HorizontalAlignment="Left"/>
+                </Grid>
+
+                <TextBlock TextWrapping="Wrap" Foreground="{StaticResource TextDimBrush}"
+                           Margin="0,2,0,14"
+                           Text="Applied when a queued track takes over. Auto-mix needs a beat grid for both tracks, and falls back to a crossfade when the tempos are too far apart."/>
 
                 <!-- ================= LIBRARY FOLDERS ================= -->
                 <TextBlock Text="LIBRARY FOLDERS" FontWeight="Bold"
@@ -28,20 +228,8 @@
                     <Button Grid.Column="2" Content="Browse&#x2026;" Width="80" Margin="6,4,0,4" Click="OnBrowseMusic"/>
                 </Grid>
 
-                <Grid Margin="0,0,0,4">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="150"/>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="Auto"/>
-                    </Grid.ColumnDefinitions>
-                    <TextBlock Grid.Column="0" Text="Karaoke folder" VerticalAlignment="Center"
-                               ToolTip="Mirrors the Music folder structure with generated instrumentals - plays on Deck A"/>
-                    <TextBox x:Name="KaraokeDirBox" Grid.Column="1" Margin="0,4"/>
-                    <Button Grid.Column="2" Content="Browse&#x2026;" Width="80" Margin="6,4,0,4" Click="OnBrowseKaraoke"/>
-                </Grid>
-
                 <TextBlock TextWrapping="Wrap" Foreground="{StaticResource TextDimBrush}" Margin="0,2,0,14"
-                           Text="Generated karaoke tracks are written into the Karaoke folder using the same relative path as the source file."/>
+                           Text="One library root. Karaoke stems are written next to their original as &quot;Song.karaoke.ext&quot;, so they appear in the same list as the track they belong to."/>
 
                 <!-- ================= VOCAL REMOVAL ENGINE ================= -->
                 <TextBlock Text="VOCAL REMOVAL ENGINE (UVR)" FontWeight="Bold"
@@ -225,7 +413,7 @@
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
                     <TextBlock Grid.Column="0" Text="Stream cache size" VerticalAlignment="Center"
-                               ToolTip="Space reserved for throwaway copies of streamed tracks. Cleared from the Downloads window."/>
+                               ToolTip="Space reserved for throwaway copies of streamed tracks. Cleared from the ACTIVITY strip's DOWNLOADS tab."/>
                     <StackPanel Grid.Column="1" Orientation="Horizontal">
                         <ComboBox x:Name="CacheBox" Margin="0,4" Width="120"/>
                         <TextBlock Text="MB" VerticalAlignment="Center" Margin="6,4,0,0"
@@ -268,7 +456,7 @@
                 </Grid>
 
                 <TextBlock TextWrapping="Wrap" Foreground="{StaticResource TextDimBrush}" Margin="150,0,0,6"
-                           Text="Empty means bundled: the app downloads both tools into %APPDATA%\JockeyBox\tools on first use. Versions are shown in the Downloads window, which also has the install and update buttons."/>
+                           Text="Empty means bundled: the app downloads both tools into %APPDATA%\JockeyBox\tools on first use. Versions are shown in the ACTIVITY strip's DOWNLOADS tab, which also has the install and update buttons."/>
 
                 <StackPanel Orientation="Horizontal" Margin="150,0,0,14">
                     <Button x:Name="InstallToolsButton" Content="Install tools" Width="110"

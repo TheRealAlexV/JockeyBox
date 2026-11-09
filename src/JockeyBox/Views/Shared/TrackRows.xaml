@@ -1,0 +1,349 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:lib="clr-namespace:JockeyBox.Library"
+                    xmlns:vm="clr-namespace:JockeyBox.ViewModels">
+
+    <!-- ==========================================================================
+         One row design for every track list in the app: library tree, Spotify
+         tracks, YouTube results.
+         Column order is fixed: Name | Artist | BPM | Key | Length | Icons.
+         The icons are two independent slots:
+             square  = a local file exists     (filled = yes, hollow = no)
+             diamond = a karaoke version exists (filled = yes, hollow = no)
+         Both slots get a tooltip, so state is never carried by colour alone.
+
+         Why the layout lives here as styles plus thin per-type templates: the
+         three lists bind to three different item types (BrowserNode, SourceTrack,
+         YtEntry) with different property names. A DataTemplateSelector would add
+         a class and three adapter objects for the same saving; instead every
+         visual decision (row height, cell typography, trimming, badge slots,
+         column widths) is a style in this file and each per-type template is a
+         six-cell binding map. Nothing else in the row is written per surface.
+         ========================================================================== -->
+
+    <SolidColorBrush x:Key="SlotOffBrush" Color="#4A5160"/>
+
+    <!-- ===== Row grid: one height for all three lists ===== -->
+    <Style x:Key="TrackRowGrid" TargetType="Grid">
+        <Setter Property="Height" Value="28"/>
+        <Setter Property="Background" Value="Transparent"/>
+    </Style>
+
+    <!-- ===== Cells ===== -->
+    <Style x:Key="TrackCell" TargetType="TextBlock">
+        <Setter Property="VerticalAlignment" Value="Center"/>
+        <Setter Property="FontSize" Value="11.5"/>
+        <Setter Property="Padding" Value="6,0"/>
+        <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
+    </Style>
+
+    <Style x:Key="TrackCellDim" TargetType="TextBlock" BasedOn="{StaticResource TrackCell}">
+        <Setter Property="Foreground" Value="{DynamicResource TextDimBrush}"/>
+    </Style>
+
+    <Style x:Key="TrackCellNum" TargetType="TextBlock" BasedOn="{StaticResource TrackCellDim}">
+        <Setter Property="FontFamily" Value="Consolas"/>
+        <Setter Property="FontSize" Value="11"/>
+    </Style>
+
+    <Style x:Key="TrackTitle" TargetType="TextBlock" BasedOn="{StaticResource TrackCell}">
+        <Setter Property="FontWeight" Value="SemiBold"/>
+    </Style>
+
+    <!-- ===== Column headers: one instance per surface, same widths ===== -->
+    <Style x:Key="TrackColumnHeader" TargetType="TextBlock">
+        <Setter Property="VerticalAlignment" Value="Center"/>
+        <Setter Property="FontSize" Value="10"/>
+        <Setter Property="FontWeight" Value="SemiBold"/>
+        <Setter Property="Padding" Value="6,0"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextDimBrush}"/>
+    </Style>
+
+    <Border x:Key="TrackColumnHeaders" x:Shared="False"
+            Background="{DynamicResource PanelAltBrush}"
+            BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1"
+            Height="26">
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" MinWidth="120"/>
+                <ColumnDefinition Width="150"/>
+                <ColumnDefinition Width="46"/>
+                <ColumnDefinition Width="46"/>
+                <ColumnDefinition Width="58"/>
+                <ColumnDefinition Width="42"/>
+            </Grid.ColumnDefinitions>
+            <TextBlock Grid.Column="0" Text="Track name" Style="{StaticResource TrackColumnHeader}"/>
+            <TextBlock Grid.Column="1" Text="Artist" Style="{StaticResource TrackColumnHeader}"/>
+            <TextBlock Grid.Column="2" Text="BPM" Style="{StaticResource TrackColumnHeader}"/>
+            <TextBlock Grid.Column="3" Text="Key" Style="{StaticResource TrackColumnHeader}"/>
+            <TextBlock Grid.Column="4" Text="Length" Style="{StaticResource TrackColumnHeader}"/>
+            <TextBlock Grid.Column="5" Text="Icons" Style="{StaticResource TrackColumnHeader}"
+                       TextAlignment="Center" Padding="0"/>
+        </Grid>
+    </Border>
+
+    <!-- ===== Badge slots ===== -->
+    <Style x:Key="BadgeSlot" TargetType="TextBlock">
+        <Setter Property="Width" Value="14"/>
+        <Setter Property="FontFamily" Value="Consolas"/>
+        <Setter Property="FontSize" Value="12"/>
+        <Setter Property="TextAlignment" Value="Center"/>
+        <Setter Property="VerticalAlignment" Value="Center"/>
+        <Setter Property="Foreground" Value="{StaticResource SlotOffBrush}"/>
+        <Setter Property="Focusable" Value="False"/>
+    </Style>
+
+    <!-- ================= Library row ================= -->
+    <HierarchicalDataTemplate x:Key="LibraryNodeRow" DataType="{x:Type lib:BrowserNode}"
+                              ItemsSource="{Binding Children}">
+        <Grid Style="{StaticResource TrackRowGrid}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" MinWidth="120"/>
+                <ColumnDefinition Width="150"/>
+                <ColumnDefinition Width="46"/>
+                <ColumnDefinition Width="46"/>
+                <ColumnDefinition Width="58"/>
+                <ColumnDefinition Width="42"/>
+            </Grid.ColumnDefinitions>
+
+            <TextBlock Grid.Column="0" Style="{StaticResource TrackTitle}"
+                       Text="{Binding Name}" ToolTip="{Binding PathText}"/>
+
+            <!-- Leaf: artist. Folder rows show their track count instead. -->
+            <TextBlock Grid.Column="1" Text="{Binding Track.Artist}" ToolTip="{Binding Track.Artist}">
+                <TextBlock.Style>
+                    <Style TargetType="TextBlock" BasedOn="{StaticResource TrackCellDim}">
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsFolder}" Value="True">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </TextBlock.Style>
+            </TextBlock>
+
+            <TextBlock Grid.Column="1" Text="{Binding CountText}">
+                <TextBlock.Style>
+                    <Style TargetType="TextBlock" BasedOn="{StaticResource TrackCellDim}">
+                        <Setter Property="Visibility" Value="Collapsed"/>
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsFolder}" Value="True">
+                                <Setter Property="Visibility" Value="Visible"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </TextBlock.Style>
+            </TextBlock>
+
+            <!-- BPM | Key | Length | Icons: hidden on folder rows -->
+            <Grid Grid.Column="2" Grid.ColumnSpan="4">
+                <Grid.Style>
+                    <Style TargetType="Grid">
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsFolder}" Value="True">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Grid.Style>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="46"/>
+                    <ColumnDefinition Width="46"/>
+                    <ColumnDefinition Width="58"/>
+                    <ColumnDefinition Width="42"/>
+                </Grid.ColumnDefinitions>
+
+                <TextBlock Grid.Column="0" Style="{StaticResource TrackCellNum}"
+                           Text="{Binding Track.BpmText}"/>
+                <!-- No musical key on the model yet: shows an em dash until it lands. -->
+                <TextBlock Grid.Column="1" Style="{StaticResource TrackCellNum}"
+                           Text="{Binding Track.Key, TargetNullValue=—, FallbackValue=—}"
+                           ToolTip="Musical key"/>
+                <TextBlock Grid.Column="2" Style="{StaticResource TrackCellNum}"
+                           Text="{Binding Track.DurationText}"/>
+
+                <StackPanel Grid.Column="3" Orientation="Horizontal" HorizontalAlignment="Center">
+                    <TextBlock Style="{StaticResource BadgeSlot}"
+                               Text="■" ToolTip="Local file in the library"
+                               AutomationProperties.Name="Local file"
+                               Foreground="{DynamicResource TextBrush}"/>
+                    <TextBlock>
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock" BasedOn="{StaticResource BadgeSlot}">
+                                <Setter Property="Text" Value="◇"/>
+                                <Setter Property="ToolTip" Value="No karaoke version"/>
+                                <Setter Property="AutomationProperties.Name" Value="No karaoke version"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding Track.HasBoth}" Value="True">
+                                        <Setter Property="Text" Value="◆"/>
+                                        <Setter Property="Foreground" Value="{DynamicResource AccentABrush}"/>
+                                        <Setter Property="ToolTip" Value="Karaoke version ready"/>
+                                        <Setter Property="AutomationProperties.Name" Value="Karaoke version ready"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                </StackPanel>
+            </Grid>
+        </Grid>
+    </HierarchicalDataTemplate>
+
+    <!-- ================= Remote track row (Spotify + YouTube playlists) ================= -->
+    <DataTemplate x:Key="RemoteTrackRow">
+        <Grid Style="{StaticResource TrackRowGrid}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" MinWidth="120"/>
+                <ColumnDefinition Width="150"/>
+                <ColumnDefinition Width="46"/>
+                <ColumnDefinition Width="46"/>
+                <ColumnDefinition Width="58"/>
+                <ColumnDefinition Width="42"/>
+            </Grid.ColumnDefinitions>
+
+            <TextBlock Grid.Column="0" Style="{StaticResource TrackTitle}"
+                       Text="{Binding Title}" ToolTip="{Binding Title}"/>
+            <TextBlock Grid.Column="1" Style="{StaticResource TrackCellDim}"
+                       Text="{Binding Artist}" ToolTip="{Binding Artist}"/>
+            <TextBlock Grid.Column="2" Style="{StaticResource TrackCellNum}"
+                       Text="{Binding Bpm, TargetNullValue=—, FallbackValue=—}"/>
+            <TextBlock Grid.Column="3" Style="{StaticResource TrackCellNum}"
+                       Text="{Binding Key, TargetNullValue=—, FallbackValue=—}"
+                       ToolTip="Musical key"/>
+            <TextBlock Grid.Column="4" Style="{StaticResource TrackCellNum}"
+                       Text="{Binding DurationText}" ToolTip="{Binding DurationText}"/>
+
+            <StackPanel Grid.Column="5" Orientation="Horizontal" HorizontalAlignment="Center">
+                <TextBlock>
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock" BasedOn="{StaticResource BadgeSlot}">
+                            <Setter Property="Text" Value="■"/>
+                            <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
+                            <Setter Property="ToolTip" Value="Local file in the library"/>
+                            <Setter Property="AutomationProperties.Name" Value="Local file in the library"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding LocalEntry}" Value="{x:Null}">
+                                    <Setter Property="Text" Value="□"/>
+                                    <Setter Property="Foreground" Value="{StaticResource SlotOffBrush}"/>
+                                    <Setter Property="ToolTip" Value="Not in the local library"/>
+                                    <Setter Property="AutomationProperties.Name" Value="Not in the local library"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+                <TextBlock>
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock" BasedOn="{StaticResource BadgeSlot}">
+                            <Setter Property="Text" Value="◇"/>
+                            <Setter Property="ToolTip" Value="No karaoke version"/>
+                            <Setter Property="AutomationProperties.Name" Value="No karaoke version"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding HasKaraoke}" Value="True">
+                                    <Setter Property="Text" Value="◆"/>
+                                    <Setter Property="Foreground" Value="{DynamicResource AccentABrush}"/>
+                                    <Setter Property="ToolTip" Value="Karaoke version ready"/>
+                                    <Setter Property="AutomationProperties.Name" Value="Karaoke version ready"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+            </StackPanel>
+        </Grid>
+    </DataTemplate>
+
+    <!-- ================= YouTube search result row ================= -->
+    <DataTemplate x:Key="YouTubeResultRow">
+        <Grid Style="{StaticResource TrackRowGrid}">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" MinWidth="120"/>
+                <ColumnDefinition Width="150"/>
+                <ColumnDefinition Width="46"/>
+                <ColumnDefinition Width="46"/>
+                <ColumnDefinition Width="58"/>
+                <ColumnDefinition Width="42"/>
+            </Grid.ColumnDefinitions>
+
+            <TextBlock Grid.Column="0" Style="{StaticResource TrackTitle}"
+                       Text="{Binding Title}" ToolTip="{Binding Title}"/>
+            <TextBlock Grid.Column="1" Style="{StaticResource TrackCellDim}"
+                       Text="{Binding Uploader}" ToolTip="{Binding Uploader}"/>
+            <TextBlock Grid.Column="2" Style="{StaticResource TrackCellNum}" Text="—"/>
+            <TextBlock Grid.Column="3" Style="{StaticResource TrackCellNum}" Text="—" ToolTip="Musical key"/>
+            <TextBlock Grid.Column="4" Style="{StaticResource TrackCellNum}"
+                       Text="{Binding Duration, StringFormat={}{0:m\:ss}}"/>
+
+            <StackPanel Grid.Column="5" Orientation="Horizontal" HorizontalAlignment="Center">
+                <TextBlock Style="{StaticResource BadgeSlot}" Text="□"
+                           ToolTip="Not in the local library"
+                           AutomationProperties.Name="Not in the local library"/>
+                <TextBlock Style="{StaticResource BadgeSlot}" Text="◇"
+                           ToolTip="No karaoke version"
+                           AutomationProperties.Name="No karaoke version"/>
+            </StackPanel>
+        </Grid>
+    </DataTemplate>
+
+    <!-- ==========================================================================
+         Filter + sort strip. One row, no panel: filter box, sort field, direction.
+         Its DataContext is a vm:TrackListView, which holds the chosen filter text,
+         the sort field and the direction. Hosts supply callbacks when the list
+         already has a filter of its own, so this strip drives the real list.
+         ========================================================================== -->
+    <Style x:Key="StripLabel" TargetType="TextBlock">
+        <Setter Property="VerticalAlignment" Value="Center"/>
+        <Setter Property="FontSize" Value="10"/>
+        <Setter Property="FontWeight" Value="Bold"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextDimBrush}"/>
+    </Style>
+
+    <Style x:Key="StripFilterBox" TargetType="TextBox">
+        <Setter Property="FontSize" Value="11"/>
+        <Setter Property="Height" Value="24"/>
+        <Setter Property="Width" Value="210"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
+    </Style>
+
+    <Style x:Key="StripSortCombo" TargetType="ComboBox">
+        <Setter Property="FontSize" Value="11"/>
+        <Setter Property="Height" Value="24"/>
+        <Setter Property="Width" Value="118"/>
+        <Setter Property="VerticalContentAlignment" Value="Center"/>
+    </Style>
+
+    <Style x:Key="StripDirectionButton" TargetType="Button">
+        <Setter Property="FontSize" Value="10"/>
+        <Setter Property="FontFamily" Value="Consolas"/>
+        <Setter Property="Width" Value="44"/>
+        <Setter Property="Height" Value="24"/>
+        <Setter Property="Padding" Value="0"/>
+        <Setter Property="Margin" Value="4,0,0,0"/>
+    </Style>
+
+    <DataTemplate x:Key="FilterSortStrip">
+        <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+            <TextBlock Text="FILTER" Style="{StaticResource StripLabel}" Margin="0,0,6,0"/>
+            <TextBox Style="{StaticResource StripFilterBox}"
+                     Text="{Binding FilterText, UpdateSourceTrigger=PropertyChanged}"
+                     ToolTip="{Binding FilterHint}"
+                     AutomationProperties.Name="{Binding FilterHint}"/>
+
+            <TextBlock Text="SORT" Style="{StaticResource StripLabel}" Margin="10,0,6,0"/>
+            <ComboBox Style="{StaticResource StripSortCombo}"
+                      ItemsSource="{x:Static vm:TrackSortChoices.All}"
+                      DisplayMemberPath="Label"
+                      SelectedValuePath="Value"
+                      SelectedValue="{Binding SortField, Mode=TwoWay}"
+                      AutomationProperties.Name="Sort by"
+                      ToolTip="Sort field"/>
+            <Button Style="{StaticResource StripDirectionButton}"
+                    Content="{Binding DirectionLabel}"
+                    Command="{Binding ToggleDirectionCommand}"
+                    ToolTip="{Binding DirectionToolTip}"
+                    AutomationProperties.Name="Sort direction"/>
+        </StackPanel>
+    </DataTemplate>
+
+</ResourceDictionary>

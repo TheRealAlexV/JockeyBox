@@ -1,5 +1,6 @@
 using System.Text.Json.Serialization;
 using CommunityToolkit.Mvvm.ComponentModel;
+using JockeyBox.Library;
 
 namespace JockeyBox.Sources;
 
@@ -47,6 +48,13 @@ public partial class SourceTrack : ObservableObject
 
     /// <summary>YouTube id once known (always set for YouTube items, filled in when a Spotify track resolves).</summary>
     public string? VideoId { get; set; }
+
+    /// <summary>
+    /// Musical key ("8A", "Am") when a remote API or a local tag supplies one.
+    /// Null when unknown: the remote row falls back to its em dash rather than
+    /// inventing a key.
+    /// </summary>
+    public string? Key { get; set; }
 
     /// <summary>Name of the playlist this track was imported from - used by the playlist layout preset.</summary>
     public string? PlaylistName { get; set; }
@@ -125,8 +133,74 @@ public partial class SourceTrack : ObservableObject
     private double _progress;
 
     [ObservableProperty]
-    [NotifyPropertyChangedFor(nameof(StateGlyph), nameof(IsBusy))]
+    [NotifyPropertyChangedFor(nameof(StateGlyph), nameof(IsBusy), nameof(HasLocalFile))]
     private string? _libraryPath;
+
+    /// <summary>
+    /// True when a permanent library file exists for this row. The remote row
+    /// menus use it to enable only what can work (reveal, separate, open the
+    /// file's folder) instead of offering an action that would fail silently.
+    /// </summary>
+    [JsonIgnore]
+    public bool HasLocalFile => !string.IsNullOrWhiteSpace(LibraryPath);
+
+    /// <summary>
+    /// True when the local library already holds a karaoke version of this
+    /// track. Painted from the scan's index through
+    /// <see cref="RemoteLibraryFacts"/> (one dictionary hit per row, never a
+    /// ledger walk), and not persisted: it describes the library, not the row.
+    /// </summary>
+    [ObservableProperty]
+    [JsonIgnore]
+    [NotifyPropertyChangedFor(nameof(KaraokeGlyph), nameof(KaraokeAutomationName))]
+    private bool _hasKaraoke;
+
+    /// <summary>Row-column glyph for karaoke availability: "✓" or nothing.</summary>
+    [JsonIgnore]
+    public string KaraokeGlyph => HasKaraoke ? "\u2713" : "";
+
+    /// <summary>Screen-reader / live-tree label for the karaoke indicator.</summary>
+    [JsonIgnore]
+    public string KaraokeAutomationName => HasKaraoke ? "Karaoke available"
+        : LocalEntry?.NeedsKaraoke == true ? "Karaoke needed"
+        : "No karaoke version";
+
+    /// <summary>
+    /// The scanned library entry this row resolved to, or null while the file is
+    /// not here. Kept by reference so the remote row binds the same object the
+    /// local library does: a separation that starts or finishes on the browser
+    /// ticks this row's karaoke column without a rescan. Set only by
+    /// <see cref="ApplyLibraryFacts"/>; never persisted.
+    /// </summary>
+    [JsonIgnore]
+    public TrackEntry? LocalEntry { get; private set; }
+
+    /// <summary>
+    /// The local library's karaoke column text for this row ("✓", "⭕ needed",
+    /// "⚙ 42%", …), or empty when the file is not here yet.
+    /// </summary>
+    [JsonIgnore]
+    public string KaraokeStatus => LocalEntry?.KaraokeStatus ?? "";
+
+    /// <summary>
+    /// Take the library's answer for this row: one assignment per property, and
+    /// nothing raised unless the answer really changed, so a pass over a few
+    /// thousand rows repaints only the handful that moved.
+    /// </summary>
+    public void ApplyLibraryFacts(RemoteTrackFacts facts)
+    {
+        var entryChanged = !ReferenceEquals(LocalEntry, facts.Entry);
+        var karaokeChanged = HasKaraoke != facts.HasKaraoke;
+
+        LocalEntry = facts.Entry;
+        HasKaraoke = facts.HasKaraoke;
+
+        // LocalEntry has no generated setter, so its dependants are raised here.
+        if (entryChanged) OnPropertyChanged(nameof(LocalEntry));
+        if (entryChanged || karaokeChanged) OnPropertyChanged(nameof(KaraokeStatus));
+        if (entryChanged || karaokeChanged) OnPropertyChanged(nameof(HasLocalFile));
+        if (entryChanged || karaokeChanged) OnPropertyChanged(nameof(KaraokeAutomationName));
+    }
 
     /// <summary>
     /// Stream-cache file (preview playback) - evictable, not a library copy, so

@@ -1,8 +1,9 @@
-using System.IO;
+﻿using System.IO;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using JockeyBox.Tools;
 
 namespace JockeyBox.Settings;
 
@@ -26,6 +27,20 @@ public enum LibraryLayout
 {
     ArtistAlbum = 0,
     Path = 1,
+}
+
+/// <summary>
+/// How the next queued track is brought in when the current one ends.
+/// Persisted as a number in settings.json.
+/// </summary>
+public enum TransitionMode
+{
+    /// <summary>Hard cut at the end of the track.</summary>
+    Off = 0,
+    /// <summary>Automatic crossfade completing at the end of the track.</summary>
+    AutoCrossfade = 1,
+    /// <summary>Beat-matched, tempo-matched mix into the next track.</summary>
+    AutoMix = 2,
 }
 
 /// <summary>
@@ -62,6 +77,148 @@ public class AppSettings
 
     /// <summary>Per-device delay offsets (device ID → ms delta from master clock).</summary>
     public Dictionary<string, double> DeviceDelays { get; set; } = new();
+
+    // ------------------------------------------------------------------
+    // 2.0 audio routing.
+    //
+    // One program bus carries the whole mix (decks + soundboard) to a single
+    // output endpoint - that is the device OBS records. The two optional
+    // outputs and the per-deck sends are extra tee'd endpoints; every one of
+    // them is off when its id is null/empty ("None" in the UI).
+    //
+    // DeckADeviceId/DeckBDeviceId keep their 1.x meaning as the per-deck send
+    // *device*, but the send is only live when DeckACueEnabled/DeckBCueEnabled
+    // is true. Migration into schema 2 leaves the stored ids in place and both
+    // sends disabled, so an upgraded install does not suddenly render every
+    // deck twice (to its old device and to the program bus).
+    // ------------------------------------------------------------------
+
+    /// <summary>Bumped when a migration in <see cref="MigrateAudioRouting"/> is needed.</summary>
+    public int SettingsSchemaVersion { get; set; } = 3;
+
+    /// <summary>
+    /// True once the settings dialog has stored a routing choice (including
+    /// "None"). Until then an all-empty profile is treated as "not configured
+    /// yet" and the program bus is routed to the system default device, so an
+    /// upgrade never boots into silence. See <c>DualDeckTransport.BuildRoute</c>.
+    /// </summary>
+    public bool AudioRoutingConfigured { get; set; }
+
+    /// <summary>
+    /// Main output: deck audio only (no microphones, no soundboard). When
+    /// <see cref="KaraokeModeEnabled"/> is on this carries the karaoke stem
+    /// instead of the original; null = None.
+    /// </summary>
+    public string? MainOutputDeviceId { get; set; }
+
+    /// <summary>Legacy 2.0 name for <see cref="MainOutputDeviceId"/>; migrated on load.</summary>
+    public string? ProgramOutputDeviceId { get; set; }
+
+    /// <summary>
+    /// Karaoke Aid: the original (vocal) stem while Karaoke mode is on, meant for
+    /// the operator's headphones. Never carries deck karaoke audio; null = None.
+    /// </summary>
+    public string? KaraokeAidOutputDeviceId { get; set; }
+
+    /// <summary>Recording Device output: every unmuted microphone; null = None.</summary>
+    public string? RecordingOutputDeviceId { get; set; }
+
+    /// <summary>Soundboard output; null = None (falls back to Main if SoundboardFollowsMain).</summary>
+    public string? SoundboardOutputDeviceId { get; set; }
+
+    /// <summary>When the soundboard has no device of its own, play it on Main.</summary>
+    public bool SoundboardFollowsMain { get; set; } = true;
+
+    /// <summary>
+    /// Master Mix Recording Device Bridge: Main + unmuted microphones + soundboard,
+    /// exposed to other applications as a microphone through a virtual cable; null = None.
+    /// </summary>
+    public string? BridgeOutputDeviceId { get; set; }
+
+    /// <summary>Karaoke mode: deck plays the karaoke stem, original goes to Karaoke Aid.</summary>
+    public bool KaraokeModeEnabled { get; set; }
+
+    /// <summary>
+    /// Recording devices ("microphones"), each independently enabled with its own
+    /// app-domain volume, mute and monitor. Replaces the single <see cref="MicDeviceId"/>.
+    /// </summary>
+    public List<MicDeviceSettings> MicDevices { get; set; } = new();
+    /// <summary>Optional second copy of the program mix; null = None.</summary>
+    public string? SecondOutputDeviceId { get; set; }
+    /// <summary>Optional monitor copy, taken before the global delay; null = None.</summary>
+    public string? MonitorOutputDeviceId { get; set; }
+
+    /// <summary>Per-deck send to its own endpoint (deck A). Off by default in 2.0.</summary>
+    public bool DeckACueEnabled { get; set; }
+    /// <summary>Per-deck send to its own endpoint (deck B). Off by default in 2.0.</summary>
+    public bool DeckBCueEnabled { get; set; }
+
+    /// <summary>Master fader for every output; 0..1.2.</summary>
+    public float MasterVolume { get; set; } = 1.0f;
+
+    // ------------------------------------------------------------------
+    // Talk-over microphone (2.0).
+    //
+    // The voice is mixed into the program bus inside the engine, so it reaches
+    // OBS on the same stream as the music and with the same OutputDelayMs. The
+    // level here is an app-domain gain: the Windows recording level of the
+    // device is never modified.
+    //
+    // MicDeviceId is a *capture* endpoint id; null/empty = None. A stored id
+    // whose device is unplugged stays stored and resolves to "no microphone"
+    // (silence), it is never silently re-routed to another mic.
+    // ------------------------------------------------------------------
+
+    /// <summary>Capture endpoint for the talk-over voice; null = None.</summary>
+    public string? MicDeviceId { get; set; }
+
+    /// <summary>App-domain microphone gain, 0..2 (0..200%), default 1.0.</summary>
+    public float MicLevel { get; set; } = 1.0f;
+
+    /// <summary>
+    /// Also send the voice to the monitor output (pre-delay cue). Off by default:
+    /// monitoring a microphone through an open speaker feeds back.
+    /// </summary>
+    public bool MicMonitorEnabled { get; set; }
+
+    /// <summary>
+    /// Whether the microphone choice was made explicitly (settings dialog) or
+    /// adopted once from the system default. Only the one-time adoption looks at
+    /// the default: after that a null <see cref="MicDeviceId"/> means None, and a
+    /// saved id is never swapped for a different device.
+    /// </summary>
+    public bool MicAutoSelected { get; set; }
+
+    /// <summary>
+    /// Global delay applied to the program and second outputs, in milliseconds.
+    /// Compensates the A/V offset against OBS video capture. The monitor output
+    /// is deliberately not delayed, and the UI clock reports the delayed time.
+    /// </summary>
+    public int OutputDelayMs { get; set; }
+
+    /// <summary>How a queued track is brought in when the current one ends.</summary>
+    public TransitionMode TransitionMode { get; set; } = TransitionMode.AutoCrossfade;
+
+    /// <summary>Requested crossfade length, seconds (the tempo-mismatch cap still applies).</summary>
+    public double TransitionFadeSeconds { get; set; } = 2.0;
+
+    /// <summary>Maximum tempo change auto-mix will apply to match two tracks, in percent.</summary>
+    public double TempoRangePercent { get; set; } = 8.0;
+
+    /// <summary>Per-deck tempo slider range, in percent (centre = 0).</summary>
+    public double ManualTempoRangePercent { get; set; } = 16.0;
+
+    /// <summary>Global gain for the soundboard bus; 0..1.2.</summary>
+    public float SoundboardVolume { get; set; } = 1.0f;
+
+    /// <summary>Lower the music bed while a soundboard sound plays.</summary>
+    public bool SoundboardDuckDecks { get; set; }
+
+    /// <summary>Loopback port for the Stream Deck / automation API; 0 = disabled.</summary>
+    public int ApiPort { get; set; } = 28100;
+
+    /// <summary>Bearer token the localhost API requires (generated on first save).</summary>
+    public string ApiToken { get; set; } = "";
 
     // Vocal removal engine (UVR models via the audio-separator CLI)
     /// <summary>Optional explicit python.exe used to build the engine venv; empty = auto-detect.</summary>
@@ -286,9 +443,7 @@ public class AppSettings
     /// <summary>Entropy used by pre-rename builds; read-only migration path.</summary>
     private static readonly byte[] LegacyEntropy = Encoding.UTF8.GetBytes("SplitPlayerK.v1");
 
-    private static string SettingsPath => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-        "JockeyBox", "settings.json");
+    private static string SettingsPath => Path.Combine(AppPaths.Home, "settings.json");
 
     public static AppSettings Load()
     {
@@ -324,14 +479,105 @@ public class AppSettings
         if (!Enum.IsDefined(settings.LibraryLayout))
             settings.LibraryLayout = LibraryLayout.ArtistAlbum;
 
+        // A hand-edited or newer-build mic level must not leave the engine with
+        // a boost it cannot represent (the engine clamps too, this keeps the
+        // persisted value honest).
+        settings.MicLevel = Math.Clamp(settings.MicLevel, 0f, 2f);
+        if (string.IsNullOrWhiteSpace(settings.MicDeviceId)) settings.MicDeviceId = null;
+
         // Unprotect OAuth access token
         if (!string.IsNullOrEmpty(settings.SpotifyAccessTokenProtected))
             settings.SpotifyAccessToken = Unprotect(settings.SpotifyAccessTokenProtected);
 
         settings.MigrateLegacyRoot();
+        settings.MigrateAudioRouting();
         settings.NormalizeKaraokeRoot();
         return settings;
     }
+
+    /// <summary>
+    /// Schema 1 → 2: the per-deck device stops being the deck's only output and
+    /// becomes an optional send. Existing installs keep their stored device ids
+    /// but start with both sends disabled, so audio only flows through the new
+    /// program bus until the user enables a send on purpose.
+    /// </summary>
+    private void MigrateAudioRouting()
+    {
+        if (string.IsNullOrEmpty(ApiToken)) ApiToken = NewApiToken();
+
+        if (SettingsSchemaVersion >= 4) return;
+
+        DeckACueEnabled = false;
+        DeckBCueEnabled = false;
+
+        if (SettingsSchemaVersion < 2)
+        {
+            // Both decks on the SAME endpoint is the common case, and it is also
+            // the strongest signal that this is the endpoint the user listens to:
+            // 1.x let each deck pick a device separately, so two decks agreeing
+            // means one physical output. Take it either way round.
+            var shared = !string.IsNullOrEmpty(DeckADeviceId) ? DeckADeviceId : DeckBDeviceId;
+            if (string.IsNullOrEmpty(ProgramOutputDeviceId) && !string.IsNullOrEmpty(shared))
+                ProgramOutputDeviceId = shared;
+        }
+
+        if (SettingsSchemaVersion < 3)
+        {
+            // Schema 2 as first shipped only promoted deck A's device when it
+            // differed from deck B's, so a single-endpoint install migrated to
+            // "program = None" and played into silence. Repair that: an install
+            // that has never stored a program device takes the deck send device.
+            if (string.IsNullOrEmpty(ProgramOutputDeviceId))
+            {
+                var legacy = !string.IsNullOrEmpty(DeckADeviceId) ? DeckADeviceId : DeckBDeviceId;
+                if (!string.IsNullOrEmpty(legacy)) ProgramOutputDeviceId = legacy;
+            }
+        }
+
+        if (SettingsSchemaVersion < 4)
+        {
+            // 2.0 had a single "program" bus and one mic. 2.1 splits the buses and
+            // turns the microphone into a list, so carry the old choices across:
+            // program becomes Main, the saved mic becomes the first mixer entry
+            // (monitor off - monitoring a mic through speakers feeds back).
+            if (string.IsNullOrEmpty(MainOutputDeviceId) && !string.IsNullOrEmpty(ProgramOutputDeviceId))
+                MainOutputDeviceId = ProgramOutputDeviceId;
+            ProgramOutputDeviceId = null;
+
+            if (!string.IsNullOrEmpty(MicDeviceId))
+            {
+                if (!MicDevices.Any(m => string.Equals(m.DeviceId, MicDeviceId, StringComparison.OrdinalIgnoreCase)))
+                {
+                    MicDevices.Add(new MicDeviceSettings
+                    {
+                        DeviceId = MicDeviceId!,
+                        Volume = Math.Clamp(MicLevel, 0f, 2f),
+                        Muted = false,
+                        Monitor = MicMonitorEnabled,
+                    });
+                }
+                MicDeviceId = null;
+            }
+
+            MicDevices.RemoveAll(m => string.IsNullOrWhiteSpace(m.DeviceId));
+            foreach (var mic in MicDevices)
+            {
+                mic.DeviceId = mic.DeviceId.Trim();
+                mic.Volume = Math.Clamp(mic.Volume, 0f, 2f);
+            }
+
+            // The old per-deck sends are gone: Karaoke Aid replaces them.
+            DeckACueEnabled = false;
+            DeckBCueEnabled = false;
+        }
+
+        SettingsSchemaVersion = 4;
+        Save();
+    }
+
+    /// <summary>128-bit hex token for the localhost API.</summary>
+    private static string NewApiToken() =>
+        Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
 
     /// <summary>
     /// Read a blank karaoke root as "the same folder as the music", and a
@@ -437,4 +683,19 @@ public class AppSettings
         }
         catch { return ""; } // wrong user/machine or corrupt - treat as unset
     }
+
+/// <summary>
+/// One recording device in the per-device mixer: <see cref="Volume"/> is the
+/// app-domain gain (the Windows level is never touched), <see cref="Muted"/>
+/// silences the device on every bus except Karaoke Aid/Monitoring when
+/// <see cref="Monitor"/> is on, and <see cref="Monitor"/> sends it to the
+/// monitoring output only. Monitor is off by default.
+/// </summary>
+public sealed class MicDeviceSettings
+{
+    public string DeviceId { get; set; } = "";
+    public float Volume { get; set; } = 1.0f;
+    public bool Muted { get; set; }
+    public bool Monitor { get; set; }
+}
 }

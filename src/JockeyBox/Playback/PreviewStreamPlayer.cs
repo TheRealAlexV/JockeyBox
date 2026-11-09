@@ -2,109 +2,143 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
 using System.IO;
+using System.Text;
+using System.Text.RegularExpressions;
 using System.Windows;
-using System.Windows.Threading;
 using JockeyBox.Settings;
 using JockeyBox.Tools;
+using LibVLCSharp.Shared;
 
 namespace JockeyBox.Playback;
 
 /// <summary>
-/// Auditions a YouTube track without downloading it.
+/// Auditions a track without downloading it, and with a real timeline.
 ///
-/// The pipeline is two processes chained by a pipe:
-/// <code>
-/// yt-dlp -f bestaudio/best --no-playlist --no-warnings -o - &lt;url&gt;   (stdout)
-///   |  ffplay -nodisp -autoexit -loglevel quiet -i pipe:0
-/// </code>
-/// ffplay decodes the first bytes that arrive, so the sound starts seconds into
-/// the track while the rest is still in flight, and nothing ever reaches the
-/// disk. Seeking restarts the pair at an offset (<c>yt-dlp --download-sections</c>
-/// plus <c>ffplay -ss</c>).
+/// yt-dlp resolves the audio to a direct googlevideo URL (<c>-g</c>) and libVLC
+/// plays that URL. googlevideo honours HTTP Range requests, so libVLC knows the
+/// length and can jump anywhere: the strip gets a true duration, a true
+/// position and a seek that moves a decoder instead of restarting a pipe.
 ///
-/// Everything that touches a process is serialised on one lock and every start
-/// bumps a generation counter, so a click-through never leaves a second ffplay
-/// playing in the dark: the newer request kills what the older one spawned,
-/// including a pipeline that was still resolving its binaries.
+/// When extraction is refused (age gate, live, extractor change) the player
+/// falls back to a yt-dlp temp-file download, reporting its percentage, and
+/// then plays the local file — reported as "download fallback" in the strip.
+///
+/// One instance owns one libVLC player for the whole app, so starting a preview
+/// in either tab stops the other. Every start bumps a generation and cancels the
+/// previous run, so a click-through kills the resolve and the process it spawned.
 /// </summary>
 public sealed class PreviewStreamPlayer : IDisposable
 {
-    /// <summary>How long ffplay is given to render before the audio is called started.</summary>
-    private const int StartDelayMs = 1200;
-
     private const int KillWaitMs = 1500;
 
-    private const int PumpBufferSize = 32 * 1024;
+    private const int StderrTailChars = 400;
+
+    /// <summary>One libVLC engine for the app; libVLC itself is process-wide.</summary>
+    private static readonly object VlcGate = new();
+    private static LibVLC? _vlc;
+    private static string? _vlcError;
+
+    private static readonly Regex PercentPattern =
+        new(@"\[\s*download\s*\]\s*([0-9.]+)%", RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
     private readonly object _gate = new();
     private readonly ConcurrentDictionary<string, byte> _missing = new(StringComparer.OrdinalIgnoreCase);
+    private readonly MediaPlayer _player;
+    private readonly LibVLC? _engine;
 
+    private CancellationTokenSource? _runCts;
     private Process? _ytDlp;
-    private Process? _ffplay;
-    private CancellationTokenSource? _startCts;
+    private Media? _media;
     private string? _sourceUrl;
     private string? _title;
-    private int _generation;
-
-    /// <summary>Offset the current pipeline was started at (set by a seek).</summary>
-    private int _seekSeconds;
-
-    private bool _paused;
-    private bool _disposed;
-
-    /// <summary>Position frozen at the moment playback was paused.</summary>
-    private double _pausedAtSeconds;
-
-    /// <summary>Position when the current pipeline started, as a Stopwatch timestamp.</summary>
-    private long _runStartTicks;
-
-    /// <summary>Seconds accumulated by pipelines that a seek or a switch has already replaced.</summary>
-    private double _elapsedBeforeRun;
-
     private string? _status;
-    private DispatcherTimer? _keepAlive;
+    private string? _error;
+    private string? _mode;
+    private string? _tempFile;
+
+    private int _generation;
+    private bool _loading;
+    private bool _paused;
+    private bool _muted;
+    private int _volume = 80;
+    private bool _disposed;
 
     public PreviewStreamPlayer(AppSettings settings)
     {
         Settings = settings ?? throw new ArgumentNullException(nameof(settings));
 
+        _engine = EnsureEngine();
+        if (_engine != null)
+        {
+            _player = new MediaPlayer(_engine);
+            _player.Volume = _volume;
+            WireEvents();
+        }
+        else
+        {
+            // A missing libvlc must degrade to a readable message, not a crash.
+            _player = null!;
+        }
+
         // Previews must never outlive the window: the hook is what guarantees
-        // no orphaned ffplay keeps playing after an abrupt shutdown.
+        // no orphaned yt-dlp keeps running after an abrupt shutdown.
         var app = Application.Current;
         if (app != null) app.Exit += (_, _) => Dispose();
     }
 
     public AppSettings Settings { get; }
 
-    /// <summary>True while a source is selected (playing or paused).</summary>
-    public bool IsPlaying => CurrentUrl != null;
+    /// <summary>True while a source is selected (resolving, playing or paused).</summary>
+    public bool IsPlaying => CurrentUrl != null && !_loading && _media != null && _player.IsPlaying;
 
     public bool IsPaused
     {
         get { lock (_gate) return _paused; }
     }
 
-    /// <summary>
-    /// Estimated playhead: there is no container to ask for a real position on
-    /// a pipe, so this is wall clock since the pipeline started, plus the seek
-    /// offset, minus the time spent paused.
-    /// </summary>
+    /// <summary>Real position of the decoder in seconds (0 when nothing is loaded).</summary>
     public double PositionSeconds
     {
         get
         {
             lock (_gate)
             {
-                if (_sourceUrl == null) return 0;
-                return _paused
-                    ? _pausedAtSeconds
-                    : _elapsedBeforeRun + Stopwatch.GetElapsedTime(_runStartTicks).TotalSeconds;
+                if (_media == null) return 0;
+            }
+
+            try
+            {
+                var ms = _player.Time;
+                return ms <= 0 ? 0 : ms / 1000.0;
+            }
+            catch (Exception)
+            {
+                return 0;
             }
         }
     }
 
-    /// <summary>A stream's length is unknown until it is downloaded; 0 means "unbounded".</summary>
-    public double DurationSeconds => 0;
+    /// <summary>Real length reported by the container; 0 while unknown (unseekable live).</summary>
+    public double DurationSeconds
+    {
+        get
+        {
+            lock (_gate)
+            {
+                if (_media == null) return 0;
+            }
+
+            try
+            {
+                var ms = _player.Length;
+                return ms <= 0 ? 0 : ms / 1000.0;
+            }
+            catch (Exception)
+            {
+                return 0;
+            }
+        }
+    }
 
     public string? CurrentUrl
     {
@@ -116,33 +150,55 @@ public sealed class PreviewStreamPlayer : IDisposable
         get { lock (_gate) return _title; }
     }
 
-    /// <summary>Last human-readable note: buffering, seek fallback, missing tool.</summary>
+    /// <summary>Short note the strip shows: resolving, buffering, download progress.</summary>
     public string? Status
     {
-        get { lock (_gate) return _status; }
+        get { lock (_gate) return _error ?? _status; }
     }
 
-    /// <summary>True when both halves of the pipeline are installed.</summary>
-    public bool IsAvailable => ResolveYtDlp() != null && ResolveFfplay() != null;
+    /// <summary>"stream" for a direct URL, "download" for the temp-file fallback.</summary>
+    public string? Mode
+    {
+        get { lock (_gate) return _mode; }
+    }
+
+    public bool IsLoading
+    {
+        get { lock (_gate) return _loading; }
+    }
+
+    /// <summary>0..1, applied to libVLC's 0..100 scale.</summary>
+    public double Volume
+    {
+        get { lock (_gate) return _volume / 100.0; }
+    }
+
+    public bool IsMuted
+    {
+        get { lock (_gate) return _muted; }
+    }
+
+    /// <summary>True when yt-dlp and libVLC are both usable.</summary>
+    public bool IsAvailable => _engine != null && ResolveYtDlp() != null;
 
     /// <summary>Why <see cref="IsAvailable"/> is false, ready for the status line.</summary>
     public string UnavailableReason =>
-        ResolveFfplay() == null
-            ? "Install ffmpeg (ffplay) to stream previews"
+        _engine == null
+            ? _vlcError ?? "libVLC failed to load, so previews cannot play"
             : "yt-dlp is not installed, so previews cannot be streamed";
 
-    /// <summary>Raised on the UI thread when play state or position source changes.</summary>
+    /// <summary>Raised when play state, position, length, volume or mute changes.</summary>
     public event EventHandler? StateChanged;
 
-    /// <summary>Raised on the UI thread with the note the status line should show.</summary>
+    /// <summary>Raised with the note the tab's status line should show.</summary>
     public event EventHandler<string>? StatusChanged;
 
     // ---- control ---------------------------------------------------------
 
     /// <summary>
-    /// Streams <paramref name="url"/>, stopping whatever was playing first.
-    /// Returns immediately: resolution and process spawn happen on a task, and
-    /// a newer call cancels this one mid-flight.
+    /// Plays <paramref name="url"/>, stopping whatever was playing first. Returns
+    /// immediately: the click is acknowledged with a "resolving" state, and a
+    /// newer call cancels this one mid-flight.
     /// </summary>
     public void Play(string url, string? title = null)
     {
@@ -153,53 +209,47 @@ public sealed class PreviewStreamPlayer : IDisposable
         {
             if (_disposed) return;
 
-            // Kill the previous pipeline before the new one is even resolved.
-            StopCore();
-            _generation++;
-            _startCts?.Dispose();
-            _startCts = new CancellationTokenSource();
-            token = _startCts.Token;
+            _runCts?.Cancel();
+            _runCts?.Dispose();
+            _runCts = new CancellationTokenSource();
+            token = _runCts.Token;
 
+            _generation++;
             _sourceUrl = url;
             _title = title;
-            _seekSeconds = 0;
+            _status = "Resolving stream\u2026";
+            _error = null;
+            _mode = null;
+            _loading = true;
             _paused = false;
-            _pausedAtSeconds = 0;
-            _elapsedBeforeRun = 0;
-            _status = "Buffering\u2026";
         }
 
+        if (_engine == null)
+        {
+            Fail(UnavailableReason);
+            return;
+        }
+
+        EndPlayback();
         RaiseStateChanged();
         RaiseStatus();
-        _ = StartAsync(url, 0, token);
-        StartKeepAlive();
+        _ = RunAsync(url, token);
     }
 
-    /// <summary>Stops the pipeline and forgets the current source.</summary>
+    /// <summary>Stops playback, kills the resolve and forgets the current source.</summary>
     public void Stop()
     {
         bool hadSource;
         lock (_gate)
         {
-            hadSource = _sourceUrl != null || _ytDlp != null || _ffplay != null;
+            hadSource = _sourceUrl != null || _ytDlp != null || _media != null;
             if (!hadSource) return;
 
-            _generation++;
-            _startCts?.Cancel();
-            _startCts?.Dispose();
-            _startCts = null;
-
-            StopCore();
-            _sourceUrl = null;
-            _title = null;
-            _seekSeconds = 0;
-            _paused = false;
-            _pausedAtSeconds = 0;
-            _elapsedBeforeRun = 0;
-            _status = null;
+            CancelRun();
+            ClearSource();
         }
 
-        StopKeepAlive();
+        EndPlayback();
         RaiseStateChanged();
         RaiseStatus();
     }
@@ -208,75 +258,130 @@ public sealed class PreviewStreamPlayer : IDisposable
     public void StopIfUrl(string? url)
     {
         if (string.IsNullOrWhiteSpace(url)) return;
-
-        bool matches;
-        lock (_gate)
-            matches = _sourceUrl != null && string.Equals(_sourceUrl, url, StringComparison.OrdinalIgnoreCase);
-
-        if (matches) Stop();
-    }
-
-    /// <summary>
-    /// Restarts the pipeline <paramref name="seconds"/> into the track; the
-    /// only way to move a playhead that lives in a stream.
-    /// </summary>
-    public void Seek(double seconds)
-    {
-        string url;
-        string? title;
-        CancellationToken token;
-
         lock (_gate)
         {
-            if (_disposed || _sourceUrl == null) return;
+            if (!string.Equals(_sourceUrl, url, StringComparison.OrdinalIgnoreCase)) return;
+        }
 
-            url = _sourceUrl;
-            title = _title;
-            _generation++;
-            _startCts?.Cancel();
-            _startCts?.Dispose();
-            _startCts = new CancellationTokenSource();
-            token = _startCts.Token;
+        Stop();
+    }
 
-            _seekSeconds = Math.Max(0, (int)Math.Floor(seconds));
-            _elapsedBeforeRun = 0;
-            _runStartTicks = Stopwatch.GetTimestamp();
-            _paused = false;
-            _pausedAtSeconds = 0;
-            _status = $"Jumping to {FormatClock(_seekSeconds)}\u2026";
+    /// <summary>Moves the decoder; clamps to the reported length.</summary>
+    public void Seek(double seconds)
+    {
+        lock (_gate)
+        {
+            if (_disposed || _media == null) return;
+        }
 
-            StopCore();
+        try
+        {
+            var length = _player.Length;
+            var target = Math.Max(0, seconds);
+            if (length > 0) target = Math.Min(target, length / 1000.0 - 0.25);
+            _player.Time = (long)(target * 1000);
+        }
+        catch (Exception ex)
+        {
+            Log.Debug($"Preview seek failed: {ex.Message}");
         }
 
         RaiseStateChanged();
-        RaiseStatus();
-        _ = StartAsync(url, _seekSeconds, token);
-        StartKeepAlive();
     }
 
-    /// <summary>
-    /// Play/pause. Pausing withholds the pipe (see <see cref="PumpAsync"/>), so
-    /// ffplay falls silent within its own small buffer and resumes exactly
-    /// where it stopped instead of the stream restarting.
-    /// </summary>
     public void SetPlaying(bool playing)
     {
+        string? retryUrl;
+        string? retryTitle;
         lock (_gate)
         {
-            if (_sourceUrl == null) return;
-            if (playing == !_paused) return;
+            if (_disposed || _sourceUrl == null || _player == null) return;
 
-            if (playing)
+            retryUrl = _sourceUrl;
+            retryTitle = _title;
+
+            // Nothing loaded yet: play means "try again" (a resolve may still be
+            // running, in which case its own Playing event takes over).
+            if (_media == null)
             {
-                _runStartTicks = Stopwatch.GetTimestamp();
-                _elapsedBeforeRun = _pausedAtSeconds;
-                _paused = false;
+                if (_loading && _error == null) return;
             }
             else
             {
-                _pausedAtSeconds = PositionSeconds;
-                _paused = true;
+                retryUrl = null;
             }
+        }
+
+        if (_media == null)
+        {
+            Play(retryUrl!, retryTitle);
+            return;
+        }
+
+        try
+        {
+            if (playing)
+            {
+                if (_player.State == VLCState.Ended)
+                {
+                    _player.Stop();
+                    var media = _media;
+                    if (media != null) _player.Play(media);
+                }
+                else if (!_player.IsPlaying)
+                {
+                    _player.Play();
+                }
+            }
+            else if (_player.IsPlaying)
+            {
+                _player.Pause();
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Debug($"Preview play/pause failed: {ex.Message}");
+        }
+
+        RaiseStateChanged();
+    }
+
+    public void SetVolume(double level)
+    {
+        var value = (int)Math.Round(Math.Clamp(level, 0, 1) * 100);
+        lock (_gate)
+        {
+            if (_disposed) return;
+            _volume = value;
+        }
+
+        try
+        {
+            _player.Volume = value;
+        }
+        catch (Exception ex)
+        {
+            Log.Debug($"Preview volume failed: {ex.Message}");
+        }
+
+        RaiseStateChanged();
+    }
+
+    public void SetMuted(bool muted)
+    {
+        lock (_gate)
+        {
+            if (_disposed) return;
+            _muted = muted;
+        }
+
+        try
+        {
+            _player.Mute = muted;
+        }
+        catch (Exception ex)
+        {
+            Log.Debug($"Preview mute failed: {ex.Message}");
         }
 
         RaiseStateChanged();
@@ -288,353 +393,372 @@ public sealed class PreviewStreamPlayer : IDisposable
         {
             if (_disposed) return;
             _disposed = true;
+            CancelRun();
+            ClearSource();
         }
 
-        Stop();
-        StopKeepAlive();
+        EndPlayback();
+        _player?.Dispose();
     }
 
-    // ---- pipeline -------------------------------------------------------
+    // ---- resolve / play --------------------------------------------------
 
-    private async Task StartAsync(string url, int seekSeconds, CancellationToken token)
+    private async Task RunAsync(string url, CancellationToken token)
     {
         try
         {
-            var ytDlp = ResolveYtDlp();
-            var ffplay = ResolveFfplay();
+            var direct = await ResolveDirectUrlAsync(url, token).ConfigureAwait(false);
+            if (token.IsCancellationRequested) return;
 
-            if (ytDlp == null || ffplay == null)
+            if (direct != null)
             {
-                var reason = ffplay == null
-                    ? "Install ffmpeg (ffplay) to stream previews"
-                    : "yt-dlp is not installed, so previews cannot be streamed";
-
-                Log.Warn($"Preview stream unavailable: {reason}");
-                Fail(reason, token);
+                StartMedia(direct, "stream", token);
                 return;
             }
 
-            token.ThrowIfCancellationRequested();
+            if (!IsAvailable) return;
 
-            var ffplayArgs = new List<string>
-            {
-                "-nodisp",
-                "-autoexit",
-                "-loglevel", "quiet",
-                // Small buffer: the seek offset is honoured almost immediately
-                // and a hiccup does not gape for a second.
-                "-fflags", "nobuffer",
-                "-probesize", "32768",
-                "-analyzeduration", "0",
-            };
+            SetStatus("Direct stream refused \u2014 downloading preview\u2026");
+            var file = await DownloadToTempAsync(url, token).ConfigureAwait(false);
+            if (token.IsCancellationRequested) return;
+            if (file == null) return;
 
-            var ytDlpArgs = new List<string>
+            StartMedia(file, "download", token);
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"Preview failed: {ex}");
+            Fail($"Preview failed: {ex.Message}");
+        }
+    }
+
+    /// <summary>Asks yt-dlp for the direct audio URL; null means "use the fallback".</summary>
+    private async Task<string?> ResolveDirectUrlAsync(string url, CancellationToken token)
+    {
+        var ytDlp = ResolveYtDlp();
+        if (ytDlp == null)
+        {
+            Fail("yt-dlp is not installed, so previews cannot be streamed");
+            return null;
+        }
+
+        var result = await RunYtDlpAsync(
+            ytDlp,
+            new[]
             {
+                "-g",
                 "-f", "bestaudio/best",
                 "--no-playlist",
                 "--no-warnings",
-                "-o", "-",
-            };
+                url,
+            },
+            onStdoutLine: null,
+            token).ConfigureAwait(false);
 
-            if (seekSeconds > 0)
-            {
-                // Two-pronged seek: yt-dlp starts the section at the offset and
-                // ffplay drops anything the source still sends before it
-                // (not every extractor honours --download-sections).
-                ytDlpArgs.Add("--download-sections");
-                ytDlpArgs.Add($"*{FormatSection(seekSeconds)}-");
-                ffplayArgs.Add("-ss");
-                ffplayArgs.Add(seekSeconds.ToString(CultureInfo.InvariantCulture));
-            }
-
-            ffplayArgs.Add("-i");
-            ffplayArgs.Add("pipe:0");
-
-            AppendCookieArgs(ytDlpArgs);
-            ytDlpArgs.Add(url);
-
-            var ytInfo = new ProcessStartInfo(ytDlp)
-            {
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                WorkingDirectory = ToolBootstrap.ToolsDir,
-            };
-            foreach (var argument in ytDlpArgs) ytInfo.ArgumentList.Add(argument);
-
-            // ffplay reads the pipe on stdin; its stdout/stderr are drained too
-            // because 'quiet' still emits a few lines on failure.
-            var ffInfo = new ProcessStartInfo(ffplay)
-            {
-                RedirectStandardInput = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                WorkingDirectory = Path.GetDirectoryName(ffplay) ?? ToolBootstrap.ToolsDir,
-            };
-            foreach (var argument in ffplayArgs) ffInfo.ArgumentList.Add(argument);
-
-            Process ytProcess;
-            Process ffProcess;
-
-            lock (_gate)
-            {
-                if (token.IsCancellationRequested || !IsCurrentStart(token)) return;
-
-                ytProcess = Process.Start(ytInfo)
-                    ?? throw new InvalidOperationException("yt-dlp could not be started");
-
-                try
-                {
-                    ffProcess = Process.Start(ffInfo)
-                        ?? throw new InvalidOperationException("ffplay could not be started");
-                }
-                catch
-                {
-                    KillTree(ytProcess);
-                    throw;
-                }
-
-                _ytDlp = ytProcess;
-                _ffplay = ffProcess;
-                _runStartTicks = Stopwatch.GetTimestamp();
-            }
-
-            Log.Info($"Preview stream started{(seekSeconds > 0 ? $" from {FormatClock(seekSeconds)}" : "")}");
-            Log.Debug($"Preview pipeline: {Path.GetFileName(ytDlp)} {'\u2192'} {Path.GetFileName(ffplay)}");
-
-            var pump = PumpAsync(
-                ytProcess.StandardOutput.BaseStream,
-                ffProcess.StandardInput.BaseStream,
-                () => IsPaused,
-                token);
-
-            // The pump IS yt-dlp's stdout drain - a second reader there would
-            // steal bytes from the pipe and corrupt the audio.
-            _ = DrainAsync(ytProcess.StandardError, "yt-dlp");
-            _ = DrainAsync(ffProcess.StandardOutput, "ffplay");
-            _ = DrainAsync(ffProcess.StandardError, "ffplay");
-
-            _ = WatchAsync(ytProcess, ffProcess, token);
-
-            if (seekSeconds > 0) _ = ProbeSectionAsync(url, token);
-
-            var first = await Task.WhenAny(pump, Task.Delay(StartDelayMs, token)).ConfigureAwait(false);
-            token.ThrowIfCancellationRequested();
-
-            if (ReferenceEquals(first, pump) && pump.IsFaulted)
-                throw pump.Exception!.GetBaseException();
-
-            lock (_gate)
-            {
-                if (token.IsCancellationRequested || _sourceUrl == null) return;
-                if (_status == null || _status.StartsWith("Buffering", StringComparison.Ordinal))
-                    _status = null;
-            }
-
-            RaiseStateChanged();
-            RaiseStatus();
-        }
-        catch (OperationCanceledException)
+        if (!result.Started)
         {
-            // A newer Play/Stop/Seek owns the pipeline and already cleaned up.
+            Fail("yt-dlp could not be started");
+            return null;
+        }
+
+        if (result.Cancelled) return null;
+
+        if (result.ExitCode != 0 || string.IsNullOrWhiteSpace(result.Stdout))
+        {
+            Log.Warn($"Preview resolve failed: yt-dlp exit {result.ExitCode}. {Tail(result.Stderr)}");
+            return null;
+        }
+
+        // -g prints one URL per format; the audio one carries mime=audio.
+        var lines = result.Stdout
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(line => line.Trim())
+            .Where(line => line.Length > 0)
+            .ToList();
+
+        var audio = lines.LastOrDefault(line =>
+                        line.Contains("mime=audio", StringComparison.OrdinalIgnoreCase))
+                    ?? lines.LastOrDefault(line => line.StartsWith("http", StringComparison.OrdinalIgnoreCase));
+
+        if (audio == null)
+        {
+            Log.Warn($"Preview resolve returned no URL. {Tail(result.Stdout)}");
+            return null;
+        }
+
+        Log.Info($"Preview resolved {(_title ?? url)} to a direct stream");
+        return audio;
+    }
+
+    private void StartMedia(string target, string mode, CancellationToken token)
+    {
+        if (!Uri.TryCreate(target, UriKind.Absolute, out var uri))
+        {
+            Fail("Preview source is not a playable URL");
+            return;
+        }
+
+        Media media;
+        try
+        {
+            media = new Media(_engine!, uri);
+            media.AddOption(":no-video");
+            if (mode == "stream")
+            {
+                // Range-backed URL: let libVLC reconnect and buffer a little.
+                media.AddOption(":network-caching=1500");
+                media.AddOption(":http-reconnect");
+            }
+            else
+            {
+                media.AddOption(":file-caching=1000");
+            }
         }
         catch (Exception ex)
         {
-            Log.Error("Preview stream failed to start", ex);
-            Fail(ex.Message, token);
+            Fail($"libVLC rejected the preview: {ex.Message}");
+            return;
         }
-    }
 
-    /// <summary>
-    /// yt-dlp's stdout straight into ffplay's stdin, 32 KB at a time: nothing
-    /// is retained in memory beyond that buffer and nothing touches the disk.
-    /// While paused the write side simply waits, so the pipe backs up into
-    /// yt-dlp's buffer and ffplay stops consuming.
-    /// </summary>
-    private static async Task PumpAsync(
-        Stream from, Stream to, Func<bool> isPaused, CancellationToken token)
-    {
-        var buffer = new byte[PumpBufferSize];
-        try
+        Media? previous;
+        lock (_gate)
         {
-            while (!token.IsCancellationRequested)
+            if (token.IsCancellationRequested || _disposed)
             {
-                var read = await from.ReadAsync(buffer, token).ConfigureAwait(false);
-                if (read <= 0) break;
-
-                while (isPaused() && !token.IsCancellationRequested)
-                    await Task.Delay(80, token).ConfigureAwait(false);
-
-                await to.WriteAsync(buffer.AsMemory(0, read), token).ConfigureAwait(false);
-                await to.FlushAsync(token).ConfigureAwait(false);
-            }
-        }
-        catch (Exception ex) when (ex is IOException or ObjectDisposedException or OperationCanceledException)
-        {
-            // Either end closing mid-track (stop, switch, source hiccup) is normal.
-        }
-    }
-
-    /// <summary>Background line reader so a full pipe can never wedge either process.</summary>
-    private static async Task DrainAsync(StreamReader reader, string tool)
-    {
-        try
-        {
-            while (await reader.ReadLineAsync().ConfigureAwait(false) is { } line)
-            {
-                if (line.Length > 0) Log.Debug($"{tool}: {line}");
-            }
-        }
-        catch (Exception ex) when (ex is IOException or ObjectDisposedException or InvalidOperationException)
-        {
-        }
-    }
-
-    /// <summary>Notices the pipeline dying and drops the play state exactly once.</summary>
-    private async Task WatchAsync(Process ytProcess, Process ffProcess, CancellationToken token)
-    {
-        try
-        {
-            var exited = await Task.WhenAny(
-                ytProcess.WaitForExitAsync(token),
-                ffProcess.WaitForExitAsync(token)).ConfigureAwait(false);
-
-            if (exited.IsCanceled || token.IsCancellationRequested) return;
-
-            var ytCode = SafeExitCode(ytProcess);
-            var ffCode = SafeExitCode(ffProcess);
-
-            lock (_gate)
-            {
-                // A seek or switch already moved on: this pipeline is history.
-                if (token.IsCancellationRequested || !ReferenceEquals(_ytDlp, ytProcess)) return;
-
-                Log.Debug($"Preview stream ended: yt-dlp={Describe(ytCode)}, ffplay={Describe(ffCode)}");
-
-                StopCore();
-                _sourceUrl = null;
-                _title = null;
-                _seekSeconds = 0;
-                _paused = false;
-                _pausedAtSeconds = 0;
-                _elapsedBeforeRun = 0;
+                media.Dispose();
+                return;
             }
 
-            StopKeepAlive();
-            RaiseStateChanged();
-            RaiseStatus();
+            previous = _media;
+            _media = media;
+            _mode = mode;
+            _status = mode == "stream" ? "Buffering\u2026" : null;
+            _error = null;
+            _loading = mode == "stream";
+            _tempFile = mode == "download" ? target : null;
         }
-        catch (OperationCanceledException)
+
+        previous?.Dispose();
+
+        bool started;
+        try
         {
+            started = _player.Play(media);
         }
         catch (Exception ex)
         {
-            Log.Debug($"Preview stream watcher stopped: {ex.Message}");
+            Fail($"libVLC could not start playback: {ex.Message}");
+            return;
         }
+
+        if (!started)
+        {
+            Fail("libVLC could not start playback");
+            return;
+        }
+
+        RaiseStateChanged();
+        RaiseStatus();
     }
 
+    // ---- download fallback ----------------------------------------------
+
     /// <summary>
-    /// Confirms that this source accepts <c>--download-sections</c>; when it
-    /// does not, the seek silently restarts the pair from the top and the
-    /// status line says so instead of pretending the jump worked.
+    /// Downloads the audio to a temp file with yt-dlp, reporting the percentage.
+    /// Reached only when <c>-g</c> refuses to hand out a URL.
     /// </summary>
-    private async Task ProbeSectionAsync(string url, CancellationToken token)
+    private async Task<string?> DownloadToTempAsync(string url, CancellationToken token)
     {
         var ytDlp = ResolveYtDlp();
-        if (ytDlp == null) return;
+        if (ytDlp == null) return null;
 
+        var directory = Path.Combine(Path.GetTempPath(), "JockeyBox");
+        try
+        {
+            Directory.CreateDirectory(directory);
+        }
+        catch (Exception ex)
+        {
+            Fail($"Preview temp folder is not writable: {ex.Message}");
+            return null;
+        }
+
+        var stem = "preview-" + Guid.NewGuid().ToString("N");
+
+        var result = await RunYtDlpAsync(
+            ytDlp,
+            new[]
+            {
+                "--no-playlist",
+                "--no-warnings",
+                "--newline",
+                "-f", "bestaudio/best",
+                "-o", Path.Combine(directory, stem + ".%(ext)s"),
+                url,
+            },
+            onStdoutLine: line =>
+            {
+                var match = PercentPattern.Match(line);
+                if (!match.Success) return;
+                if (!double.TryParse(match.Groups[1].Value, NumberStyles.Float, CultureInfo.InvariantCulture, out var pct))
+                    return;
+
+                SetStatus($"Downloading preview {pct.ToString("0", CultureInfo.InvariantCulture)}%\u2026");
+            },
+            token).ConfigureAwait(false);
+
+        if (result.Cancelled || token.IsCancellationRequested) return null;
+
+        if (!result.Started || result.ExitCode != 0)
+        {
+            Log.Warn($"Preview download fallback failed: exit {result.ExitCode}. {Tail(result.Stderr)}");
+            Fail($"Preview failed: yt-dlp exit {result.ExitCode} \u2014 {Tail(result.Stderr)}");
+            return null;
+        }
+
+        string? file = null;
+        try
+        {
+            file = Directory.EnumerateFiles(directory, stem + ".*")
+                .FirstOrDefault(path => !path.EndsWith(".part", StringComparison.OrdinalIgnoreCase));
+        }
+        catch (Exception ex)
+        {
+            Log.Debug($"Preview temp scan failed: {ex.Message}");
+        }
+
+        if (file == null)
+        {
+            Fail("Preview failed: the download produced no file");
+            return null;
+        }
+
+        Log.Info($"Preview fallback downloaded to {Path.GetFileName(file)}");
+        return file;
+    }
+
+    // ---- process plumbing ------------------------------------------------
+
+    private sealed record ProcessResult(bool Started, bool Cancelled, int ExitCode, string Stdout, string Stderr);
+
+    private async Task<ProcessResult> RunYtDlpAsync(
+        string ytDlp,
+        IEnumerable<string> args,
+        Action<string>? onStdoutLine,
+        CancellationToken token)
+    {
         var info = new ProcessStartInfo(ytDlp)
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true,
+            WorkingDirectory = ToolBootstrap.ToolsDir,
         };
-        foreach (var argument in new[]
-                 {
-                     "--no-playlist", "--no-warnings", "--simulate",
-                     "--download-sections", "*0:00:01-", "--print", "%(id)s", url,
-                 })
-        {
-            info.ArgumentList.Add(argument);
-        }
+        foreach (var argument in args) info.ArgumentList.Add(argument);
+        AppendCookieArgs(info);
 
+        using var process = new Process { StartInfo = info };
         try
         {
-            using var probe = Process.Start(info);
-            if (probe == null) return;
-
-            var stdout = probe.StandardOutput.ReadToEndAsync(token);
-            var stderr = probe.StandardError.ReadToEndAsync(token);
-            await probe.WaitForExitAsync(token).ConfigureAwait(false);
-
-            var error = (await stderr.ConfigureAwait(false)).Trim();
-            await stdout.ConfigureAwait(false);
-
-            if (probe.ExitCode == 0 || token.IsCancellationRequested) return;
-
-            Log.Debug($"Preview section probe exit {probe.ExitCode}: {Truncate(error, 300)}");
-
-            lock (_gate)
-            {
-                if (token.IsCancellationRequested) return;
-
-                _status = error.Contains("section", StringComparison.OrdinalIgnoreCase) ||
-                          error.Contains("not supported", StringComparison.OrdinalIgnoreCase)
-                    ? "This source refuses seeking \u2014 restarted from the top"
-                    : "This source cannot be seeked \u2014 playing from the top";
-            }
-
-            RaiseStatus();
-        }
-        catch (OperationCanceledException)
-        {
+            if (!process.Start()) return new ProcessResult(false, false, -1, "", "process did not start");
         }
         catch (Exception ex)
         {
-            Log.Debug($"Preview section probe failed: {ex.Message}");
+            Log.Warn($"Preview yt-dlp start failed: {ex.Message}");
+            return new ProcessResult(false, false, -1, "", ex.Message);
         }
-    }
 
-    // ---- process plumbing ----------------------------------------------
+        lock (_gate)
+        {
+            if (token.IsCancellationRequested)
+            {
+                Kill(process);
+                return new ProcessResult(true, true, -1, "", "");
+            }
 
-    /// <summary>Kills the pipeline. The caller holds <see cref="_gate"/>.</summary>
-    /// <summary>
-    /// True when <paramref name="token"/> still belongs to the newest start
-    /// request. CancellationToken is a struct, so compare the values (a stale
-    /// token from a replaced pipeline must not be mistaken for the live one).
-    /// </summary>
-    private bool IsCurrentStart(CancellationToken token) =>
-        _startCts is { } current && current.Token.Equals(token);
+            _ytDlp = process;
+        }
 
-    private void StopCore()
-    {
-        var ytDlp = _ytDlp;
-        var ffplay = _ffplay;
-        _ytDlp = null;
-        _ffplay = null;
-
-        if (ytDlp != null || ffplay != null) Log.Debug("Preview stream stopping");
-
-        // ffplay first: it holds the read end, so its exit makes yt-dlp's next
-        // write fail at once instead of waiting for another network segment.
-        KillTree(ffplay);
-        KillTree(ytDlp);
-    }
-
-    private static void KillTree(Process? process)
-    {
-        if (process == null) return;
+        var stderrTask = process.StandardError.ReadToEndAsync(CancellationToken.None);
+        var stdout = new StringBuilder();
+        var cancelled = false;
 
         try
         {
-            if (!process.HasExited) process.Kill(entireProcessTree: true);
+            string? line;
+            while ((line = await process.StandardOutput.ReadLineAsync(token).ConfigureAwait(false)) != null)
+            {
+                stdout.AppendLine(line);
+                onStdoutLine?.Invoke(line);
+            }
 
-            // Reap it: without the wait the object keeps a handle and the child
-            // can linger as a zombie while the app is busy.
+            await process.WaitForExitAsync(token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            cancelled = true;
+        }
+        catch (Exception ex)
+        {
+            Log.Debug($"Preview yt-dlp read failed: {ex.Message}");
+        }
+
+        var stderr = "";
+        try
+        {
+            stderr = await stderrTask.ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Log.Debug($"Preview yt-dlp stderr read failed: {ex.Message}");
+        }
+
+        if (cancelled || token.IsCancellationRequested)
+        {
+            Kill(process);
+            cancelled = true;
+        }
+
+        lock (_gate)
+        {
+            if (ReferenceEquals(_ytDlp, process)) _ytDlp = null;
+        }
+
+        var code = cancelled ? -1 : SafeExitCode(process);
+        return new ProcessResult(true, cancelled, code, stdout.ToString(), stderr);
+    }
+
+    private void AppendCookieArgs(ProcessStartInfo info)
+    {
+        var browser = Settings.DownloadCookiesBrowser?.Trim().ToLowerInvariant();
+        if (browser is "chrome" or "edge" or "firefox")
+        {
+            info.ArgumentList.Add("--cookies-from-browser");
+            info.ArgumentList.Add(browser);
+        }
+    }
+
+    private static int SafeExitCode(Process process)
+    {
+        try
+        {
+            return process.HasExited ? process.ExitCode : -1;
+        }
+        catch (Exception)
+        {
+            return -1;
+        }
+    }
+
+    private static void Kill(Process process)
+    {
+        try
+        {
+            if (!process.HasExited) process.Kill(entireProcessTree: true);
             process.WaitForExit(KillWaitMs);
         }
         catch (InvalidOperationException)
@@ -645,34 +769,207 @@ public sealed class PreviewStreamPlayer : IDisposable
         {
             Log.Debug($"Preview process cleanup: {ex.Message}");
         }
-        finally
+    }
+
+    // ---- state -----------------------------------------------------------
+
+    /// <summary>Cancels the resolve in flight; caller holds the gate.</summary>
+    private void CancelRun()
+    {
+        _generation++;
+        _runCts?.Cancel();
+        _runCts?.Dispose();
+        _runCts = null;
+    }
+
+    /// <summary>Forgets the current source; caller holds the gate.</summary>
+    private void ClearSource()
+    {
+        _sourceUrl = null;
+        _title = null;
+        _status = null;
+        _error = null;
+        _mode = null;
+        _loading = false;
+        _paused = false;
+    }
+
+    /// <summary>Kills the process and frees the player without touching the source fields.</summary>
+    private void EndPlayback()
+    {
+        Process? process;
+        Media? media;
+        string? temp;
+        lock (_gate)
         {
-            process.Dispose();
+            process = _ytDlp;
+            _ytDlp = null;
+            media = _media;
+            _media = null;
+            temp = _tempFile;
+            _tempFile = null;
+            _loading = false;
+            _paused = false;
+        }
+
+        if (process != null) Kill(process);
+
+        try
+        {
+            if (_player != null) _player.Stop();
+        }
+        catch (Exception ex)
+        {
+            Log.Debug($"Preview stop failed: {ex.Message}");
+        }
+
+        media?.Dispose();
+
+        if (temp != null)
+        {
+            try
+            {
+                File.Delete(temp);
+            }
+            catch (Exception ex)
+            {
+                Log.Debug($"Preview temp delete failed: {ex.Message}");
+            }
         }
     }
 
-    private void Fail(string message, CancellationToken token)
+    private void Fail(string message)
     {
         lock (_gate)
         {
-            if (token.IsCancellationRequested) return;
-
-            StopCore();
-            _sourceUrl = null;
-            _title = null;
-            _seekSeconds = 0;
+            if (_disposed) return;
+            _error = message;
+            _status = null;
+            _loading = false;
             _paused = false;
-            _pausedAtSeconds = 0;
-            _elapsedBeforeRun = 0;
+        }
+
+        Log.Warn($"Preview: {message}");
+        EndPlayback();
+        RaiseStateChanged();
+        RaiseStatus(message);
+    }
+
+    private void SetStatus(string message)
+    {
+        lock (_gate)
+        {
+            if (_disposed) return;
             _status = message;
         }
 
-        StopKeepAlive();
         RaiseStateChanged();
         RaiseStatus();
     }
 
-    // ---- tools ----------------------------------------------------------
+    // ---- libVLC ----------------------------------------------------------
+
+    private static LibVLC? EnsureEngine()
+    {
+        lock (VlcGate)
+        {
+            if (_vlc != null || _vlcError != null) return _vlc;
+
+            try
+            {
+                Core.Initialize();
+                _vlc = new LibVLC(
+                    "--no-video",
+                    "--no-snapshot-preview",
+                    "--intf", "dummy",
+                    "--quiet");
+            }
+            catch (Exception ex)
+            {
+                _vlcError = $"libVLC failed to load: {ex.Message}";
+                Log.Warn(_vlcError);
+            }
+
+            return _vlc;
+        }
+    }
+
+    private void WireEvents()
+    {
+        _player.TimeChanged += (_, _) => RaiseStateChanged();
+        _player.LengthChanged += (_, _) => RaiseStateChanged();
+
+        _player.Playing += (_, _) =>
+        {
+            lock (_gate)
+            {
+                _loading = false;
+                _status = null;
+                _error = null;
+                _paused = false;
+            }
+
+            RaiseStateChanged();
+            RaiseStatusCleared();
+        };
+
+        _player.Paused += (_, _) =>
+        {
+            lock (_gate) _paused = true;
+            RaiseStateChanged();
+        };
+
+        _player.Buffering += (_, e) =>
+        {
+            lock (_gate)
+            {
+                if (_media == null) return;
+                _status = $"Buffering {Math.Clamp(e.Cache, 0, 100)}%\u2026";
+            }
+
+            RaiseStateChanged();
+        };
+
+        _player.EncounteredError += (_, _) => Fail("Preview playback failed \u2014 the stream was refused or interrupted");
+
+        _player.EndReached += (_, _) =>
+        {
+            lock (_gate)
+            {
+                if (_media == null) return;
+                _paused = true;
+            }
+
+            RaiseStateChanged();
+        };
+    }
+
+    private void RaiseStateChanged() => Post(() => StateChanged?.Invoke(this, EventArgs.Empty));
+
+    private void RaiseStatus(string? message = null)
+    {
+        string? text;
+        lock (_gate) text = message ?? _error ?? _status;
+        if (string.IsNullOrWhiteSpace(text)) return;
+        Post(() => StatusChanged?.Invoke(this, text!));
+    }
+
+    /// <summary>Tells the tab its status line no longer applies (playback started or stopped).</summary>
+    private void RaiseStatusCleared() => Post(() => StatusChanged?.Invoke(this, ""));
+
+    private static void Post(Action action)
+    {
+        var dispatcher = Application.Current?.Dispatcher;
+        if (dispatcher == null || dispatcher.CheckAccess())
+        {
+            action();
+            return;
+        }
+
+        dispatcher.BeginInvoke(action);
+    }
+
+    // ---- tools -----------------------------------------------------------
 
     private string? ResolveYtDlp() => Resolve(
         () => ToolBootstrap.ResolveYtDlp(Settings),
@@ -681,34 +978,9 @@ public sealed class PreviewStreamPlayer : IDisposable
         "yt-dlp");
 
     /// <summary>
-    /// ffplay next to the configured ffmpeg (a full ffmpeg share build ships
-    /// it, a choco install drops it beside ffmpeg.exe), then the app-managed
-    /// tools folder, then PATH. A missing ffmpeg does not imply a missing
-    /// ffplay, so both are looked for independently.
-    /// </summary>
-    private string? ResolveFfplay() => Resolve(
-        () =>
-        {
-            var ffmpeg = ToolBootstrap.ResolveFfmpeg(Settings);
-            var directory = string.IsNullOrWhiteSpace(ffmpeg) ? null : Path.GetDirectoryName(ffmpeg);
-            if (string.IsNullOrWhiteSpace(directory)) return null;
-
-            foreach (var name in new[] { "ffplay.exe", "ffplay" })
-            {
-                var candidate = Path.Combine(directory, name);
-                if (File.Exists(candidate)) return candidate;
-            }
-
-            return null;
-        },
-        Path.Combine(ToolBootstrap.ToolsDir, "ffplay.exe"),
-        "ffplay.exe",
-        "ffplay");
-
-    /// <summary>
     /// Tries the configured location, then the app-managed copy, then PATH,
     /// remembering a miss so a machine without the tool does not re-stat the
-    /// whole PATH on every keystroke-triggered check.
+    /// whole PATH on every check.
     /// </summary>
     private string? Resolve(Func<string?> configured, string bundled, params string[] pathNames)
     {
@@ -752,138 +1024,13 @@ public sealed class PreviewStreamPlayer : IDisposable
         }
     }
 
-    private void AppendCookieArgs(List<string> arguments)
+    private static string Tail(string? text)
     {
-        var browser = Settings.DownloadCookiesBrowser?.Trim().ToLowerInvariant();
-        if (browser is "chrome" or "edge" or "firefox")
-        {
-            arguments.Add("--cookies-from-browser");
-            arguments.Add(browser);
-        }
+        if (string.IsNullOrWhiteSpace(text)) return "(no stderr)";
+
+        var trimmed = text.Trim().Replace('\r', ' ').Replace('\n', ' ');
+        return trimmed.Length <= StderrTailChars
+            ? trimmed
+            : "\u2026" + trimmed[^StderrTailChars..];
     }
-
-    // ---- notification ---------------------------------------------------
-
-    /// <summary>
-    /// A 250 ms tick keeps the strip's clock moving between transport events.
-    /// The timer only lives while something is previewed.
-    /// </summary>
-    private void StartKeepAlive()
-    {
-        var app = Application.Current;
-        if (app == null) return;
-
-        if (!app.Dispatcher.CheckAccess())
-        {
-            app.Dispatcher.BeginInvoke(new Action(StartKeepAlive));
-            return;
-        }
-
-        if (_keepAlive != null) return;
-
-        var timer = new DispatcherTimer(DispatcherPriority.Background)
-        {
-            Interval = TimeSpan.FromMilliseconds(250),
-        };
-        timer.Tick += OnKeepAliveTick;
-        _keepAlive = timer;
-        timer.Start();
-    }
-
-    private void OnKeepAliveTick(object? sender, EventArgs e)
-    {
-        bool alive;
-        lock (_gate) alive = _sourceUrl != null;
-
-        if (alive)
-        {
-            StateChanged?.Invoke(this, EventArgs.Empty);
-            return;
-        }
-
-        StopKeepAlive();
-    }
-
-    private void StopKeepAlive()
-    {
-        var timer = _keepAlive;
-        if (timer == null) return;
-
-        _keepAlive = null;
-        var app = Application.Current;
-
-        if (app != null && !app.Dispatcher.CheckAccess())
-        {
-            app.Dispatcher.BeginInvoke(new Action(() =>
-            {
-                timer.Stop();
-                timer.Tick -= OnKeepAliveTick;
-            }));
-            return;
-        }
-
-        timer.Stop();
-        timer.Tick -= OnKeepAliveTick;
-    }
-
-    private void RaiseStateChanged()
-    {
-        var app = Application.Current;
-        if (app != null && !app.Dispatcher.CheckAccess())
-        {
-            app.Dispatcher.BeginInvoke(new Action(() => StateChanged?.Invoke(this, EventArgs.Empty)));
-            return;
-        }
-
-        StateChanged?.Invoke(this, EventArgs.Empty);
-    }
-
-    private void RaiseStatus()
-    {
-        var app = Application.Current;
-        var message = Status;
-
-        if (app != null && !app.Dispatcher.CheckAccess())
-        {
-            app.Dispatcher.BeginInvoke(new Action(() => StatusChanged?.Invoke(this, message ?? "")));
-            return;
-        }
-
-        StatusChanged?.Invoke(this, message ?? "");
-    }
-
-    // ---- formatting -----------------------------------------------------
-
-    /// <summary>h:mm:ss — the shape <c>--download-sections</c> expects.</summary>
-    private static string FormatSection(int seconds)
-    {
-        var span = TimeSpan.FromSeconds(seconds);
-        return $"{(int)span.TotalHours}:{span.Minutes:00}:{span.Seconds:00}";
-    }
-
-    private static string FormatClock(int seconds)
-    {
-        var span = TimeSpan.FromSeconds(seconds);
-        return span.TotalHours >= 1
-            ? $"{(int)span.TotalHours}:{span.Minutes:00}:{span.Seconds:00}"
-            : $"{span.Minutes}:{span.Seconds:00}";
-    }
-
-    private static int? SafeExitCode(Process process)
-    {
-        try
-        {
-            return process.HasExited ? process.ExitCode : null;
-        }
-        catch (InvalidOperationException)
-        {
-            return null;
-        }
-    }
-
-    private static string Describe(int? code) =>
-        code?.ToString(CultureInfo.InvariantCulture) ?? "running";
-
-    private static string Truncate(string value, int max) =>
-        value.Length <= max ? value : value[..max] + "\u2026";
 }

@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.IO;
 using JockeyBox.Sources;
 using JockeyBox.Tools;
@@ -27,9 +27,7 @@ public sealed class StreamCache
     private readonly object _gate = new();
 
     /// <summary>%APPDATA%\JockeyBox\stream-cache - created on demand.</summary>
-    public static string DefaultDir { get; } = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-        "JockeyBox", "stream-cache");
+    public static string DefaultDir { get; } = Path.Combine(AppPaths.Home, "stream-cache");
 
     /// <summary>Create a cache capped at <paramref name="limitMb"/> megabytes.</summary>
     public StreamCache(int limitMb)

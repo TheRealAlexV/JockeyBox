@@ -14,3 +14,7 @@ deploy/.env
 .DS_Store
 Thumbs.db
 .idea/
+
+# Python cache
+__pycache__/
+*.pyc

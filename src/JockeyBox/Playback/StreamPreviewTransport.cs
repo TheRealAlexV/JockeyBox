@@ -3,18 +3,16 @@ using JockeyBox.Settings;
 namespace JockeyBox.Playback;
 
 /// <summary>
-/// The Spotify / YouTube preview strips and the streaming audition player, in
-/// one type: a <see cref="PreviewStreamPlayer"/> is what the tabs talk to, and
-/// this adapter is the <see cref="ViewModels.IPreviewTransport"/> the strips
-/// read their clock from.
+/// The Spotify / YouTube preview strips and the libVLC audition player, in one
+/// type: a <see cref="PreviewStreamPlayer"/> is what the tabs talk to, and this
+/// adapter is the <see cref="ViewModels.IPreviewTransport"/> the strips read
+/// their clock, slider and volume from.
 ///
-/// It exists separately from the deck transport because a stream has no
-/// seekable timeline: <see cref="DurationSeconds"/> stays 0 (the bar shows the
-/// elapsed clock and leaves the slider alone), and <see cref="Seek"/> means
-/// "restart the pipeline at that offset", not "move a decoder".
+/// Unlike the old pipe, the player behind this knows its length: a direct
+/// googlevideo URL is seekable, so <see cref="DurationSeconds"/> is real and
+/// <see cref="Seek"/> moves the decoder.
 ///
-/// A live stream is shared by both tabs, matching the old deck transport:
-/// starting a preview in one tab silences the other.
+/// A preview is shared by both tabs: starting one in a tab silences the other.
 /// </summary>
 public sealed class StreamPreviewTransport : ViewModels.IPreviewTransport, IDisposable
 {
@@ -31,8 +29,8 @@ public sealed class StreamPreviewTransport : ViewModels.IPreviewTransport, IDisp
 
     /// <summary>
     /// The instance the tabs are wired with. Settings come from the same store
-    /// the download pipeline uses, so an explicit yt-dlp / ffmpeg path in the
-    /// app's settings is honoured without the view models knowing about it.
+    /// the download pipeline uses, so an explicit yt-dlp path in the app's
+    /// settings is honoured without the view models knowing about it.
     ///
     /// It is one instance for the whole app even before MainViewModel wires it:
     /// a second player would mean two streams playing at once, and the preview
@@ -48,18 +46,27 @@ public sealed class StreamPreviewTransport : ViewModels.IPreviewTransport, IDisp
 
     public double PositionSeconds => _player.PositionSeconds;
 
-    /// <summary>A stream has no known length until it is downloaded: 0, not a guess.</summary>
-    public double DurationSeconds => 0;
+    /// <summary>Real length of the stream or fallback file; 0 while unknown.</summary>
+    public double DurationSeconds => _player.DurationSeconds;
 
-    public bool IsPlaying => _player.IsPlaying && !_player.IsPaused;
+    public bool IsPlaying => _player.IsPlaying;
 
     public bool IsAvailable => _player.CurrentUrl != null;
 
-    /// <summary>True when both yt-dlp and ffplay were found, i.e. streaming is possible at all.</summary>
+    /// <summary>True when yt-dlp and libVLC were found, i.e. previews can work at all.</summary>
     public bool CanStream => _player.IsAvailable;
 
-    /// <summary>Status line text for the current stream (missing tool, seek fallback, …).</summary>
+    /// <summary>Status line text: resolving, buffering, download progress or a failure.</summary>
     public string? Status => _player.Status;
+
+    /// <summary>"stream" (direct URL) or "download" (temp-file fallback).</summary>
+    public string? Mode => _player.Mode;
+
+    public bool IsLoading => _player.IsLoading;
+
+    public double Volume => _player.Volume;
+
+    public bool IsMuted => _player.IsMuted;
 
     public string UnavailableText => _player.UnavailableReason;
 
@@ -80,14 +87,13 @@ public sealed class StreamPreviewTransport : ViewModels.IPreviewTransport, IDisp
 
     public void StopIfUrl(string? url) => _player.StopIfUrl(url);
 
-    /// <summary>
-    /// Restarts the pipe at <paramref name="seconds"/>. The bar keeps the
-    /// slider disabled for streams, so this is reached programmatically or
-    /// once a length is known.
-    /// </summary>
     public void Seek(double seconds) => _player.Seek(seconds);
 
     public void SetPlaying(bool playing) => _player.SetPlaying(playing);
+
+    public void SetVolume(double level) => _player.SetVolume(level);
+
+    public void SetMuted(bool muted) => _player.SetMuted(muted);
 
     public void Dispose() => _player.Dispose();
 }

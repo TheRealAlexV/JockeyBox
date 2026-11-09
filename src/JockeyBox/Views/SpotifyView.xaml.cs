@@ -1,9 +1,12 @@
 using System.Globalization;
+using System.Linq;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
 using System.Windows.Data;
 using System.Windows.Input;
 using System.Windows.Media;
+using JockeyBox.Tools;
 using JockeyBox.ViewModels;
 
 namespace JockeyBox.Views;
@@ -50,6 +53,62 @@ public partial class SpotifyView : UserControl
     {
         var item = FindAncestor<ListViewItem>(e.OriginalSource as DependencyObject);
         if (item != null) item.IsSelected = true;
+    }
+
+    /// <summary>
+    /// The shared row menu needs a capability object, and the shared filter strip
+    /// needs a TrackListView. Both are built here because they hold this tab's own
+    /// commands, which the XAML cannot reach from inside a context menu or a
+    /// DataTemplate.
+    /// </summary>
+    private TrackMenuCapabilities? _caps;
+
+    private void OnViewDataContextChanged(object sender, DependencyPropertyChangedEventArgs e) => BuildSharedUi();
+
+    private void BuildSharedUi()
+    {
+        if (DataContext is not SpotifyViewModel vm) return;
+
+        var caps = new TrackMenuCapabilities
+        {
+            Play = vm.PlaySelectedCommand,
+            Preview = vm.PreviewTrackCommand,
+            Download = vm.DownloadSelectedCommand,
+            MakeKaraoke = vm.SeparateSelectedKaraokeCommand,
+            ShowInExplorer = vm.RevealSelectedFileCommand,
+            FindOnYouTube = vm.OpenSelectedOnYouTubeCommand,
+        };
+
+        _caps = caps;
+        TrackList.Tag = caps;
+        FilterHost.Content = new TrackListView(
+            "Filter the track list by title, artist or album",
+            text => vm.FilterText = text,
+            (field, descending) => vm.ApplySort(field, descending));
+
+        // "Add to Playlist" is a submenu of the user's own playlists, refreshed on
+        // every open so a playlist created a second ago is already there.
+        if (TrackList.ContextMenu is { } menu) menu.Opened += (_, _) => RefreshPlaylistTargets(vm, caps);
+        RefreshPlaylistTargets(vm, caps);
+    }
+
+    private static void RefreshPlaylistTargets(SpotifyViewModel vm, TrackMenuCapabilities caps)
+    {
+        if (vm.LibraryPlaylists is not { } targets) return;
+
+        targets.Refresh();
+        caps.PlaylistTargets.Clear();
+        foreach (var choice in targets.Choices)
+        {
+            var target = choice;
+            caps.PlaylistTargets.Add(new PlaylistTargetItem(
+                target.Header,
+                new CommunityToolkit.Mvvm.Input.RelayCommand(() =>
+                    vm.AddToInternalPlaylistCommand.Execute(target))));
+        }
+
+        caps.NotifyStructureChanged();
+        Log.Debug($"remote row menu: 'Add to Playlist' filled with {targets.Choices.Count} row(s)");
     }
 
     private static T? FindAncestor<T>(DependencyObject? node) where T : DependencyObject

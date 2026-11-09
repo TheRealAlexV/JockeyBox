@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Text.Json;
 using JockeyBox.Tools;
 
@@ -64,16 +64,62 @@ public sealed class YouTubePlaylistCache
         public int Version { get; set; } = SchemaVersion;
         public CachedList? List { get; set; }
         public List<CachedItems> Items { get; set; } = new();
+
+        /// <summary>
+        /// Playlist ids the user removed from the rail here. <c>mine=true</c> keeps
+        /// returning them, so the removal only sticks if it is remembered.
+        /// </summary>
+        public List<string> Hidden { get; set; } = new();
     }
 
     private readonly object _lock = new();
     private CachedList? _list;
     private readonly Dictionary<string, CachedItems> _items = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _hidden = new(StringComparer.Ordinal);
+
+    /// <summary>True when the user removed this playlist from the rail.</summary>
+    public bool IsHidden(string id)
+    {
+        lock (_lock) return _hidden.Contains(id);
+    }
+
+    /// <summary>Remember a removal, so a later <c>mine=true</c> cannot bring it back.</summary>
+    public void Hide(string id)
+    {
+        if (string.IsNullOrWhiteSpace(id)) return;
+        lock (_lock) _hidden.Add(id);
+        Save();
+    }
+
+    /// <summary>
+    /// Undo a removal: the id is back in the rail on the next list refresh. Called
+    /// by the YouTube tab's "removed playlists" affordance and by
+    /// <see cref="UnhideAll"/>.
+    /// </summary>
+    public void Unhide(string id)
+    {
+        lock (_lock) _hidden.Remove(id);
+        Save();
+    }
+
+    /// <summary>
+    /// Every id the user removed from the rail, so a caller can offer them back.
+    /// A copy: the set is mutated under <see cref="_lock"/>.
+    /// </summary>
+    public IReadOnlyCollection<string> HiddenIds
+    {
+        get { lock (_lock) return _hidden.ToArray(); }
+    }
+
+    /// <summary>Undo every removal (the tab's "show all removed" affordance).</summary>
+    public void UnhideAll()
+    {
+        lock (_lock) _hidden.Clear();
+        Save();
+    }
 
     /// <summary>%APPDATA%\JockeyBox\youtube-playlists-cache.json</summary>
-    public static string FilePath => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-        "JockeyBox", "youtube-playlists-cache.json");
+    public static string FilePath => Path.Combine(AppPaths.Home, "youtube-playlists-cache.json");
 
     /// <summary>The cached list, or null before the first successful fetch.</summary>
     public CachedList? List
@@ -211,6 +257,9 @@ public sealed class YouTubePlaylistCache
         {
             _list = null;
             _items.Clear();
+            // Removals belong to the account that made them: without this a
+            // reconnect could never bring the playlists back.
+            _hidden.Clear();
         }
         Save();
     }
@@ -233,6 +282,7 @@ public sealed class YouTubePlaylistCache
                         .OrderByDescending(i => i.FetchedUtc)
                         .Take(MaxPersistedItemLists)
                         .ToList(),
+                    Hidden = _hidden.ToList(),
                 };
             }
 
@@ -273,11 +323,16 @@ public sealed class YouTubePlaylistCache
                     if (string.IsNullOrWhiteSpace(entry.PlaylistId)) continue;
                     cache._items[entry.PlaylistId] = entry;
                 }
+                foreach (var id in doc.Hidden ?? new List<string>())
+                {
+                    if (!string.IsNullOrWhiteSpace(id)) cache._hidden.Add(id);
+                }
             }
 
             Log.Debug($"YouTube: loaded cached playlist list " +
                       $"({cache._list?.Playlists.Count ?? 0} playlist(s), " +
-                      $"{cache._items.Count} item list(s), fetched {cache._list?.FetchedUtc:u}).");
+                      $"{cache._items.Count} item list(s), {cache._hidden.Count} hidden, " +
+                      $"fetched {cache._list?.FetchedUtc:u}).");
         }
         catch (Exception ex)
         {

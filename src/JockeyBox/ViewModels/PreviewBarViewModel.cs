@@ -36,6 +36,32 @@ public interface IPreviewTransport
     void Seek(double seconds);
 
     void SetPlaying(bool playing);
+
+    // ---- preview-only extras -------------------------------------------
+    // Defaults keep the main-deck transport (DeckPreviewTransport) working
+    // unchanged; the streaming transport overrides all of them.
+
+    /// <summary>Output level, 0..1.</summary>
+    double Volume => 1;
+
+    bool IsMuted => false;
+
+    /// <summary>True between the click and the first audio frame.</summary>
+    bool IsLoading => false;
+
+    /// <summary>Short line the strip shows while loading or after a failure.</summary>
+    string? Status => null;
+
+    /// <summary>"stream" or "download" when a temp-file fallback is in use.</summary>
+    string? Mode => null;
+
+    void SetVolume(double level)
+    {
+    }
+
+    void SetMuted(bool muted)
+    {
+    }
 }
 
 /// <summary>Stand-in used until the integration lane wires the real transport.</summary>
@@ -96,6 +122,27 @@ public sealed partial class PreviewBarViewModel : ObservableObject
     [ObservableProperty]
     private bool _isAvailable;
 
+    /// <summary>Volume slider position, 0..100 (libVLC's scale).</summary>
+    [ObservableProperty]
+    private double _volume = 80;
+
+    [ObservableProperty]
+    private bool _isMuted;
+
+    [ObservableProperty]
+    private bool _isLoading;
+
+    /// <summary>Resolving / buffering / download progress / failure text.</summary>
+    [ObservableProperty]
+    private string? _statusText;
+
+    /// <summary>Set only while a temp-file fallback is playing.</summary>
+    [ObservableProperty]
+    private string? _modeText;
+
+    /// <summary>Guards the volume feedback loop between the slider and the transport.</summary>
+    private bool _syncingVolume;
+
     public bool IsSeekable => IsAvailable && DurationSeconds > 0;
 
     /// <summary>
@@ -111,14 +158,31 @@ public sealed partial class PreviewBarViewModel : ObservableObject
     /// <summary>No fake total: an unknown length stays "--:--" and the clock above carries the progress.</summary>
     public string DurationText => IsSeekable ? Format(DurationSeconds) : "--:--";
 
-    public string PlayGlyph => IsPlaying ? "\u23F8" : "\u25B6";
+    public string PlayGlyph => IsLoading ? "\u2026" : IsPlaying ? "\u23F8" : "\u25B6";
 
-    public string PlayPauseHint => IsPlaying ? "Pause the preview" : "Play the preview";
+    public string PlayPauseHint => IsLoading
+        ? "Resolving the preview\u2026"
+        : IsPlaying
+            ? "Pause the preview"
+            : "Play the preview";
+
+    /// <summary>True when the middle of the strip shows a note instead of the slider.</summary>
+    public bool HasStatus => !string.IsNullOrWhiteSpace(StatusText);
+
+    public bool HasModeBadge => !string.IsNullOrWhiteSpace(ModeText);
+
+    public string ModeHint => "Fallback: the direct stream was refused, so this preview is a temp-file download";
+
+    public string MuteGlyph => IsMuted ? "\U0001F507" : "\U0001F50A";
+
+    public string MuteHint => IsMuted ? "Unmute the preview" : "Mute the preview";
+
+    public string VolumeHint => "Preview volume";
 
     public string SeekHint => IsSeekable
         ? "Click or drag to audition a position before downloading"
         : IsStreaming
-            ? "Streaming preview \u2014 the length is unknown until the track is downloaded"
+            ? "Preview is still resolving \u2014 the slider unlocks once the length is known"
             : "Preview something first to seek";
 
     partial void OnPositionSecondsChanged(double value) => OnPropertyChanged(nameof(PositionText));
@@ -135,6 +199,37 @@ public sealed partial class PreviewBarViewModel : ObservableObject
     {
         OnPropertyChanged(nameof(PlayGlyph));
         OnPropertyChanged(nameof(PlayPauseHint));
+    }
+
+    partial void OnIsLoadingChanged(bool value)
+    {
+        OnPropertyChanged(nameof(PlayGlyph));
+        OnPropertyChanged(nameof(PlayPauseHint));
+    }
+
+    partial void OnIsMutedChanged(bool value)
+    {
+        OnPropertyChanged(nameof(MuteGlyph));
+        OnPropertyChanged(nameof(MuteHint));
+    }
+
+    partial void OnStatusTextChanged(string? value) => OnPropertyChanged(nameof(HasStatus));
+
+    partial void OnModeTextChanged(string? value) => OnPropertyChanged(nameof(HasModeBadge));
+
+    /// <summary>Slider move: hand the level to the transport.</summary>
+    partial void OnVolumeChanged(double value)
+    {
+        if (_syncingVolume) return;
+        _transport.SetVolume(value / 100.0);
+    }
+
+    [RelayCommand]
+    private void ToggleMute()
+    {
+        if (!IsAvailable) return;
+        _transport.SetMuted(!IsMuted);
+        IsMuted = !IsMuted;
     }
 
     partial void OnIsAvailableChanged(bool value)
@@ -210,6 +305,26 @@ public sealed partial class PreviewBarViewModel : ObservableObject
         DurationSeconds = _transport.DurationSeconds;
         IsPlaying = _transport.IsPlaying;
         if (!_dragging) PositionSeconds = _transport.PositionSeconds;
+
+        IsLoading = _transport.IsLoading;
+        StatusText = _transport.Status;
+        ModeText = _transport.Mode == "download" ? "DL" : null;
+
+        // Do not fight the thumb while the user is moving the volume slider.
+        if (!_syncingVolume && Math.Abs(Volume - _transport.Volume * 100) >= 1)
+        {
+            _syncingVolume = true;
+            try
+            {
+                Volume = Math.Round(_transport.Volume * 100);
+            }
+            finally
+            {
+                _syncingVolume = false;
+            }
+        }
+
+        IsMuted = _transport.IsMuted;
     }
 
     private static string Format(double seconds)

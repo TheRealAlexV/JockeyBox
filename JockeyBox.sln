@@ -1,0 +1,36 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{2B13A09A-295C-49B8-AA86-5597AEF8979B}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "JockeyBox", "src\JockeyBox\JockeyBox.csproj", "{6529B22A-B401-4A43-B4DB-7380C5AC079D}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{8334CF0D-6D96-4EAA-9AC6-F7F82014FA92}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "JockeyBox.Tests", "tests\JockeyBox.Tests\JockeyBox.Tests.csproj", "{DF256951-130A-46E3-874D-D1D44B0E65F1}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{6529B22A-B401-4A43-B4DB-7380C5AC079D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6529B22A-B401-4A43-B4DB-7380C5AC079D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6529B22A-B401-4A43-B4DB-7380C5AC079D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6529B22A-B401-4A43-B4DB-7380C5AC079D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{DF256951-130A-46E3-874D-D1D44B0E65F1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{DF256951-130A-46E3-874D-D1D44B0E65F1}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{DF256951-130A-46E3-874D-D1D44B0E65F1}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{DF256951-130A-46E3-874D-D1D44B0E65F1}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{6529B22A-B401-4A43-B4DB-7380C5AC079D} = {2B13A09A-295C-49B8-AA86-5597AEF8979B}
+		{DF256951-130A-46E3-874D-D1D44B0E65F1} = {8334CF0D-6D96-4EAA-9AC6-F7F82014FA92}
+	EndGlobalSection
+EndGlobal

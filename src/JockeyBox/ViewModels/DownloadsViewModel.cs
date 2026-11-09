@@ -16,8 +16,9 @@ using JockeyBox.Tools;
 namespace JockeyBox.ViewModels;
 
 /// <summary>
-/// The download queue window: live progress, per-item stage, failures with
-/// retry, and the batch options (bitrate, layout, auto-karaoke).
+/// The download queue behind the status console's Downloads tab: live progress,
+/// per-item stage, failures with retry, and the batch options (bitrate, layout,
+/// auto-karaoke).
 /// </summary>
 public partial class DownloadsViewModel : ObservableObject
 {
@@ -26,7 +27,7 @@ public partial class DownloadsViewModel : ObservableObject
     private readonly DispatcherTimer _timer;
 
     // The queue owns the real cache; this instance only measures/clears the same
-    // folder so the window does not need the playback service handed to it.
+    // folder so this view model does not need the playback service handed to it.
     private readonly Playback.StreamCache _cache;
 
     /// <summary>A command result ("Re-queued 2 item(s)") hides the live line until this passes.</summary>
@@ -45,16 +46,15 @@ public partial class DownloadsViewModel : ObservableObject
 
         // Counts and the overall bar are cheap to recompute, but doing it on a
         // timer avoids re-entrancy from worker-thread item notifications. The
-        // timer is owned by this view model but driven by the window lifetime
-        // (StartPolling/StopPolling) so a closed window stops ticking.
+        // timer is owned by this view model but driven by the main window's
+        // lifetime (StartPolling/StopPolling), the console tab being always there.
         _timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
         _timer.Tick += (_, _) => Refresh();
 
-        // The counts also drive the badge on the main window, which outlives
-        // this window, so they cannot depend on the poll timer. State changes
-        // are few (a handful per item) and push the counts immediately; the
-        // timer above only smooths the live status line and cache size while
-        // the window is open.
+        // The counts also drive the badge on the main window, so they cannot
+        // depend on the poll timer. State changes are few (a handful per item)
+        // and push the counts immediately; the timer above only smooths the live
+        // status line and cache size while the console tab is up.
         _queue.Items.CollectionChanged += OnItemsChanged;
         foreach (var item in _queue.Items) item.PropertyChanged += OnItemPropertyChanged;
 
@@ -138,7 +138,7 @@ public partial class DownloadsViewModel : ObservableObject
         UpdateFfmpegCommand.NotifyCanExecuteChanged();
     }
 
-    /// <summary>Begin the 400 ms refresh tick. The window calls this from its Loaded handler.</summary>
+    /// <summary>Begin the 400 ms refresh tick. The main window calls this on load.</summary>
     public void StartPolling()
     {
         RefreshCacheStats();
@@ -146,7 +146,7 @@ public partial class DownloadsViewModel : ObservableObject
         if (!_timer.IsEnabled) _timer.Start();
     }
 
-    /// <summary>Stop the refresh tick when the queue window closes.</summary>
+    /// <summary>Stop the refresh tick when the main window closes.</summary>
     public void StopPolling() => _timer.Stop();
 
     /// <summary>Re-read the stream cache size. Cheap enough for open + after Clear.</summary>
@@ -259,7 +259,7 @@ public partial class DownloadsViewModel : ObservableObject
 
     /// <summary>
     /// The always-on line: counts on the left, the current track + percent on
-    /// the right, so the window is readable when the main window covers it.
+    /// the right, so it still reads in the narrow console tab.
     /// </summary>
     private string BuildLiveStatus()
     {
@@ -410,7 +410,7 @@ public partial class DownloadsViewModel : ObservableObject
     /// <summary>
     /// Row action for a finished download: delete the file (through the Recycle
     /// Bin, so it is undoable) and forget the ledger entry. There is no modal
-    /// confirmation in this window, so the button's tooltip states the effect and
+    /// confirmation in this tab, so the button's tooltip states the effect and
     /// the command is offered only on Done rows - a single click can never remove
     /// a file the user is still downloading.
     /// </summary>

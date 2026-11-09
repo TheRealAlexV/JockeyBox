@@ -1,4 +1,5 @@
 using CommunityToolkit.Mvvm.ComponentModel;
+using JockeyBox.Activity;
 using JockeyBox.Sources;
 
 namespace JockeyBox.Downloads;
@@ -25,8 +26,8 @@ public enum DownloadKind
 }
 
 /// <summary>
-/// One row in the download queue. Observable so the Downloads window updates
-/// live while yt-dlp reports progress.
+/// One row in the download queue. Observable so the Downloads tab of the
+/// status console updates live while yt-dlp reports progress.
 /// </summary>
 public partial class DownloadItem : ObservableObject
 {
@@ -69,6 +70,27 @@ public partial class DownloadItem : ObservableObject
     [ObservableProperty]
     [NotifyPropertyChangedFor(nameof(HasError), nameof(DetailText))]
     private string? _error;
+
+    /// <summary>
+    /// Row in the shared activity feed; created on the first state/progress
+    /// report and kept in step with this item from then on.
+    /// </summary>
+    internal ActivityRow? Activity { get; set; }
+
+    // Second reporting channel: mirror into ActivityFeed.Shared. Nothing here
+    // changes download behaviour, the observable properties or their consumers.
+    partial void OnStateChanged(DownloadState value) => PublishActivity();
+    partial void OnPercentChanged(double value) => PublishActivity();
+    partial void OnSpeedChanged(string value) => PublishActivity();
+    partial void OnEtaChanged(string value) => PublishActivity();
+    partial void OnDetailChanged(string? value) => PublishActivity();
+
+    internal void PublishActivity()
+    {
+        if (Track is null) return;
+        var row = Activity ??= ActivityFeed.Shared.Start(ActivityKind.Download, Key, ToString());
+        ActivityFeed.Shared.Update(row, State, Percent, DetailText);
+    }
 
     /// <summary>Final file path once the download succeeded.</summary>
     public string? OutputPath { get; set; }

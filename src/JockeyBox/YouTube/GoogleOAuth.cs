@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Net.Http;
@@ -87,7 +87,7 @@ public sealed class GoogleOAuthService
     {
         get
         {
-            var appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            string appData = AppPaths.Home;
             if (string.IsNullOrEmpty(appData))
                 appData = Path.Combine(Path.GetTempPath(), "JockeyBox");
             return Path.Combine(appData, "JockeyBox", "youtube-oauth.json");

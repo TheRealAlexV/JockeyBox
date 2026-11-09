@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using JockeyBox.Tools;
@@ -86,8 +86,7 @@ public sealed class PlaybackQueueStore : IDisposable
         PropertyNameCaseInsensitive = true,
     };
 
-    private static string AppDataDir => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "JockeyBox");
+    private static string AppDataDir => Path.Combine(AppPaths.Home);
 
     public static string FilePath => Path.Combine(AppDataDir, "playback-queue.json");
 

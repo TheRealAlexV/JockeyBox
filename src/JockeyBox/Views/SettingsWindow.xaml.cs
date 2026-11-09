@@ -1,7 +1,10 @@
+﻿using System.Globalization;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Media;
+using JockeyBox.Audio;
 using JockeyBox.Library;
 using JockeyBox.Lyrics;
 using JockeyBox.Separation;
@@ -36,7 +39,6 @@ public partial class SettingsWindow : Window
         _oauth = new SpotifyOAuthService(settings);
 
         MusicDirBox.Text = settings.MusicDirectory;
-        KaraokeDirBox.Text = settings.KaraokeDirectory;
 
         foreach (var f in FormatPresets) FormatBox.Items.Add(f);
         FormatBox.SelectedItem = FormatPresets.Contains(settings.SeparationOutputFormat)
@@ -51,7 +53,401 @@ public partial class SettingsWindow : Window
         UpdateSpotifyStatus();
 
         LoadDownloadSettings(settings);
+        LoadAudioSettings(settings);
     }
+
+    /// <summary>
+    /// Fill the six-bus audio routing, the karaoke mode flag, the recording
+    /// devices, delay, tempo and transition controls.
+    ///
+    /// <para>Device lists come from the same <see cref="DeviceService"/> the decks
+    /// use (default endpoint first), and "None" is always the first entry. The
+    /// legacy Program/Second outputs and the single-mic fields are gone from this
+    /// window on purpose: they are migration inputs now, and showing them would
+    /// let a save undo the migration.</para>
+    /// </summary>
+    private void LoadAudioSettings(AppSettings settings)
+    {
+        var devices = ListOutputDevices();
+
+        FillDeviceBox(MainOutputBox, devices, settings.MainOutputDeviceId);
+        FillDeviceBox(KaraokeAidOutputBox, devices, settings.KaraokeAidOutputDeviceId);
+        FillDeviceBox(RecordingOutputBox, devices, settings.RecordingOutputDeviceId);
+        FillDeviceBox(SoundboardOutputBox, devices, settings.SoundboardOutputDeviceId);
+        FillDeviceBox(MonitorOutputBox, devices, settings.MonitorOutputDeviceId);
+        FillDeviceBox(BridgeOutputBox, devices, settings.BridgeOutputDeviceId);
+
+        SoundboardFollowsMainCheck.IsChecked = settings.SoundboardFollowsMain;
+        KaraokeModeCheck.IsChecked = settings.KaraokeModeEnabled;
+
+        LoadMicDevices(settings);
+
+        OutputDelayBox.Text = settings.OutputDelayMs.ToString(CultureInfo.CurrentCulture);
+        TempoRangeBox.Text = settings.ManualTempoRangePercent.ToString("0.#", CultureInfo.CurrentCulture);
+        TransitionFadeBox.Text = settings.TransitionFadeSeconds.ToString("0.#", CultureInfo.CurrentCulture);
+
+        foreach (var mode in Enum.GetValues<TransitionMode>())
+            TransitionModeBox.Items.Add(new ComboBoxItem
+            {
+                Content = DescribeTransitionMode(mode),
+                Tag = mode.ToString(),
+            });
+        SelectByTag(TransitionModeBox, settings.TransitionMode.ToString(), "AutoCrossfade");
+    }
+
+    /// <summary>Active render endpoints, default first; empty when there is no audio device.</summary>
+    private static List<AudioDeviceInfo> ListOutputDevices()
+    {
+        try
+        {
+            return new DeviceService().GetOutputDevices();
+        }
+        catch (Exception)
+        {
+            // No audio service (headless session, driver trouble): the combos
+            // still open with None so the rest of the window stays usable.
+            return new List<AudioDeviceInfo>();
+        }
+    }
+
+    /// <summary>Active capture (microphone) endpoints, default communications device first.</summary>
+    private static List<AudioDeviceInfo> ListInputDevices()
+    {
+        try
+        {
+            return new DeviceService().GetInputDevices();
+        }
+        catch (Exception)
+        {
+            return new List<AudioDeviceInfo>();
+        }
+    }
+
+    /// <summary>
+    /// Fill one routing combo: "None" (empty tag, saved back as null), then every
+    /// output endpoint. A saved id whose device is unplugged stays in the list so
+    /// saving the window does not quietly change the routing.
+    /// </summary>
+    private static void FillDeviceBox(ComboBox box, IReadOnlyList<AudioDeviceInfo> devices, string? selectedId)
+    {
+        box.Items.Clear();
+        box.Items.Add(new ComboBoxItem { Content = "None", Tag = "" });
+
+        foreach (var device in devices)
+            box.Items.Add(new ComboBoxItem
+            {
+                Content = device.FriendlyName,
+                Tag = device.Id,
+                ToolTip = device.FriendlyName,
+            });
+
+        var match = box.Items.OfType<ComboBoxItem>().FirstOrDefault(
+            i => !string.IsNullOrEmpty(selectedId)
+                 && string.Equals((string?)i.Tag, selectedId, StringComparison.OrdinalIgnoreCase));
+
+        if (match == null && !string.IsNullOrEmpty(selectedId))
+        {
+            match = new ComboBoxItem
+            {
+                Content = "Saved device (not connected)",
+                Tag = selectedId,
+                ToolTip = selectedId,
+            };
+            box.Items.Add(match);
+        }
+
+        box.SelectedItem = match ?? box.Items[0];
+    }
+
+    /// <summary>Selected endpoint id, or null for the None entry.</summary>
+    private static string? SelectedDeviceId(ComboBox box)
+    {
+        var id = (box.SelectedItem as ComboBoxItem)?.Tag as string;
+        return string.IsNullOrWhiteSpace(id) ? null : id;
+    }
+
+    /// <summary>Human label for a transition style.</summary>
+    private static string DescribeTransitionMode(TransitionMode mode) => mode.ToString() switch
+    {
+        // The end-of-track style was called Off before the 2.0 rewrite and is
+        // being renamed to CrossfadeAtEnd; label whichever name this build has.
+        "Off" => "Off (hard cut at end of track)",
+        "CrossfadeAtEnd" => "Crossfade at end of track",
+        "AutoCrossfade" => "Automatic crossfade",
+        "AutoMix" => "Auto-mix (beat & tempo match)",
+        _ => mode.ToString(),
+    };
+
+    // ================================================== recording devices (mics)
+
+    /// <summary>
+    /// One capture endpoint as the list row sees it. The row controls are rebuilt
+    /// whenever the grouping changes, so the state lives here and not in the
+    /// controls: ticking, sliding and muting all edit this object, and Save writes
+    /// exactly the enabled rows out.
+    /// </summary>
+    private sealed class MicRow
+    {
+        public string DeviceId { get; init; } = "";
+        public string DeviceName { get; init; } = "";
+        public bool Enabled { get; set; }
+        public float Volume { get; set; } = 1f;
+        public bool Muted { get; set; }
+        public bool Monitor { get; set; }
+    }
+
+    private readonly List<MicRow> _micRows = new();
+
+    /// <summary>
+    /// Every capture endpoint becomes a row: enabled ones first (the devices the
+    /// operator actually records with), then the rest. Devices stored in settings
+    /// but not plugged in stay listed as "Saved device (not connected)" so they can
+    /// be unticked instead of silently vanishing on the next save.
+    /// </summary>
+    private void LoadMicDevices(AppSettings settings)
+    {
+        _micRows.Clear();
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var device in ListInputDevices())
+        {
+            var saved = settings.MicDevices.FirstOrDefault(
+                m => string.Equals(m.DeviceId, device.Id, StringComparison.OrdinalIgnoreCase));
+            _micRows.Add(new MicRow
+            {
+                DeviceId = device.Id,
+                DeviceName = device.FriendlyName,
+                Enabled = saved != null,
+                Volume = Math.Clamp(saved?.Volume ?? 1f, 0f, 2f),
+                Muted = saved?.Muted ?? false,
+                Monitor = saved?.Monitor ?? false,
+            });
+            seen.Add(device.Id);
+        }
+
+        foreach (var saved in settings.MicDevices)
+        {
+            if (string.IsNullOrWhiteSpace(saved.DeviceId) || seen.Contains(saved.DeviceId))
+                continue;
+            _micRows.Add(new MicRow
+            {
+                DeviceId = saved.DeviceId,
+                DeviceName = "Saved device (not connected)",
+                Enabled = true,
+                Volume = Math.Clamp(saved.Volume, 0f, 2f),
+                Muted = saved.Muted,
+                Monitor = saved.Monitor,
+            });
+        }
+
+        RenderMicRows();
+    }
+
+    /// <summary>The list as it will be saved: one record per enabled row.</summary>
+    private List<AppSettings.MicDeviceSettings> CollectMicDevices()
+    {
+        return _micRows
+            .Where(r => r.Enabled && !string.IsNullOrWhiteSpace(r.DeviceId))
+            .Select(r => new AppSettings.MicDeviceSettings
+            {
+                DeviceId = r.DeviceId,
+                Volume = Math.Clamp(r.Volume, 0f, 2f),
+                Muted = r.Muted,
+                Monitor = r.Monitor,
+            })
+            .ToList();
+    }
+
+    /// <summary>
+    /// Rebuild the list: enabled rows under ENABLED, the rest under AVAILABLE.
+    /// The panel re-renders on an enable tick so the grouping is always honest.
+    /// </summary>
+    private void RenderMicRows()
+    {
+        MicListPanel.Children.Clear();
+
+        var enabled = _micRows.Where(r => r.Enabled).ToList();
+        var available = _micRows.Where(r => !r.Enabled).ToList();
+
+        if (_micRows.Count == 0)
+        {
+            MicListPanel.Children.Add(new TextBlock
+            {
+                Text = "No recording devices found.",
+                Foreground = LookupBrush("TextDimBrush", Brushes.Gray),
+                Margin = new Thickness(0, 2, 0, 6),
+            });
+            return;
+        }
+
+        MicListPanel.Children.Add(GroupCaption($"ENABLED ({enabled.Count})"));
+        if (enabled.Count == 0)
+            MicListPanel.Children.Add(new TextBlock
+            {
+                Text = "None. Tick a device below to record from it.",
+                Foreground = LookupBrush("TextDimBrush", Brushes.Gray),
+                FontSize = 11,
+                Margin = new Thickness(0, 0, 0, 8),
+            });
+        foreach (var row in enabled)
+            MicListPanel.Children.Add(BuildMicRow(row));
+
+        if (available.Count > 0)
+        {
+            MicListPanel.Children.Add(GroupCaption("AVAILABLE"));
+            foreach (var row in available)
+                MicListPanel.Children.Add(BuildMicRow(row));
+        }
+    }
+
+    private TextBlock GroupCaption(string text) => new()
+    {
+        Text = text,
+        FontSize = 10,
+        FontWeight = FontWeights.Bold,
+        Foreground = LookupBrush("AccentBBrush", Brushes.IndianRed),
+        Margin = new Thickness(0, 6, 0, 4),
+    };
+
+    /// <summary>One device row: enable box, name, 0-200 % volume, Mute, Monitor.</summary>
+    private Border BuildMicRow(MicRow row)
+    {
+        var border = new Border
+        {
+            Background = row.Enabled ? LookupBrush("PanelBrush", Brushes.Black) : Brushes.Transparent,
+            BorderBrush = row.Enabled ? LookupBrush("AccentABrush", Brushes.Cyan) : LookupBrush("BorderBrush", Brushes.DimGray),
+            BorderThickness = new Thickness(row.Enabled ? 1 : 0, 0, 0, 0),
+            Padding = new Thickness(6, 4, 4, 4),
+            Margin = new Thickness(0, 0, 0, 4),
+        };
+
+        var grid = new Grid();
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(120) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(42) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var enable = new CheckBox
+        {
+            IsChecked = row.Enabled,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 8, 0),
+            ToolTip = "Record from this device.",
+        };
+        System.Windows.Automation.AutomationProperties.SetName(enable, $"Enable {row.DeviceName}");
+
+        var name = new TextBlock
+        {
+            Text = row.DeviceName,
+            VerticalAlignment = VerticalAlignment.Center,
+            TextTrimming = TextTrimming.CharacterEllipsis,
+            Foreground = row.Enabled ? LookupBrush("TextBrush", Brushes.White) : LookupBrush("TextDimBrush", Brushes.Gray),
+            Margin = new Thickness(0, 0, 10, 0),
+            ToolTip = row.DeviceId,
+        };
+        Grid.SetColumn(name, 1);
+
+        var percent = new TextBlock
+        {
+            Text = $"{row.Volume * 100:0}%",
+            VerticalAlignment = VerticalAlignment.Center,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            FontSize = 11,
+            Margin = new Thickness(0, 0, 8, 0),
+        };
+        Grid.SetColumn(percent, 3);
+
+        // 0-200 % is an app-domain gain: the WASAPI endpoint level is never touched.
+        var volume = new Slider
+        {
+            Minimum = 0,
+            Maximum = 200,
+            SmallChange = 1,
+            LargeChange = 10,
+            IsEnabled = row.Enabled,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 6, 0),
+            ToolTip = "Volume inside JockeyBox (0-200 %). The Windows recording level is never changed.",
+        };
+        System.Windows.Automation.AutomationProperties.SetName(volume, $"{row.DeviceName} volume");
+        Grid.SetColumn(volume, 2);
+
+        var mute = new ToggleButton
+        {
+            Content = "Mute",
+            Width = 44,
+            Height = 20,
+            FontSize = 10,
+            IsChecked = row.Muted,
+            IsEnabled = row.Enabled,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 6, 0),
+            ToolTip = "Silence this device inside JockeyBox.",
+        };
+        System.Windows.Automation.AutomationProperties.SetName(mute, $"{row.DeviceName} mute");
+        Grid.SetColumn(mute, 4);
+
+        var monitor = new ToggleButton
+        {
+            Content = "Monitor",
+            Width = 62,
+            Height = 20,
+            FontSize = 10,
+            IsChecked = row.Monitor,
+            IsEnabled = row.Enabled,
+            VerticalAlignment = VerticalAlignment.Center,
+            ToolTip = "Send this device to the Monitoring device output (operator only).",
+        };
+        System.Windows.Automation.AutomationProperties.SetName(monitor, $"{row.DeviceName} monitor");
+        Grid.SetColumn(monitor, 5);
+
+        volume.Value = row.Volume * 100;
+        percent.Text = $"{volume.Value:0}%";
+
+        volume.ValueChanged += (_, e) =>
+        {
+            row.Volume = (float)(e.NewValue / 100.0);
+            percent.Text = $"{e.NewValue:0}%";
+        };
+
+        mute.Checked += (_, _) => row.Muted = true;
+        mute.Unchecked += (_, _) => row.Muted = false;
+        monitor.Checked += (_, _) => row.Monitor = true;
+        monitor.Unchecked += (_, _) => row.Monitor = false;
+
+        enable.Checked += (_, _) =>
+        {
+            // A newly enabled device always starts at unity, unmuted, monitor off.
+            row.Enabled = true;
+            row.Volume = 1f;
+            row.Muted = false;
+            row.Monitor = false;
+            // The row moves to the ENABLED group; re-render out of band so the
+            // checkbox that raised this is not torn down inside its own event.
+            Dispatcher.BeginInvoke(new Action(RenderMicRows));
+        };
+        enable.Unchecked += (_, _) =>
+        {
+            row.Enabled = false;
+            Dispatcher.BeginInvoke(new Action(RenderMicRows));
+        };
+
+        grid.Children.Add(enable);
+        grid.Children.Add(name);
+        grid.Children.Add(volume);
+        grid.Children.Add(percent);
+        grid.Children.Add(mute);
+        grid.Children.Add(monitor);
+        border.Child = grid;
+        return border;
+    }
+
+    /// <summary>Parse a decimal in the current or the invariant culture ("2.5" and "2,5").</summary>
+    private static bool TryParseNumber(string? text, out double value) =>
+        double.TryParse(text, NumberStyles.Float, CultureInfo.CurrentCulture, out value)
+        || double.TryParse(text, NumberStyles.Float, CultureInfo.InvariantCulture, out value);
 
     /// <summary>Fill the download and tool boxes from settings (values live in item tags).</summary>
     private void LoadDownloadSettings(AppSettings settings)
@@ -153,7 +549,7 @@ public partial class SettingsWindow : Window
 
     private void OnBrowseMusic(object sender, RoutedEventArgs e) => BrowseInto(MusicDirBox, "Select your Music folder (originals with vocals)");
 
-    private void OnBrowseKaraoke(object sender, RoutedEventArgs e) => BrowseInto(KaraokeDirBox, "Select the Karaoke folder (generated instrumentals)");
+
 
     private void BrowseInto(System.Windows.Controls.TextBox target, string title)
     {
@@ -186,18 +582,16 @@ public partial class SettingsWindow : Window
         }
 
         var music = MusicDirBox.Text.Trim();
-        var karaoke = KaraokeDirBox.Text.Trim();
-        if (music.Length > 0 && karaoke.Length > 0
-            && string.Equals(System.IO.Path.GetFullPath(music), System.IO.Path.GetFullPath(karaoke),
-                             StringComparison.OrdinalIgnoreCase))
+        if (music.Length > 0 && !System.IO.Directory.Exists(music))
         {
-            MessageBox.Show(this, "Music and Karaoke folders must be different directories.",
-                "Invalid folders", MessageBoxButton.OK, MessageBoxImage.Warning);
+            MessageBox.Show(this, "The library folder does not exist.",
+                "Invalid folder", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
 
         _settings.MusicDirectory = music;
-        _settings.KaraokeDirectory = karaoke;
+        // One root: karaoke stems live beside their originals (Library/KaraokeNaming).
+        _settings.KaraokeDirectory = music;
         _settings.SeparationOutputFormat = (FormatBox.SelectedItem as string) ?? "FLAC";
         _settings.PythonPath = PythonBox.Text.Trim();
         _settings.SeparationUseGpu = GpuCheck.IsChecked == true;
@@ -205,6 +599,39 @@ public partial class SettingsWindow : Window
         if (double.TryParse(OffsetBox.Text, out var offset))
             _settings.LyricsOffsetMs = Math.Clamp(offset, -10000, 10000);
         _settings.SpotifyClientIdOverride = SpotifyClientIdBox.Text.Trim();
+
+        // 2.0 audio routing: a None entry writes null, never "" - the settings
+        // doc comments and the engine both read null as "this output is off".
+        // Storing a route - including "None" - is what makes it the user's
+        // decision; until then the app falls back to the system default output.
+        _settings.AudioRoutingConfigured = true;
+        _settings.MainOutputDeviceId = SelectedDeviceId(MainOutputBox);
+        _settings.KaraokeAidOutputDeviceId = SelectedDeviceId(KaraokeAidOutputBox);
+        _settings.RecordingOutputDeviceId = SelectedDeviceId(RecordingOutputBox);
+        _settings.SoundboardOutputDeviceId = SelectedDeviceId(SoundboardOutputBox);
+        _settings.MonitorOutputDeviceId = SelectedDeviceId(MonitorOutputBox);
+        _settings.BridgeOutputDeviceId = SelectedDeviceId(BridgeOutputBox);
+        _settings.SoundboardFollowsMain = SoundboardFollowsMainCheck.IsChecked == true;
+        _settings.KaraokeModeEnabled = KaraokeModeCheck.IsChecked == true;
+
+        // Recording devices: the rows ARE the list. An enabled row is the whole
+        // MicDeviceSettings record, so a save can never resurrect a device the
+        // operator unticked. Devices that are not plugged in keep their saved row
+        // (rendered as "Saved device (not connected)").
+        _settings.MicDevices = CollectMicDevices();
+        // An explicit choice (including "None") is final: the one-time default
+        // adoption in MainViewModel.InitializeMic must never second-guess it.
+        _settings.MicAutoSelected = true;
+
+        if (int.TryParse(OutputDelayBox.Text, out var outputDelay))
+            _settings.OutputDelayMs = Math.Clamp(outputDelay, 0, 2000);
+        if (TryParseNumber(TempoRangeBox.Text, out var tempoRange))
+            _settings.ManualTempoRangePercent = Math.Clamp(tempoRange, 1, 50);
+        if (TryParseNumber(TransitionFadeBox.Text, out var fadeSeconds))
+            _settings.TransitionFadeSeconds = Math.Clamp(fadeSeconds, 0.2, 30);
+        if ((TransitionModeBox.SelectedItem as ComboBoxItem)?.Tag is string modeName
+            && Enum.TryParse<TransitionMode>(modeName, out var transitionMode))
+            _settings.TransitionMode = transitionMode;
 
         _settings.DownloadLayoutPreset = TagOf(LayoutPresetBox);
         _settings.DownloadLayoutTemplate = LayoutTemplateBox.Text.Trim();

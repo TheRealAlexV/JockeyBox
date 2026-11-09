@@ -1,0 +1,235 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- ==========================================================================
+         Docked status console kit. Merged into MainWindow only; the console is the
+         window's own chrome, not a reusable control. Two rules hold everywhere in
+         here:
+
+         * 28 px rows. The console sits under the browser and must not push the
+           decks or the queue off screen at 1400x900.
+         * State is always a word plus a mark, never colour alone: a bar only
+           appears when the producer gave a real percent, and a failed row spells
+           out its error instead of tinting red and saying nothing.
+         ========================================================================== -->
+
+    <!-- Thin progress bar: 3 px, no chrome, so a row can carry it without growing. -->
+    <Style x:Key="SlimBar" TargetType="ProgressBar">
+        <Setter Property="Height" Value="3"/>
+        <Setter Property="Foreground" Value="{StaticResource AccentABrush}"/>
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ProgressBar">
+                    <Grid>
+                        <Border Background="{StaticResource PanelAltBrush}" CornerRadius="1"/>
+                        <Rectangle x:Name="PART_Track"/>
+                        <Rectangle x:Name="PART_Indicator" HorizontalAlignment="Left"
+                                   Fill="{TemplateBinding Foreground}" RadiusX="1" RadiusY="1"/>
+                    </Grid>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Header toggle: the strip's one affordance. Chevron text lives beside it
+         in MainWindow so the label stays readable while the mark changes. -->
+    <Style x:Key="ConsoleHeaderToggle" TargetType="ToggleButton">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+        <Setter Property="FontSize" Value="10"/>
+        <Setter Property="FontWeight" Value="Bold"/>
+        <Setter Property="Padding" Value="5,2"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ToggleButton">
+                    <Border x:Name="bd" Background="{TemplateBinding Background}"
+                            BorderBrush="Transparent" BorderThickness="1" CornerRadius="3"
+                            Padding="{TemplateBinding Padding}">
+                        <ContentPresenter VerticalAlignment="Center"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="bd" Property="Background" Value="{StaticResource HoverBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource AccentABrush}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Small text action: the console's command buttons are secondary to the job
+         list, so they read as text until hovered. -->
+    <Style x:Key="ConsoleAction" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+        <Setter Property="FontSize" Value="10"/>
+        <Setter Property="Padding" Value="7,2"/>
+        <Setter Property="Margin" Value="3,0,0,0"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="bd" Background="{TemplateBinding Background}"
+                            BorderBrush="Transparent" BorderThickness="1" CornerRadius="3"
+                            Padding="{TemplateBinding Padding}">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="bd" Property="Background" Value="{StaticResource HoverBrush}"/>
+                            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource AccentABrush}"/>
+                            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" Value="0.45"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Row-local action inside a job or queue row: square, 20 px, quiet until hover. -->
+    <Style x:Key="ConsoleRowAction" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+        <Setter Property="Width" Value="20"/>
+        <Setter Property="Height" Value="18"/>
+        <Setter Property="Padding" Value="0"/>
+        <Setter Property="FontSize" Value="10"/>
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="bd" Background="{TemplateBinding Background}"
+                            BorderBrush="Transparent" BorderThickness="1" CornerRadius="3">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="bd" Property="Background" Value="{StaticResource HoverBrush}"/>
+                            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource AccentABrush}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Flat tab strip: Jobs / Downloads / Log share one 22 px header. -->
+    <Style x:Key="ConsoleTabItem" TargetType="TabItem">
+        <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="TabItem">
+                    <Border x:Name="bd" Background="Transparent" BorderBrush="Transparent"
+                            BorderThickness="0,0,0,2" Padding="9,4" Margin="0,0,2,0"
+                            SnapsToDevicePixels="True">
+                        <ContentPresenter ContentSource="Header" VerticalAlignment="Center"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="bd" Property="Background" Value="{StaticResource HoverBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsSelected" Value="True">
+                            <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource AccentABrush}"/>
+                            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                            <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource AccentABrush}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style x:Key="ConsoleTabs" TargetType="TabControl">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="Padding" Value="0"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="TabControl">
+                    <DockPanel>
+                        <Border DockPanel.Dock="Top" BorderBrush="{StaticResource BorderBrush}"
+                                BorderThickness="0,0,0,1" Padding="8,0">
+                            <TabPanel IsItemsHost="True" KeyboardNavigation.TabIndex="1"/>
+                        </Border>
+                        <Border Background="Transparent" Padding="8,5,8,7">
+                            <ContentPresenter ContentSource="SelectedContent"/>
+                        </Border>
+                    </DockPanel>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Download filter pills: stock ListBoxItem chrome is too loud at this size. -->
+    <Style x:Key="FilterPill" TargetType="ListBoxItem">
+        <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ListBoxItem">
+                    <Border x:Name="bd" Background="Transparent" CornerRadius="3"
+                            Padding="8,1" Margin="0,0,4,0" BorderThickness="1"
+                            BorderBrush="Transparent">
+                        <ContentPresenter/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="bd" Property="Background" Value="{StaticResource HoverBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsSelected" Value="True">
+                            <Setter TargetName="bd" Property="Background" Value="{StaticResource SelectionBrush}"/>
+                            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource AccentABrush}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Log lines: monospace, no selection chrome, one line each. -->
+    <Style x:Key="LogLine" TargetType="ListBoxItem">
+        <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+        <Setter Property="Padding" Value="0,1"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ListBoxItem">
+                    <Border Background="Transparent" Padding="{TemplateBinding Padding}">
+                        <ContentPresenter/>
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style x:Key="ConsoleLogList" TargetType="ListBox">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="FontFamily" Value="Consolas"/>
+        <Setter Property="FontSize" Value="10.5"/>
+        <Setter Property="ItemContainerStyle" Value="{StaticResource LogLine}"/>
+        <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Auto"/>
+        <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto"/>
+    </Style>
+
+</ResourceDictionary>

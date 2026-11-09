@@ -129,7 +129,7 @@ by ffmpeg, or kept as the original m4a when the bitrate is set to copy. Neither
 binary has to be installed by hand: on first use JockeyBox downloads yt-dlp and
 the ffmpeg essentials build into `%APPDATA%\JockeyBox\tools`. Settings → Tools
 takes explicit paths when you would rather use your own copies, and the
-Downloads window has **Install tools** and **Update yt-dlp** buttons.
+**ACTIVITY** strip's **DOWNLOADS** tab has **Install tools** and **Update yt-dlp** buttons.
 
 If YouTube answers with **"Sign in to confirm you're not a bot"**, set
 Settings → **Browser cookies** to the browser you are signed into YouTube with.
@@ -150,7 +150,7 @@ tagged or written into the Music folder until you press Download.
 
 The cache is capped at the **Stream cache size** setting in megabytes (2048 by
 default) and evicts the least recently used files when it fills. **Clear stream
-cache** in the Downloads window empties it.
+cache** in the **ACTIVITY** strip's **DOWNLOADS** tab empties it.
 
 ### Download layout
 

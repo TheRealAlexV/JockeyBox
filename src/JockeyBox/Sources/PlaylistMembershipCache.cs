@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using JockeyBox.Tools;
@@ -45,8 +45,7 @@ public sealed class PlaylistMembershipCache
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     };
 
-    private static string AppDataDir => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "JockeyBox");
+    private static string AppDataDir => Path.Combine(AppPaths.Home);
 
     /// <summary>%APPDATA%\JockeyBox\playlist-cache.json - safe to delete.</summary>
     public static string FilePath => Path.Combine(AppDataDir, "playlist-cache.json");

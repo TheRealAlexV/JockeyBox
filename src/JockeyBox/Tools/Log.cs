@@ -1,4 +1,4 @@
-using System.IO;
+﻿using System.IO;
 using System.Text;
 
 namespace JockeyBox.Tools;
@@ -16,8 +16,7 @@ public static class Log
     private static readonly object Gate = new();
     private const long MaxBytes = 2 * 1024 * 1024;
 
-    public static string DirectoryPath => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "JockeyBox", "logs");
+    public static string DirectoryPath => Path.Combine(AppPaths.Home, "logs");
 
     public static string FilePath => Path.Combine(DirectoryPath, "jockeybox.log");
 

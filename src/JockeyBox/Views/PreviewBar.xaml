@@ -22,6 +22,9 @@
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
 
             <Button Grid.Column="0" Content="{Binding PlayGlyph}"
@@ -45,13 +48,46 @@
                     IsEnabled="{Binding IsSeekable}"
                     VerticalAlignment="Center" Height="18"
                     IsMoveToPointEnabled="True"
-                    ToolTip="{Binding SeekHint}"/>
+                    ToolTip="{Binding SeekHint}"
+                    Visibility="{Binding HasStatus, Converter={StaticResource InverseBoolToVisibility}}"/>
+
+            <!-- Resolving / downloading / failure: the middle cell says what is
+                 happening instead of showing a dead slider. -->
+            <TextBlock Grid.Column="2" Text="{Binding StatusText}"
+                       FontSize="10.5" Foreground="{StaticResource TextBrush}"
+                       VerticalAlignment="Center" Margin="8,0,0,0"
+                       TextTrimming="CharacterEllipsis"
+                       IsHitTestVisible="False"
+                       Visibility="{Binding HasStatus, Converter={StaticResource BoolToVisibility}}"/>
 
             <TextBlock Grid.Column="3" Text="{Binding DurationText}"
                        FontFamily="Consolas" FontSize="10.5" Width="42"
                        Foreground="{StaticResource TextDimBrush}"
                        VerticalAlignment="Center" TextAlignment="Right"
                        Margin="6,0,0,0"/>
+
+            <TextBlock Grid.Column="4" Text="{Binding ModeText}"
+                       FontSize="9" Foreground="{StaticResource TextDimBrush}"
+                       VerticalAlignment="Center" Margin="4,0,0,0"
+                       ToolTip="{Binding ModeHint}"
+                       Visibility="{Binding HasModeBadge, Converter={StaticResource BoolToVisibility}}"/>
+
+            <Button Grid.Column="5" Content="{Binding MuteGlyph}"
+                    Width="20" Height="20" FontSize="9" Padding="0"
+                    Margin="2,0,2,0" VerticalAlignment="Center"
+                    Background="Transparent" BorderThickness="0"
+                    Foreground="{StaticResource TextBrush}"
+                    IsEnabled="{Binding IsAvailable}"
+                    Command="{Binding ToggleMuteCommand}"
+                    ToolTip="{Binding MuteHint}"/>
+
+            <Slider Grid.Column="6" x:Name="VolumeBar"
+                    Minimum="0" Maximum="100"
+                    Value="{Binding Volume, Mode=TwoWay}"
+                    IsEnabled="{Binding IsAvailable}"
+                    VerticalAlignment="Center" Height="16" Width="56"
+                    Focusable="True"
+                    ToolTip="{Binding VolumeHint}"/>
 
             <TextBlock Grid.Column="2" Text="Preview the track here, then download the version you want."
                        FontSize="10.5" Foreground="{StaticResource TextDimBrush}"
