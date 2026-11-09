@@ -39,8 +39,32 @@ public sealed class KeyPrecedenceTests : IDisposable
     [Fact]
     public void TaglessTrackTakesAnalysedKey()
     {
-        Assert.Equal("Am", TrackKeyResolver.Resolve(null, Analysed("Am")));
-        Assert.Equal("Am", TrackKeyResolver.Resolve("  ", Analysed("Am")));
+        Assert.Equal("8A", TrackKeyResolver.Resolve(null, Analysed("Am")));
+        Assert.Equal("8A", TrackKeyResolver.Resolve("  ", Analysed("Am")));
+        // The estimate's own note name and its Camelot form are the same key.
+        Assert.Equal("8A", TrackKeyResolver.Resolve(null, Analysed("8A")));
+    }
+
+    [Fact]
+    public void NoteNameAndCamelotTagNormaliseToTheSameKey()
+    {
+        // Am, 8A and 08a are one key on the wheel; KeyNotation owns the mapping,
+        // so a tag in either dialect must come back identical.
+        Assert.Equal("8A", TrackKeyResolver.Resolve("Am", null));
+        Assert.Equal("8A", TrackKeyResolver.Resolve("8A", null));
+        Assert.Equal("8A", TrackKeyResolver.Resolve("08a", null));
+        Assert.Equal("8A", TrackKeyResolver.Resolve("Am", Analysed(null)));
+        Assert.Equal(TrackKeyResolver.Resolve("Am", null), TrackKeyResolver.Resolve("8A", null));
+        Assert.Equal("11A", TrackKeyResolver.Resolve("F#m", null));
+    }
+
+    [Fact]
+    public void NormalisedTagStillBeatsAnalysedEstimate()
+    {
+        // Fm is 4A; the estimate says 8A. Normalisation must not hand the row to
+        // the estimate, and the winner must still read as Camelot.
+        Assert.Equal("4A", TrackKeyResolver.Resolve("Fm", Analysed("8A")));
+        Assert.Equal("4A", TrackKeyResolver.Resolve("Fm", Analysed("Am")));
     }
 
     [Fact]
@@ -48,7 +72,11 @@ public sealed class KeyPrecedenceTests : IDisposable
     {
         Assert.Null(TrackKeyResolver.Resolve(null, null));
         Assert.Null(TrackKeyResolver.Resolve(null, Analysed(null)));
+        Assert.Null(TrackKeyResolver.Resolve(null, Analysed("")));
         Assert.Null(TrackKeyResolver.Resolve(null, new BeatGrid(128.0, 0.1)));
+        // Never an empty string: the row's em-dash fallback keys off null.
+        Assert.NotEqual("", TrackKeyResolver.Resolve(null, null));
+        Assert.NotEqual("", TrackKeyResolver.Resolve(null, Analysed("")));
     }
 
     [Fact]
@@ -65,9 +93,10 @@ public sealed class KeyPrecedenceTests : IDisposable
         using var reopened = new BeatGridStore(document, mirror: (_, _) => true);
         var grid = reopened.Get(path);
         Assert.NotNull(grid);
+        // The cached grid keeps the analyser's raw note name; only the row is Camelot.
         Assert.Equal("F#m", grid!.Key);
         Assert.True(grid.KeyAnalysed);
-        Assert.Equal("F#m", TrackKeyResolver.Resolve(null, grid));
+        Assert.Equal("11A", TrackKeyResolver.Resolve(null, grid));
     }
 
     [Fact]
@@ -79,7 +108,7 @@ public sealed class KeyPrecedenceTests : IDisposable
 
         row.Key = TrackKeyResolver.Resolve(null, Analysed("Am"));
 
-        Assert.Equal("Am", row.Key);
+        Assert.Equal("8A", row.Key);
         Assert.Contains(nameof(TrackEntry.Key), changed);
     }
 }

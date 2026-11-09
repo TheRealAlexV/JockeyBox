@@ -443,18 +443,38 @@ public class AppSettings
     /// <summary>Entropy used by pre-rename builds; read-only migration path.</summary>
     private static readonly byte[] LegacyEntropy = Encoding.UTF8.GetBytes("SplitPlayerK.v1");
 
-    private static string SettingsPath => Path.Combine(AppPaths.Home, "settings.json");
+    /// <summary>The document this process reads and writes, under <see cref="AppPaths.Home"/>.</summary>
+    public static string SettingsPath => Path.Combine(AppPaths.Home, "settings.json");
 
-    public static AppSettings Load()
+    public static AppSettings Load() => TryLoad() ?? PostProcess(new AppSettings());
+
+    /// <summary>
+    /// Like <see cref="Load"/>, but returns <c>null</c> instead of defaults when the
+    /// file exists and cannot be read. A merge must be able to tell "the file says
+    /// nothing" from "I could not read the file": the first is a value, the second
+    /// must never overwrite live settings with defaults.
+    /// </summary>
+    public static AppSettings? TryLoad()
     {
-        AppSettings settings = new();
+        AppSettings settings;
         try
         {
-            if (File.Exists(SettingsPath))
-                settings = JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(SettingsPath)) ?? new AppSettings();
+            settings = File.Exists(SettingsPath)
+                ? JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(SettingsPath)) ?? new AppSettings()
+                : new AppSettings();
         }
-        catch { /* corrupt settings - use defaults */ }
+        catch { return null; }
 
+        return PostProcess(settings);
+    }
+
+    /// <summary>
+    /// Secret unprotection, defensive normalization and the one-time schema
+    /// migrations. Every load runs it; it only ever fills in or upgrades values,
+    /// so it cannot drop a setting the caller is about to write.
+    /// </summary>
+    private static AppSettings PostProcess(AppSettings settings)
+    {
         // Prefer the protected secret; fall back to (and migrate away from)
         // a legacy plaintext value.
         if (!string.IsNullOrEmpty(settings.SpotifyClientSecretProtected))
@@ -493,6 +513,33 @@ public class AppSettings
         settings.MigrateAudioRouting();
         settings.NormalizeKaraokeRoot();
         return settings;
+    }
+
+    /// <summary>
+    /// A detached copy for change detection: property values are copied, so the
+    /// <c>[JsonIgnore]</c> runtime fields (plaintext OAuth token and secret) come
+    /// along and a later save cannot blank the protected copies.
+    ///
+    /// <para>Collections are copied by reference on purpose: the settings window
+    /// replaces <see cref="MicDevices"/> with a fresh list rather than mutating
+    /// this one, so the snapshot keeps seeing the rows the dialog was built from.</para>
+    /// </summary>
+    public AppSettings Clone()
+    {
+        var copy = new AppSettings();
+        copy.CopyFrom(this);
+        return copy;
+    }
+
+    /// <summary>Overwrite every writable property from <paramref name="other"/>, keeping this instance's identity.</summary>
+    public void CopyFrom(AppSettings other)
+    {
+        foreach (var property in typeof(AppSettings).GetProperties(
+                     System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
+        {
+            if (property.CanRead && property.CanWrite)
+                property.SetValue(this, property.GetValue(other));
+        }
     }
 
     /// <summary>

@@ -1,9 +1,11 @@
 ﻿using System;
 using System.IO;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
+using JockeyBox.Tools;
 using JockeyBox.Views;
 
 namespace JockeyBox.Selftest;
@@ -34,6 +36,18 @@ internal static class UiShot
         if (waitText != null && int.TryParse(waitText, out int parsed)) waitMs = Math.Clamp(parsed, 200, 60000);
 
         string target = (Find(args, "--uishot-window") ?? "main").ToLowerInvariant();
+
+        // Provenance: a capture is only evidence if you know which settings file
+        // the window read. Record home, resolved path and its timestamp before the
+        // window is constructed, so a later rewrite of settings.json cannot be
+        // mistaken for the state in the picture.
+        string settingsPath = Settings.AppSettings.SettingsPath;
+        string settingsStamp = File.Exists(settingsPath)
+            ? File.GetLastWriteTime(settingsPath).ToString("yyyy-MM-dd HH:mm:ss")
+            : "absent";
+        Console.Out.WriteLine(
+            $"uishot: home {AppPaths.Home}, settings {settingsPath}, last-write {settingsStamp}");
+        Console.Out.Flush();
 
         Window window = target == "settings"
             ? new SettingsWindow(Settings.AppSettings.Load())
@@ -68,42 +82,55 @@ internal static class UiShot
             }
         }
 
-        if (window.Content is FrameworkElement content)
+        // The window owns an HWND, and the service session clamps its client area
+        // (1024x768 desktop minus chrome). Layout has to leave that tree entirely:
+        // detach the content and host it in a Border that is its own layout root,
+        // then lay that out at the requested size. Measuring content while it is
+        // still parented is discarded, because UpdateLayout() walks up to the HWND
+        // root and re-arranges everything at the client size.
+        if (window.Content is not FrameworkElement content)
         {
-            content.Measure(new Size(width, height));
-            content.Arrange(new Rect(0, 0, width, height));
-            content.UpdateLayout();
-            Pump(150);
-
-            var bitmap = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
-            bitmap.Render(content);
-
-            var encoder = new PngBitmapEncoder();
-            encoder.Frames.Add(BitmapFrame.Create(bitmap));
-
-            string? directory = Path.GetDirectoryName(Path.GetFullPath(path));
-            if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
-
-            using (var stream = File.Create(path)) encoder.Save(stream);
-
-            Console.Out.WriteLine($"uishot: {width}x{height} -> {path}");
-            Console.Out.Flush();
-
+            Console.Error.WriteLine("uishot: window has no framework content element to render");
+            Console.Error.Flush();
             window.Close();
-            return 0;
+            return 3;
         }
 
-        var fallback = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
-        fallback.Render(window);
+        window.Content = null;
+        var host = new Border { Background = window.Background, Child = content };
+        host.Measure(new Size(width, height));
+        host.Arrange(new Rect(0, 0, width, height));
+        host.UpdateLayout();
+        Pump(150);
 
-        var fallbackEncoder = new PngBitmapEncoder();
-        fallbackEncoder.Frames.Add(BitmapFrame.Create(fallback));
-        string? fallbackDirectory = Path.GetDirectoryName(Path.GetFullPath(path));
-        if (!string.IsNullOrEmpty(fallbackDirectory)) Directory.CreateDirectory(fallbackDirectory);
-        using (var stream = File.Create(path)) fallbackEncoder.Save(stream);
-        Console.Out.WriteLine($"uishot: {width}x{height} (window visual) -> {path}");
+        var bitmap = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
+        bitmap.Render(host);
+
+        var encoder = new PngBitmapEncoder();
+        encoder.Frames.Add(BitmapFrame.Create(bitmap));
+
+        string? directory = Path.GetDirectoryName(Path.GetFullPath(path));
+        if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
+
+        using (var stream = File.Create(path)) encoder.Save(stream);
+
+        double arrangedWidth = host.ActualWidth;
+        double arrangedHeight = host.ActualHeight;
+        bool clamped = Math.Abs(arrangedWidth - width) > 1 || Math.Abs(arrangedHeight - height) > 1;
+
+        Console.Out.WriteLine(
+            $"uishot: canvas {width}x{height}, arranged {arrangedWidth}x{arrangedHeight} -> {path}");
+        if (clamped)
+        {
+            Console.Error.WriteLine(
+                $"uishot: CLAMPED - requested {width}x{height}, arranged {arrangedWidth}x{arrangedHeight}");
+            Console.Error.Flush();
+        }
+
+        Console.Out.Flush();
+
         window.Close();
-        return 0;
+        return clamped ? 3 : 0;
     }
 
     private static void Pump(int milliseconds)

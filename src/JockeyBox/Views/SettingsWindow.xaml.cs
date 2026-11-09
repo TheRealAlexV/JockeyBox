@@ -19,6 +19,13 @@ public partial class SettingsWindow : Window
     private static readonly string[] FormatPresets = { "FLAC", "MP3", "WAV" };
 
     private readonly AppSettings _settings;
+    /// <summary>
+    /// The state the controls were stamped from, detached at construction. Save
+    /// compares against it to tell an operator edit from a change made elsewhere
+    /// while this dialog was open (the engine setup writes PythonPath, a download
+    /// refreshes tool paths, the transport persists karaoke mode).
+    /// </summary>
+    private readonly AppSettings _snapshot;
     private readonly SpotifyOAuthService _oauth;
 
     /// <summary>
@@ -54,6 +61,9 @@ public partial class SettingsWindow : Window
 
         LoadDownloadSettings(settings);
         LoadAudioSettings(settings);
+
+        // After every control is stamped: this is the baseline Save merges against.
+        _snapshot = _settings.Clone();
     }
 
     /// <summary>
@@ -561,7 +571,7 @@ public partial class SettingsWindow : Window
     {
         _settings.PythonPath = PythonBox.Text.Trim();
         _settings.SeparationUseGpu = GpuCheck.IsChecked == true;
-        _settings.Save();
+        SaveMerged();
 
         var setup = new SetupWindow(_settings) { Owner = this };
         setup.ShowDialog();
@@ -646,8 +656,34 @@ public partial class SettingsWindow : Window
         _settings.YtDlpPath = YtDlpPathBox.Text.Trim();
         _settings.FfmpegPath = FfmpegPathBox.Text.Trim();
 
-        _settings.Save();
+        // Controls above now hold the operator's intent; the file may also have
+        // changed while this dialog was open. Every write this window makes goes
+        // through the same merge, so none of them can carry stale control state.
+        SaveMerged();
         DialogResult = true;
+    }
+
+    /// <summary>
+    /// Persist this window's state through <see cref="SettingsMerge"/>.
+    ///
+    /// <para>Called by all three write paths in this window: the Save button, the
+    /// pre-save before the engine installer opens (so the typed Python path
+    /// survives the installer writing its own), and the pre-save before a tool
+    /// task. A field whose control differs from the constructor snapshot is an
+    /// operator edit and wins; every other field keeps the value on disk, so a
+    /// change made elsewhere while the dialog was open survives.</para>
+    /// </summary>
+    private void SaveMerged()
+    {
+        // The baseline stays the CONSTRUCTOR snapshot and is deliberately never
+        // refreshed. `_settings` is re-stamped from the controls before every save,
+        // and the controls' own baseline is that same stamp: refreshing it after a
+        // save would make a control the operator never touched differ from the
+        // baseline, and the next save would mistake the stale control value for an
+        // edit and write it over a newer value from disk.
+        var merged = SettingsMerge.Merge(_snapshot, AppSettings.TryLoad(), _settings);
+        _settings.CopyFrom(merged);
+        _settings.Save();
     }
 
     // ---- tools ------------------------------------------------------------
@@ -670,7 +706,7 @@ public partial class SettingsWindow : Window
     {
         _settings.YtDlpPath = YtDlpPathBox.Text.Trim();
         _settings.FfmpegPath = FfmpegPathBox.Text.Trim();
-        _settings.Save();
+        SaveMerged();
 
         InstallToolsButton.IsEnabled = false;
         UpdateYtDlpButton.IsEnabled = false;
