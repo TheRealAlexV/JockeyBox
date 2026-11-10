@@ -196,9 +196,17 @@ Requires the .NET 8 SDK on WSL (`https://dot.net/v1/dotnet-install.sh --channel 
 ```bash
 build/build.sh        # -> dist/portable/JockeyBox.exe  (single-file portable)
 build/package.sh 1.5.0  # -> dist/installer/JockeyBox-win-Setup.exe (Velopack)
+scripts/deploy-portable.sh --dry-run   # plan a deploy onto the Windows install
+scripts/deploy-portable.sh             # deploy it, then verify every file by md5
 ```
 
 Both cross-compile for win-x64 from Linux via `EnableWindowsTargeting`.
+
+Deploy with `scripts/deploy-portable.sh`, never by hand. It copies the whole payload out of
+`dist/portable` (exe, `AnalysisScripts/`, `libvlc/` - everything except `.pdb` and
+`__pycache__`), saves the outgoing exe as `JockeyBox.exe.bak-MMDD-HHMM`, and fails the run if
+any deployed file does not md5-match its source. Hand-copies shipped a payload missing a
+runtime folder twice; neither was noticed until the app misbehaved.
 
 ## Running on Windows
 
