@@ -8,7 +8,9 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
+using JockeyBox.Activity;
 using JockeyBox.Audio.Transition;
+using JockeyBox.Downloads;
 using JockeyBox.Tools;
 
 namespace JockeyBox.Audio.Beat;
@@ -73,6 +75,8 @@ public sealed class BpmAnalysisService : IBeatGridProvider, IDisposable
     private readonly ConcurrentDictionary<string, byte> _pending = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _signal = new(0);
     private readonly CancellationTokenSource _cts = new();
+    private readonly BpmQueuePolicy _policy = new();
+    private readonly Func<bool> _isPlaying;
     private readonly Task _worker;
     private readonly string? _configuredPython;
     private readonly string _scriptPath;
@@ -88,9 +92,16 @@ public sealed class BpmAnalysisService : IBeatGridProvider, IDisposable
     private int _queued;
     private int _disposed;
 
-    public BpmAnalysisService(IBeatGridStore store, string? pythonPath = null, string? scriptPath = null)
+    /// <param name="audioPlaying">
+    /// Whether the deck pair is playing right now, asked at each track boundary.
+    /// The library pass stays out of the way while this is true; a track a deck is
+    /// waiting for is analysed anyway.
+    /// </param>
+    public BpmAnalysisService(IBeatGridStore store, string? pythonPath = null, string? scriptPath = null,
+                              Func<bool>? audioPlaying = null)
     {
         _store = store;
+        _isPlaying = audioPlaying ?? (() => false);
         _configuredPython = pythonPath;
         _scriptPath = scriptPath ?? Path.Combine(AppContext.BaseDirectory, "AnalysisScripts", "analysis", "bpm_scan.py");
         _worker = Task.Run(WorkerLoopAsync);
@@ -175,15 +186,36 @@ public sealed class BpmAnalysisService : IBeatGridProvider, IDisposable
         return true;
     }
 
+    /// <summary>
+    /// Take the next track the worker may start: a deck's request always, the
+    /// library pass only when <see cref="BpmQueuePolicy"/> says playback is not in
+    /// the way. Both lanes are peeked rather than drained, so a held-back pass
+    /// keeps its track queued for when the room is quiet again.
+    /// </summary>
+    private string? TakeNext()
+    {
+        bool deckWaiting = _onDemand.TryPeek(out var deckPath);
+        bool libraryWaiting = _bulk.Reader.TryPeek(out var libraryPath);
+
+        string? next = _policy.Take(
+            _isPlaying(),
+            deckWaiting ? deckPath : null,
+            libraryWaiting ? libraryPath : null);
+        if (next == null) return null;
+
+        // Remove only what the policy chose; the other lane keeps its track.
+        if (deckWaiting && next == deckPath) _onDemand.TryDequeue(out _);
+        else _bulk.Reader.TryRead(out _);
+        return next;
+    }
+
     private async Task WorkerLoopAsync()
     {
         try
         {
             while (!_cts.IsCancellationRequested)
             {
-                string? path = null;
-                if (_onDemand.TryDequeue(out var priorityPath)) path = priorityPath;
-                else if (_bulk.Reader.TryRead(out var libraryPath)) path = libraryPath;
+                string? path = TakeNext();
 
                 if (path == null)
                 {
@@ -376,6 +408,21 @@ public sealed class BpmAnalysisService : IBeatGridProvider, IDisposable
     {
         if (Interlocked.Exchange(ref _disabledReason, reason) != null) return;
         Log.Error($"beat analysis disabled: {reason}");
+
+        // Beat data never fills in when this fires, and the columns just stay
+        // blank forever, so say why once in the status console. This is the only
+        // place the service disables and the exchange above runs once, so the row
+        // cannot repeat per track or reappear on a later pass.
+        //
+        // Warning, not Failed: nothing was attempted and nothing errored. The
+        // console shows this as a standing condition to fix, in amber.
+        var row = ActivityFeed.Shared.Start(
+            JockeyBox.Activity.ActivityKind.Scan, "beat-analysis-off", "Beat analysis off");
+        ActivityFeed.Shared.Finish(
+            row,
+            DownloadState.Warning,
+            "BPM and key columns stay blank: no python with numpy+librosa found. " +
+            "Install the stem-separation engine or put a python with librosa on PATH.");
     }
 
     /// <summary>

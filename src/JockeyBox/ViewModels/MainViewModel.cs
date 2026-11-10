@@ -612,8 +612,44 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private Task Rescan() => RescanAsync();
 
+    /// <summary>
+    /// Every library-mutating entry point funnels through here (startup, the watcher,
+    /// the download queue, a settings save, delete, rename, and the Rescan command),
+    /// so this is the one place that raises <see cref="IsLibraryScanning"/>.
+    /// </summary>
     private async Task RescanAsync()
     {
+        try
+        {
+            // Both live inside the try: a PropertyChanged subscriber that throws
+            // from the assignment would skip the finally, leaving the counter
+            // above zero and the flag set for the rest of the process, after which
+            // every capture waits out its full budget. Incrementing and
+            // decrementing now share one protected region.
+            Interlocked.Increment(ref _scansInFlight);
+            IsLibraryScanning = true;
+            await ScanLibraryAsync();
+        }
+        finally
+        {
+            // Only the last scan out clears the flag: a superseded scan is
+            // cancelled but its finally still runs, and it can land after the
+            // newer scan has started.
+            if (Interlocked.Decrement(ref _scansInFlight) == 0)
+                IsLibraryScanning = false;
+        }
+    }
+
+    private async Task ScanLibraryAsync()
+    {
+        // Supersede any running scan before this call can return, not after the
+        // directory guard. Blanking both folders while a scan runs lands here: the
+        // guard clears the tree and stops the watcher, and if it returned without
+        // cancelling, the older scan would finish later and repopulate Tracks from
+        // the removed directories, then re-arm the watcher on them. At the top of
+        // this method the cancel covers every early return below it.
+        _scanCts?.Cancel();
+
         if (string.IsNullOrWhiteSpace(MusicDirectory) && string.IsNullOrWhiteSpace(KaraokeDirectory))
         {
             Tracks.Clear();
@@ -622,7 +658,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
-        _scanCts?.Cancel();
         _scanCts = new CancellationTokenSource();
         var ct = _scanCts.Token;
 
@@ -859,6 +894,29 @@ public partial class MainViewModel : ObservableObject, IDisposable
     /// <summary>True while a playlist's membership is being resolved off the UI thread.</summary>
     [ObservableProperty]
     private bool _isPlaylistLoading;
+
+    /// <summary>
+    /// True while a library scan is populating <see cref="Tracks"/>. Raised by
+    /// <see cref="RescanAsync"/> before the scan starts and cleared in its finally,
+    /// so an exception or cancellation cannot leave it stuck on. A capture harness
+    /// uses it to tell a populated tree from a half-built one.
+    /// </summary>
+    [ObservableProperty]
+    private bool _isLibraryScanning;
+
+    /// <summary>
+    /// Scans that have entered <see cref="RescanAsync"/> and not yet left it. A
+    /// superseded scan is cancelled but still runs its finally, so a bare boolean
+    /// would be cleared while the newer scan was still filling the tree.
+    /// <para><b>Dispatcher thread only.</b> <see cref="Interlocked"/> here keeps the
+    /// count itself honest, it does not make the pairing thread-safe: the counter is
+    /// written alongside the <see cref="IsLibraryScanning"/> property, which
+    /// <see cref="ObservableObject"/> only allows to be raised from the UI thread.
+    /// Called off that thread, the two writes could interleave so a finished scan
+    /// clears the flag a newer one has just set, leaving a live scan reported as
+    /// idle. Every caller is already on the dispatcher; keep it that way.</para>
+    /// </summary>
+    private int _scansInFlight;
 
     [ObservableProperty] private string _newPlaylistName = "";
 
@@ -1212,8 +1270,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
         finally
         {
+            bool current = ReferenceEquals(_playlistLoadCts, cts);
             cts.Dispose();
-            if (ReferenceEquals(_playlistLoadCts, cts)) _playlistLoadCts = null;
+            if (current)
+            {
+                _playlistLoadCts = null;
+                // This load is still the one that owns the browser, and it just
+                // ended - cancelled with no successor (CancelPlaylistLoad bumps the
+                // version but never touches the flag) or failed on its own. Clear
+                // the busy overlay here; when a newer load exists it owns the
+                // overlay and this stale one must stay silent. Keyed on the CTS
+                // reference rather than the version because the version moves on
+                // every supersede, including ones whose load never starts.
+                IsPlaylistLoading = false;
+            }
         }
     }
 

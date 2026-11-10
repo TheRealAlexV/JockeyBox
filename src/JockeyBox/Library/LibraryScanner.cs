@@ -98,7 +98,11 @@ public class LibraryScanner
                 track.Title = tags.Title;
                 track.Artist = tags.Artist;
                 track.Album = tags.Album;
-                track.Bpm = tags.Bpm;
+                // Precedence mirrors the key rule below: a TBPM tag is the file's
+                // own assertion, so it wins; the cached analysis grid only fills a
+                // track whose file states no tempo, which keeps a rescan from
+                // dropping an estimate already shown.
+                track.Bpm = TrackBpmResolver.Resolve(tags.Bpm, BeatGridStore.Shared?.Get(metaSource));
 
                 // Precedence: an explicit TKEY tag always wins. Only when the
                 // file states no key do we show the analysis estimate, which is

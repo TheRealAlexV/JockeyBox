@@ -40,6 +40,7 @@ public partial class ActivityRow : ObservableObject
     public DateTimeOffset? Finished { get; internal set; }
 
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShowsMessage), nameof(IsFinished), nameof(StageText))]
     private DownloadState _state = DownloadState.Queued;
 
     /// <summary>0-100, or null when the producer has no measurable progress.</summary>
@@ -49,10 +50,21 @@ public partial class ActivityRow : ObservableObject
 
     /// <summary>Stage detail: speed, ETA, "downloading model… 40%", phase, error.</summary>
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(ShowsMessage))]
     private string? _detail;
 
+    /// <summary>
+    /// True when <see cref="Detail"/> is a message for the operator rather than a
+    /// progress note: it has text and the row ended in failure or a warning. Only
+    /// these rows grow to a second line; an ordinary entry stays one line.
+    /// </summary>
+    public bool ShowsMessage =>
+        !string.IsNullOrWhiteSpace(Detail)
+        && State is DownloadState.Failed or DownloadState.Warning;
+
     public bool IsFinished =>
-        State is DownloadState.Done or DownloadState.Failed or DownloadState.Cancelled;
+        State is DownloadState.Done or DownloadState.Failed
+            or DownloadState.Cancelled or DownloadState.Warning;
 
     public string StageText => State switch
     {
@@ -64,6 +76,7 @@ public partial class ActivityRow : ObservableObject
         DownloadState.Done => "done",
         DownloadState.Failed => "failed",
         DownloadState.Cancelled => "cancelled",
+        DownloadState.Warning => "warning",
         _ => "",
     };
 

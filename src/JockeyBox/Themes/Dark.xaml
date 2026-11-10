@@ -16,6 +16,9 @@
     <SolidColorBrush x:Key="SelectionBrush" Color="#2E4A5A"/>
     <!-- Destructive actions: delete-track menu items, future danger buttons. -->
     <SolidColorBrush x:Key="DangerBrush" Color="#FF5C5C"/>
+    <!-- Something the operator should know about but that did not fail: a feature
+         that is off, a setting to fix. Amber, and always with a word beside it. -->
+    <SolidColorBrush x:Key="WarningBrush" Color="#E8B44B"/>
 
     <!-- Default per-deck accent; overridden per deck card -->
     <SolidColorBrush x:Key="DeckAccent" Color="#00C8FF"/>

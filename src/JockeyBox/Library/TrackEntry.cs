@@ -67,7 +67,16 @@ public partial class TrackEntry : ObservableObject
     [ObservableProperty]
     private string? _key;
 
-    public double Bpm { get; set; }
+    /// <summary>
+    /// Tempo as the file's TBPM tag states it, or the analysed estimate when the
+    /// file has no tempo tag. 0 when neither exists, so the row shows its em-dash
+    /// fallback rather than a guessed tempo. Observable for the same reason as
+    /// <see cref="Key"/>: analysis often finishes after the row is on screen.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(BpmText))]
+    private double _bpm;
+
     public TimeSpan Duration { get; set; }
 
     public bool HasBoth => KaraokePath != null && MusicPath != null;

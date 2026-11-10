@@ -4,14 +4,106 @@
         Title="Settings" Height="720" Width="660" ResizeMode="CanResize"
         MinHeight="420" MinWidth="560"
         Background="{StaticResource WindowBrush}" WindowStartupLocation="CenterOwner">
+    <Window.Resources>
+        <!-- Device-row Mute/Monitor pill. Same recipe as the main window's MUTE/MON
+             toggles (MicToggle): dark fill + dim border when off, accent fill and
+             dark label when on. That "on" fill is the only thing telling a muted
+             device from an unmuted one and a monitored one from an unmonitored
+             one, so it must stay. Default ToggleButton chrome was rendering these
+             white-on-white. -->
+        <Style x:Key="MicPill" TargetType="ToggleButton">
+            <Setter Property="Height" Value="22"/>
+            <Setter Property="Padding" Value="8,0"/>
+            <Setter Property="FontSize" Value="10"/>
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Border x:Name="bd" Background="{StaticResource PanelAltBrush}"
+                                BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                                CornerRadius="3" Padding="{TemplateBinding Padding}">
+                            <!-- The caption is a TextBlock with its own Foreground, not a
+                                 ContentPresenter: a presenter's TextElement.Foreground does
+                                 not follow this style's triggers, so the lit state used to
+                                 paint light text on the cyan fill (1.6:1). -->
+                            <TextBlock x:Name="label" Text="{TemplateBinding Content}"
+                                       Foreground="{TemplateBinding Foreground}"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="{StaticResource HoverBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="bd" Property="Background" Value="{StaticResource AccentABrush}"/>
+                                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource AccentABrush}"/>
+                                <Setter TargetName="label" Property="Foreground" Value="{StaticResource WindowBrush}"/>
+                            </Trigger>
+                            <!-- A row that is not recording is dimmed with a dim *ink*,
+                                 not by fading the whole pill: an opacity blend over the
+                                 panel turned the caption into 3.3:1 grey. TextDim is
+                                 5.2:1 on this fill and still reads as secondary next to
+                                 the 7.6:1 enabled rows. -->
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="label" Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+                                <Setter TargetName="bd" Property="Background" Value="{StaticResource PanelAltBrush}"/>
+                                <Setter TargetName="bd" Property="BorderBrush" Value="#262B35"/>
+                                <Setter Property="Cursor" Value="Arrow"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- Device-row enable box. Both row states share this one template: the
+             rows are built in code, so without an explicit style the WPF default
+             checkbox drew a solid white 12x11 block on the AVAILABLE rows while
+             the ENABLED rows (same control, ticked) drew dark. One look, one
+             hit target, and it follows the panel palette. -->
+        <Style x:Key="MicCheck" TargetType="CheckBox">
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="CheckBox">
+                        <Border x:Name="box" Width="14" Height="14" CornerRadius="3"
+                                Background="#212121" BorderBrush="#3D4553" BorderThickness="1"
+                                SnapsToDevicePixels="True">
+                            <Path x:Name="tick" Data="M3.2,7.3 L5.9,10 L10.8,4.3"
+                                  Stroke="{StaticResource TextBrush}" StrokeThickness="1.7"
+                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                                  StrokeLineJoin="Round" Visibility="Collapsed"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="tick" Property="Visibility" Value="Visible"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="box" Property="BorderBrush" Value="#5A6578"/>
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="box" Property="BorderBrush" Value="{StaticResource AccentABrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="box" Property="Opacity" Value="0.55"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
     <Grid Margin="16">
         <Grid.RowDefinitions>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
 
-        <ScrollViewer Grid.Row="0" VerticalScrollBarVisibility="Auto">
-            <StackPanel>
+        <ScrollViewer Grid.Row="0" x:Name="PageScroll" VerticalScrollBarVisibility="Auto">
+            <StackPanel x:Name="PageContent">
 
                 <!-- ================= AUDIO ROUTING ================= -->
                 <TextBlock Text="AUDIO ROUTING" FontWeight="Bold"
@@ -105,7 +197,7 @@
                                ToolTip="Main + unmuted microphones + soundboard, for other applications to record. Route it to a virtual cable and use the cable's capture side."/>
                     <ComboBox x:Name="BridgeOutputBox"
                               AutomationProperties.Name="Master mix bridge (as microphone)" AutomationProperties.AutomationId="BridgeOutputBox" Grid.Column="1" Margin="0,4"
-                              Width="300" HorizontalAlignment="Left"
+                              Width="300" HorizontalAlignment="Left" VerticalAlignment="Top"
                               ToolTip="Main + unmuted microphones + soundboard, for other applications to record. Route it to a virtual cable and use the cable's capture side."/>
                 </Grid>
 
@@ -118,7 +210,7 @@
                            Foreground="{StaticResource AccentABrush}" Margin="0,0,0,10"/>
 
                 <CheckBox x:Name="KaraokeModeCheck"
-                          AutomationProperties.Name="Karaoke mode" AutomationProperties.AutomationId="KaraokeModeCheck" Margin="0,0,0,14"
+                          AutomationProperties.Name="Karaoke mode" AutomationProperties.AutomationId="KaraokeModeCheck" Margin="150,0,0,14"
                           Foreground="{StaticResource TextBrush}"
                           ToolTip="Main gets the karaoke stem; the original goes to the Karaoke aid output.">
                     <TextBlock TextWrapping="Wrap" MaxWidth="560"
@@ -127,15 +219,59 @@
 
                 <!-- ========== MICROPHONES / RECORDING DEVICES ========== -->
                 <TextBlock Text="MICROPHONES / RECORDING DEVICES" FontWeight="Bold"
-                           Foreground="{StaticResource AccentABrush}" Margin="0,0,0,10"/>
+                           Foreground="{StaticResource AccentABrush}" Margin="0,0,0,2"/>
 
-                <Border Background="{StaticResource PanelBrush}"
+                <Border x:Name="MicListPanelBorder"
+                        Background="{StaticResource PanelBrush}"
                         BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
-                        CornerRadius="4" Padding="2" Margin="0,0,0,4">
-                    <ScrollViewer MaxHeight="260" VerticalScrollBarVisibility="Auto"
-                                  HorizontalScrollBarVisibility="Disabled">
-                        <StackPanel x:Name="MicListPanel" Margin="6,6,6,2"/>
-                    </ScrollViewer>
+                        CornerRadius="4" Padding="2" Margin="0,0,0,3"
+                        MaxHeight="201">
+                    <!-- The list scrolls inside this panel, and only here: the bar is
+                         hidden and the wheel steps whole rows, so the page keeps the
+                         single visible scrollbar it had. FitMicList caps this box at the
+                         height of a whole number of rows, so the panel's bottom edge
+                         falls between rows and can never cut one; a shorter device list
+                         still sizes to its content.
+                         With no bar, the fade below is the only sign that rows continue
+                         past the edge. Code turns it on, and only while there is more to
+                         reach, so a complete list shows no affordance at all. -->
+                    <Grid>
+                        <ScrollViewer x:Name="MicListScroll" Focusable="False"
+                                      HorizontalScrollBarVisibility="Disabled"
+                                      VerticalScrollBarVisibility="Hidden"
+                                      PreviewMouseWheel="MicListScroll_PreviewMouseWheel"
+                                      ScrollChanged="MicListScroll_ScrollChanged">
+                            <StackPanel x:Name="MicListPanel" Margin="6,2,6,2"/>
+                        </ScrollViewer>
+
+                        <!-- Over the slack band at the panel's foot, so it never covers a
+                             row: the panel is capped to whole rows, so that band is the
+                             same height at every scroll offset. A soft scrim plus a
+                             chevron that appears only while rows remain below — the list
+                             is otherwise silent about them, because its own bar is hidden
+                             to keep the page's the only scrollbar in the frame. Never
+                             takes a click or a wheel notch. -->
+                        <Border x:Name="MicListFade" Height="22" VerticalAlignment="Bottom"
+                                IsHitTestVisible="False" Visibility="Collapsed"
+                                CornerRadius="0,0,3,3">
+                            <Border.Background>
+                                <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                                    <GradientStop Color="#00171A1F" Offset="0"/>
+                                    <GradientStop Color="#B3171A1F" Offset="0.55"/>
+                                    <GradientStop Color="#FF171A1F" Offset="1"/>
+                                </LinearGradientBrush>
+                            </Border.Background>
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center"
+                                        VerticalAlignment="Center">
+                                <TextBlock Text="&#x25BE;" FontSize="8"
+                                           Foreground="{StaticResource TextDimBrush}"
+                                           VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                <TextBlock Text="more" FontSize="9"
+                                           Foreground="{StaticResource TextDimBrush}"
+                                           VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Border>
+                    </Grid>
                 </Border>
 
                 <TextBlock TextWrapping="Wrap" Foreground="{StaticResource TextDimBrush}"

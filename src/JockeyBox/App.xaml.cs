@@ -32,6 +32,25 @@ public partial class App : Application
             return;
         }
 
+        // --uishot-dump: the same row objects the tree binds, printed as text.
+        // A PNG proves "something rendered"; this proves which BPM/key text the
+        // columns actually hold (see Selftest/LibraryDump.cs).
+        if (LibraryDump.Requested(e.Args))
+        {
+            int dumpExit = 1;
+            try
+            {
+                Data.LibraryBoot.Boot();
+                dumpExit = LibraryDump.Run(e.Args);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine("dump failed: " + ex);
+            }
+            Shutdown(dumpExit);
+            return;
+        }
+
         // --uishot renders the real window to a PNG with no desktop and no
         // interactive session, so verification never touches the operator's screen.
         if (UiShot.Requested(e.Args))

@@ -155,7 +155,10 @@ public partial class MainViewModel
         try
         {
             _bpmStore = new BeatGridStore();
-            _bpmService = new BpmAnalysisService(_bpmStore);
+            // AnyPlaying, not IsPlaying: the latter follows the active deck only, and
+            // PlayDeck never activates, so "deck A stopped, B playing" read as silent
+            // and let the pass run mid-mix.
+            _bpmService = new BpmAnalysisService(_bpmStore, audioPlaying: () => _transport.AnyPlaying);
             _bpmService.Analysed += OnBeatAnalysed;
             _transport.BeatGridProvider = _bpmService;
             Log.Info($"beat analysis: {_bpmStore.Count} cached grid(s) at {_bpmStore.FilePath}");
@@ -207,6 +210,15 @@ public partial class MainViewModel
                 foreach (var track in Tracks)
                     if (PathEquals(track.MusicPath, path) && string.IsNullOrEmpty(track.Key))
                         track.Key = TrackKeyResolver.Resolve(tagKey: null, grid);
+
+            // Tempo follows the identical rule: the scan (which runs before this
+            // worker) already wrote any TBPM tag, so a non-zero Bpm is authored
+            // metadata and must not be replaced by an estimate. Zero means the
+            // file states no tempo, which is the only case analysis may fill.
+            if (grid.Bpm > 0)
+                foreach (var track in Tracks)
+                    if (PathEquals(track.MusicPath, path) && track.Bpm <= 0)
+                        track.Bpm = TrackBpmResolver.Resolve(tagBpm: 0, grid);
         });
     }
 

@@ -299,51 +299,83 @@
         <Setter Property="Foreground" Value="{DynamicResource TextDimBrush}"/>
     </Style>
 
-    <Style x:Key="StripFilterBox" TargetType="TextBox">
+    <!-- The strip's three controls were the only untemplated ones in the window:
+         a keyed Style with no BasedOn replaces the theme's implicit style, so the
+         filter box, the sort combo and the order button rendered with default
+         Windows chrome (white field, classic Win32 arrow) next to dark ones. Each
+         now derives from its theme style and only overrides size and padding, so
+         they take PanelAltBrush fill, BorderBrush 1px and TextBrush text exactly
+         like the deck OUTPUT combos and DELAY MS fields.
+         22 px is the height the review measured on the old native box; it also
+         matches the 10/6,3 buttons beside them in the same row. MinHeight has to
+         be pinned at 22 as well, because the theme floors TextBox and ComboBox at
+         MinHeight 32 and MinHeight beats Height in measure. -->
+    <Style x:Key="StripFilterBox" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
         <Setter Property="FontSize" Value="11"/>
-        <Setter Property="Height" Value="24"/>
-        <Setter Property="Width" Value="210"/>
+        <Setter Property="Height" Value="22"/>
+        <Setter Property="MinHeight" Value="22"/>
+        <Setter Property="MinWidth" Value="160"/>
+        <Setter Property="Padding" Value="7,1"/>
         <Setter Property="VerticalContentAlignment" Value="Center"/>
     </Style>
 
-    <Style x:Key="StripSortCombo" TargetType="ComboBox">
+    <Style x:Key="StripSortCombo" TargetType="ComboBox" BasedOn="{StaticResource {x:Type ComboBox}}">
         <Setter Property="FontSize" Value="11"/>
-        <Setter Property="Height" Value="24"/>
+        <Setter Property="Height" Value="22"/>
+        <Setter Property="MinHeight" Value="22"/>
         <Setter Property="Width" Value="118"/>
+        <Setter Property="Padding" Value="7,1"/>
         <Setter Property="VerticalContentAlignment" Value="Center"/>
     </Style>
 
-    <Style x:Key="StripDirectionButton" TargetType="Button">
+    <!-- MinWidth is what stops this collapsing to a sliver when the row is tight:
+         the label is a single glyph pair, so without a floor the button had no
+         width of its own. -->
+    <Style x:Key="StripDirectionButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
         <Setter Property="FontSize" Value="10"/>
         <Setter Property="FontFamily" Value="Consolas"/>
-        <Setter Property="Width" Value="44"/>
-        <Setter Property="Height" Value="24"/>
-        <Setter Property="Padding" Value="0"/>
+        <Setter Property="MinWidth" Value="38"/>
+        <Setter Property="Height" Value="22"/>
+        <Setter Property="Padding" Value="6,0"/>
         <Setter Property="Margin" Value="4,0,0,0"/>
     </Style>
 
     <DataTemplate x:Key="FilterSortStrip">
-        <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
-            <TextBlock Text="FILTER" Style="{StaticResource StripLabel}" Margin="0,0,6,0"/>
-            <TextBox Style="{StaticResource StripFilterBox}"
+        <!-- Grid, not StackPanel: the filter box takes the row's slack (a
+             StackPanel gives every child its desired width, so the box could
+             only ever be its fixed 210). FILTER and SORT keep Auto. In an
+             auto-sized host the star column falls back to the box's MinWidth. -->
+        <Grid Margin="0,0,0,4">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="*"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
+            </Grid.ColumnDefinitions>
+
+            <TextBlock Grid.Column="0" Text="FILTER" Style="{StaticResource StripLabel}"
+                       Margin="0,0,6,0"/>
+            <TextBox Grid.Column="1" Style="{StaticResource StripFilterBox}"
                      Text="{Binding FilterText, UpdateSourceTrigger=PropertyChanged}"
                      ToolTip="{Binding FilterHint}"
                      AutomationProperties.Name="{Binding FilterHint}"/>
 
-            <TextBlock Text="SORT" Style="{StaticResource StripLabel}" Margin="10,0,6,0"/>
-            <ComboBox Style="{StaticResource StripSortCombo}"
+            <TextBlock Grid.Column="2" Text="SORT" Style="{StaticResource StripLabel}"
+                       Margin="10,0,6,0"/>
+            <ComboBox Grid.Column="3" Style="{StaticResource StripSortCombo}"
                       ItemsSource="{x:Static vm:TrackSortChoices.All}"
                       DisplayMemberPath="Label"
                       SelectedValuePath="Value"
                       SelectedValue="{Binding SortField, Mode=TwoWay}"
                       AutomationProperties.Name="Sort by"
                       ToolTip="Sort field"/>
-            <Button Style="{StaticResource StripDirectionButton}"
+            <Button Grid.Column="4" Style="{StaticResource StripDirectionButton}"
                     Content="{Binding DirectionLabel}"
                     Command="{Binding ToggleDirectionCommand}"
                     ToolTip="{Binding DirectionToolTip}"
                     AutomationProperties.Name="Sort direction"/>
-        </StackPanel>
+        </Grid>
     </DataTemplate>
 
 </ResourceDictionary>

@@ -3,7 +3,9 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Threading;
 using JockeyBox.Audio;
 using JockeyBox.Library;
 using JockeyBox.Lyrics;
@@ -308,6 +310,97 @@ public partial class SettingsWindow : Window
             foreach (var row in available)
                 MicListPanel.Children.Add(BuildMicRow(row));
         }
+
+        // Row set changed: start the list from its top again.
+        MicListScroll?.ScrollToTop();
+
+        // The fade follows the row set, and layout has not run yet at this point.
+        Dispatcher.BeginInvoke(UpdateMicListFade, DispatcherPriority.Loaded);
+    }
+
+    /// <summary>
+    /// The list is capped to whole rows by its MaxHeight in XAML. This decides where
+    /// one wheel notch lands, and it only ever picks an offset that leaves whole rows
+    /// at both edges of the panel, so no row is ever cut across the panel's edge.
+    /// </summary>
+    private void MicListScroll_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        // Nothing hidden: leave the wheel to the page.
+        if (MicListScroll is null || MicListScroll.ScrollableHeight <= 0) return;
+
+        e.Handled = true;
+        int direction = e.Delta < 0 ? 1 : -1;
+        double view = MicListScroll.ActualHeight;
+        MicListScroll.ScrollToVerticalOffset(MicListStep(MicListScroll.VerticalOffset, view, direction));
+    }
+
+    /// <summary>
+    /// Show the bottom fade only while rows continue past the panel's edge, so a
+    /// list that fits shows nothing and a list that scrolls admits it. Also runs on
+    /// every scroll, so the fade goes away at the end of the list.
+    /// </summary>
+    private void MicListScroll_ScrollChanged(object sender, ScrollChangedEventArgs e)
+    {
+        UpdateMicListFade();
+
+        // Content height changes as rows are added; those arrive without a scroll.
+        if (e.ExtentHeightChange != 0)
+            Dispatcher.BeginInvoke(UpdateMicListFade, DispatcherPriority.Loaded);
+    }
+
+    private void UpdateMicListFade()
+    {
+        if (MicListFade is null || MicListScroll is null) return;
+
+        // Half a pixel of slack: scrolling to the very end can leave a fraction.
+        bool moreBelow = MicListScroll.ScrollableHeight > 0.5
+                         && MicListScroll.VerticalOffset
+                            < MicListScroll.ScrollableHeight - 0.5;
+        MicListFade.Visibility = moreBelow ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    /// <summary>Child start offsets inside the list, plus the total height.</summary>
+    private List<double> MicListOffsets()
+    {
+        var offsets = new List<double> { 0 };
+        double sum = 0;
+        foreach (UIElement child in MicListPanel.Children)
+        {
+            double h = (child as FrameworkElement)?.DesiredSize.Height ?? 0;
+            if (h <= 0) continue;
+            sum += h;
+            offsets.Add(sum);
+        }
+        return offsets;
+    }
+
+    /// <summary>
+    /// The offset one row above/below <paramref name="from"/>, chosen so the list's
+    /// top and bottom edges both land on a row boundary. Falls back to 0.
+    /// </summary>
+    private double MicListStep(double from, double viewHeight, int direction)
+    {
+        var offsets = MicListOffsets();
+        double total = offsets[^1];
+        double max = Math.Max(0, MicListScroll?.ScrollableHeight ?? 0.0);
+
+        // A candidate keeps whole rows at the top AND at the bottom edge.
+        bool Clean(double o) =>
+            o + viewHeight >= total - 0.5
+            || offsets.Exists(b => Math.Abs(b - (o + viewHeight)) < 0.5);
+
+        var candidates = offsets.Where(o => o <= max + 0.5 && Clean(o)).ToList();
+        if (candidates.Count == 0) return 0;
+
+        if (direction > 0)
+        {
+            foreach (double o in candidates)
+                if (o > from + 0.5) return o;
+            return candidates[^1];
+        }
+        for (int i = candidates.Count - 1; i >= 0; i--)
+            if (candidates[i] < from - 0.5) return candidates[i];
+        return candidates[0];
     }
 
     private TextBlock GroupCaption(string text) => new()
@@ -315,8 +408,9 @@ public partial class SettingsWindow : Window
         Text = text,
         FontSize = 10,
         FontWeight = FontWeights.Bold,
-        Foreground = LookupBrush("AccentBBrush", Brushes.IndianRed),
-        Margin = new Thickness(0, 6, 0, 4),
+        // Section cyan, not deck-B pink: pink means "deck B" in the main window.
+        Foreground = LookupBrush("AccentABrush", Brushes.Cyan),
+        Margin = new Thickness(0, 2, 0, 0),
     };
 
     /// <summary>One device row: enable box, name, 0-200 % volume, Mute, Monitor.</summary>
@@ -327,8 +421,8 @@ public partial class SettingsWindow : Window
             Background = row.Enabled ? LookupBrush("PanelBrush", Brushes.Black) : Brushes.Transparent,
             BorderBrush = row.Enabled ? LookupBrush("AccentABrush", Brushes.Cyan) : LookupBrush("BorderBrush", Brushes.DimGray),
             BorderThickness = new Thickness(row.Enabled ? 1 : 0, 0, 0, 0),
-            Padding = new Thickness(6, 4, 4, 4),
-            Margin = new Thickness(0, 0, 0, 4),
+            Padding = new Thickness(6, 3, 4, 3),
+            Margin = new Thickness(0, 0, 0, 3),
         };
 
         var grid = new Grid();
@@ -342,6 +436,7 @@ public partial class SettingsWindow : Window
         var enable = new CheckBox
         {
             IsChecked = row.Enabled,
+            Style = (Style)FindResource("MicCheck"),
             VerticalAlignment = VerticalAlignment.Center,
             Margin = new Thickness(0, 0, 8, 0),
             ToolTip = "Record from this device.",
@@ -384,12 +479,13 @@ public partial class SettingsWindow : Window
         System.Windows.Automation.AutomationProperties.SetName(volume, $"{row.DeviceName} volume");
         Grid.SetColumn(volume, 2);
 
+        // MicPill is defined in SettingsWindow.xaml. IsChecked is both the state and
+        // the only visual cue (accent fill), so it must stay bound to the row.
         var mute = new ToggleButton
         {
             Content = "Mute",
+            Style = (Style)FindResource("MicPill"),
             Width = 44,
-            Height = 20,
-            FontSize = 10,
             IsChecked = row.Muted,
             IsEnabled = row.Enabled,
             VerticalAlignment = VerticalAlignment.Center,
@@ -402,9 +498,8 @@ public partial class SettingsWindow : Window
         var monitor = new ToggleButton
         {
             Content = "Monitor",
+            Style = (Style)FindResource("MicPill"),
             Width = 62,
-            Height = 20,
-            FontSize = 10,
             IsChecked = row.Monitor,
             IsEnabled = row.Enabled,
             VerticalAlignment = VerticalAlignment.Center,

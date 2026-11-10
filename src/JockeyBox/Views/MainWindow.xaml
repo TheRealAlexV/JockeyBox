@@ -1,3 +1,6 @@
+<!-- MinWidth is the crossfader strip's own minimum: 384 px fader + 575 px
+     karaoke/mic/master group + 64 px of window and card chrome + 17 px slack.
+     Below it the strip's right-hand group is clipped out of the card. -->
 <Window x:Class="JockeyBox.Views.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
@@ -5,7 +8,7 @@
         xmlns:lib="clr-namespace:JockeyBox.Library"
         xmlns:views="clr-namespace:JockeyBox.Views"
         xmlns:activity="clr-namespace:JockeyBox.Activity"
-        Title="JockeyBox" Height="900" Width="1400" MinHeight="640" MinWidth="1000"
+        Title="JockeyBox" Height="900" Width="1400" MinHeight="640" MinWidth="1040"
         Background="{StaticResource WindowBrush}"
         WindowStartupLocation="CenterScreen">
 
@@ -52,19 +55,32 @@
         <DataTemplate x:Key="DeckCardTemplate" DataType="{x:Type vm:DeckViewModel}">
             <Border Style="{StaticResource Card}" Padding="12,6">
                 <Grid>
+                    <!-- One label column, one control column. Every slider (VOL,
+                         TEMPO, the scrub, karaoke GAIN) starts on the same x and
+                         runs to the card's right edge, so the panel reads as a
+                         grid instead of four rows with four different edges. -->
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="50"/>
+                        <ColumnDefinition Width="8"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>   <!-- header -->
                         <RowDefinition Height="Auto"/>   <!-- track -->
                         <RowDefinition Height="Auto"/>   <!-- output device -->
                         <RowDefinition Height="Auto"/>   <!-- volume -->
                         <RowDefinition Height="Auto"/>   <!-- tempo / BPM -->
-                        <RowDefinition Height="Auto"/>   <!-- transport + seek -->
+                        <RowDefinition Height="Auto"/>   <!-- transport buttons -->
+                        <RowDefinition Height="Auto"/>   <!-- scrub: own line -->
                         <RowDefinition Height="Auto"/>   <!-- karaoke sub-stem -->
                     </Grid.RowDefinitions>
 
-                    <!-- Header: deck name, active marker, local time readout -->
-                    <DockPanel Grid.Row="0">
-                        <TextBlock Text="{Binding Title}" FontSize="13" FontWeight="Bold"
+                    <!-- Header: deck name, active marker, local time readout.
+                         The name is the panel's identity for anyone who cannot
+                         tell pink from cyan, so it is always there, in the deck's
+                         own accent, at 11 px uppercase. -->
+                    <DockPanel Grid.Row="0" Grid.ColumnSpan="3">
+                        <TextBlock Text="{Binding Title}" FontSize="11" FontWeight="Bold"
                                    Foreground="{DynamicResource DeckAccent}" VerticalAlignment="Center"/>
                         <Button DockPanel.Dock="Right" Margin="8,0,0,0"
                                 Command="{Binding ActivateCommand}"
@@ -92,7 +108,7 @@
                     </DockPanel>
 
                     <!-- Track info -->
-                    <StackPanel Grid.Row="1" Margin="0,5,0,6">
+                    <StackPanel Grid.Row="1" Grid.ColumnSpan="3" Margin="0,5,0,6">
                         <TextBlock Text="{Binding TrackTitle}" FontSize="15" FontWeight="SemiBold"
                                    TextTrimming="CharacterEllipsis"/>
                         <TextBlock Text="{Binding TrackDetail}" Foreground="{StaticResource TextDimBrush}"
@@ -100,40 +116,72 @@
                     </StackPanel>
 
                     <!-- Output device -->
-                    <DockPanel Grid.Row="2" Margin="0,0,0,5">
-                        <TextBlock Text="OUTPUT" Width="60" VerticalAlignment="Center"
-                                   FontSize="10" Foreground="{StaticResource TextDimBrush}"/>
-                        <ComboBox ItemsSource="{Binding Devices}" SelectedItem="{Binding SelectedDevice}"/>
-                    </DockPanel>
+                    <TextBlock Grid.Row="2" Grid.Column="0" Text="OUTPUT" VerticalAlignment="Center"
+                               FontSize="10" Foreground="{StaticResource TextDimBrush}"/>
+                    <ComboBox Grid.Row="2" Grid.Column="2" Margin="0,0,0,5"
+                              ItemsSource="{Binding Devices}" SelectedItem="{Binding SelectedDevice}"/>
 
                     <!-- Volume -->
-                    <DockPanel Grid.Row="3">
-                        <TextBlock Text="VOL" Width="60" VerticalAlignment="Center" FontSize="10"
-                                   Foreground="{StaticResource TextDimBrush}"/>
-                        <Slider Minimum="0" Maximum="1.2"
-                                TickFrequency="0.1" IsSnapToTickEnabled="True"
-                                Value="{Binding Volume}"/>
-                    </DockPanel>
+                    <TextBlock Grid.Row="3" Grid.Column="0" Text="VOL" VerticalAlignment="Center"
+                               FontSize="10" Foreground="{StaticResource TextDimBrush}"/>
+                    <Slider Grid.Row="3" Grid.Column="2" Minimum="0" Maximum="1.2"
+                            TickFrequency="0.1" IsSnapToTickEnabled="True"
+                            Value="{Binding Volume}"/>
 
                     <!-- Tempo / BPM (plan item 5): a slim, centre-detented pitch fader
                          with its auto-centre button and the live readout. The fader is
                          fixed at +/-16 visually; the view model clamps to the configured
-                         range. -->
-                    <Grid Grid.Row="4" Margin="0,5,0,0">
+                         range. The fader is the first thing in the control column so its
+                         left edge matches VOL above it. -->
+                    <TextBlock Grid.Row="4" Grid.Column="0" Text="TEMPO" FontSize="10"
+                               Margin="0,5,0,0" VerticalAlignment="Center"
+                               Foreground="{StaticResource TextDimBrush}"/>
+
+                    <Grid Grid.Row="4" Grid.Column="2" Margin="0,5,0,0">
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
 
-                        <TextBlock Grid.Column="0" Text="TEMPO" Width="60" FontSize="10"
-                                   VerticalAlignment="Center"
-                                   Foreground="{StaticResource TextDimBrush}"/>
+                        <Grid Grid.Column="0" Margin="0,0,10,0" VerticalAlignment="Center">
+                            <!-- Centre detent: 0% is the middle of the fader. Drawn
+                                 behind the thumb so a centred fader still reads as a
+                                 thumb sitting on a mark, not a line through it. -->
+                            <Border Width="1" Height="9" HorizontalAlignment="Center"
+                                    Background="{StaticResource TextDimBrush}"
+                                    IsHitTestVisible="False"/>
+                            <Slider Minimum="-16" Maximum="16"
+                                    SmallChange="0.1" LargeChange="1"
+                                    Value="{Binding TempoPercent, Mode=TwoWay}"
+                                    ToolTip="Tempo: -16% (slower) to +16% (faster), centre = original"/>
+                        </Grid>
 
-                        <StackPanel Grid.Column="1" Orientation="Horizontal"
-                                    VerticalAlignment="Center">
+                        <TextBlock Grid.Column="1" Text="{Binding BpmText}" FontFamily="Consolas"
+                                   FontSize="17" FontWeight="Bold" MinWidth="72"
+                                   TextAlignment="Right" VerticalAlignment="Center"
+                                   ToolTip="BPM the deck is producing right now"/>
+
+                        <TextBlock Grid.Column="2" Text="{Binding TempoRatio, StringFormat={}{0:F3}}"
+                                   FontFamily="Consolas" FontSize="11" Width="44"
+                                   Margin="8,0,0,0" TextAlignment="Right"
+                                   VerticalAlignment="Center"
+                                   ToolTip="Playback ratio (1.000 = original tempo)">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding IsTempoModified}" Value="True">
+                                            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+
+                        <StackPanel Grid.Column="3" Orientation="Horizontal"
+                                    Margin="8,0,0,0" VerticalAlignment="Center">
                             <RepeatButton Width="20" Height="18" FontSize="10"
                                           Style="{StaticResource NudgeButton}"
                                           Delay="400" Interval="120"
@@ -164,130 +212,105 @@
                                           Command="{Binding NudgeTempoCommand}" CommandParameter="0.5"
                                           ToolTip="Speed up by 0.5%"/>
                         </StackPanel>
-
-                        <Grid Grid.Column="2" Margin="8,0,10,0" VerticalAlignment="Center">
-                            <!-- Centre detent: 0% is the middle of the fader. Drawn
-                                 behind the thumb so a centred fader still reads as a
-                                 thumb sitting on a mark, not a line through it. -->
-                            <Border Width="1" Height="9" HorizontalAlignment="Center"
-                                    Background="{StaticResource TextDimBrush}"
-                                    IsHitTestVisible="False"/>
-                            <Slider Minimum="-16" Maximum="16"
-                                    SmallChange="0.1" LargeChange="1"
-                                    Value="{Binding TempoPercent, Mode=TwoWay}"
-                                    ToolTip="Tempo: -16% (slower) to +16% (faster), centre = original"/>
-                        </Grid>
-
-                        <TextBlock Grid.Column="3" Text="{Binding BpmText}" FontFamily="Consolas"
-                                   FontSize="17" FontWeight="Bold" MinWidth="96"
-                                   TextAlignment="Right" VerticalAlignment="Center"
-                                   ToolTip="BPM the deck is producing right now"/>
-
-                        <TextBlock Grid.Column="4" Text="{Binding TempoRatio, StringFormat={}{0:F3}}"
-                                   FontFamily="Consolas" FontSize="11" Width="44"
-                                   Margin="8,0,0,0" TextAlignment="Right"
-                                   VerticalAlignment="Center"
-                                   ToolTip="Playback ratio (1.000 = original tempo)">
-                            <TextBlock.Style>
-                                <Style TargetType="TextBlock">
-                                    <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding IsTempoModified}" Value="True">
-                                            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </TextBlock.Style>
-                        </TextBlock>
                     </Grid>
 
                     <!-- Transport: this deck's own controls, secondary to the main
                          row. Any click inside the card activates the deck
                          (OnDeckInteract in the code-behind), so these buttons
                          never move a deck the user is not looking at. -->
-                    <DockPanel Grid.Row="5" Margin="0,2,0,0">
-                        <StackPanel DockPanel.Dock="Left" Orientation="Horizontal">
-                            <Button Style="{StaticResource DeckSecondaryButton}" Content="&#x23EE;"
-                                    ToolTip="Previous track on this deck"
-                                    Command="{Binding DataContext.PreviousTrackForDeckCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                    CommandParameter="{Binding}"/>
-                            <Button Style="{StaticResource DeckSecondaryButton}" Content="&#x23EA;"
-                                    ToolTip="Back 10 seconds on this deck"
-                                    Command="{Binding SkipBackCommand}"/>
-                            <Button Style="{StaticResource DeckSecondaryButton}" Content="{Binding PlayGlyph}"
-                                    ToolTip="Play or pause this deck"
-                                    Command="{Binding PlayPauseCommand}"/>
-                            <Button Style="{StaticResource DeckSecondaryButton}" Content="&#x23E9;"
-                                    ToolTip="Forward 10 seconds on this deck"
-                                    Command="{Binding SkipForwardCommand}"/>
-                            <Button Style="{StaticResource DeckSecondaryButton}" Content="&#x23F9;"
-                                    ToolTip="Stop this deck"
-                                    Command="{Binding StopCommand}"/>
-                            <Button Style="{StaticResource DeckSecondaryButton}" Content="&#x23ED;"
-                                    ToolTip="Next track on this deck"
-                                    Command="{Binding DataContext.NextTrackForDeckCommand, RelativeSource={RelativeSource AncestorType=Window}}"
-                                    CommandParameter="{Binding}"/>
-                        </StackPanel>
-                        <Slider Margin="8,0,0,0" VerticalAlignment="Center"
-                                Minimum="0" Maximum="{Binding DurationSeconds}"
-                                Value="{Binding PositionSeconds, Mode=TwoWay}"
-                                PreviewMouseLeftButtonDown="OnDeckSeekStart"
-                                PreviewMouseLeftButtonUp="OnDeckSeekEnd"
-                                LostMouseCapture="OnDeckSeekLostCapture"/>
-                    </DockPanel>
+                    <StackPanel Grid.Row="5" Grid.ColumnSpan="3" Orientation="Horizontal"
+                                Margin="0,2,0,0">
+                        <Button Style="{StaticResource DeckSecondaryButton}" Content="&#x23EE;"
+                                ToolTip="Previous track on this deck"
+                                Command="{Binding DataContext.PreviousTrackForDeckCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                CommandParameter="{Binding}"/>
+                        <Button Style="{StaticResource DeckSecondaryButton}" Content="&#x23EA;"
+                                ToolTip="Back 10 seconds on this deck"
+                                Command="{Binding SkipBackCommand}"/>
+                        <Button Style="{StaticResource DeckSecondaryButton}" Content="{Binding PlayGlyph}"
+                                ToolTip="Play or pause this deck"
+                                Command="{Binding PlayPauseCommand}"/>
+                        <Button Style="{StaticResource DeckSecondaryButton}" Content="&#x23E9;"
+                                ToolTip="Forward 10 seconds on this deck"
+                                Command="{Binding SkipForwardCommand}"/>
+                        <Button Style="{StaticResource DeckSecondaryButton}" Content="&#x23F9;"
+                                ToolTip="Stop this deck"
+                                Command="{Binding StopCommand}"/>
+                        <Button Style="{StaticResource DeckSecondaryButton}" Content="&#x23ED;"
+                                ToolTip="Next track on this deck"
+                                Command="{Binding DataContext.NextTrackForDeckCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                CommandParameter="{Binding}"/>
+                    </StackPanel>
 
-                    <!-- Karaoke sub-stem bar: gain, delay trim and seek. Its waveform
-                         now lives in the shared stacked strip below the deck row. -->
-                    <Border Grid.Row="6" Margin="0,6,0,0" Padding="0,5,0,0"
+                    <!-- Scrub sits on its own line so it starts at the control
+                         column, not under the last transport button. -->
+                    <Slider Grid.Row="6" Grid.Column="2" Margin="0,3,0,0" VerticalAlignment="Center"
+                            Minimum="0" Maximum="{Binding DurationSeconds}"
+                            Value="{Binding PositionSeconds, Mode=TwoWay}"
+                            PreviewMouseLeftButtonDown="OnDeckSeekStart"
+                            PreviewMouseLeftButtonUp="OnDeckSeekEnd"
+                            LostMouseCapture="OnDeckSeekLostCapture"
+                            ToolTip="Seek this deck"/>
+
+                    <!-- Karaoke sub-stem bar. Sits on the same label/control grid
+                         as the rows above: KARAOKE / GAIN stacked in the label
+                         column, the gain slider starting at the control column.
+                         The grab handle's seek slider was dropped: it bound the
+                         same PositionSeconds as the deck scrub on the line
+                         directly above, with the same three handlers, so it was a
+                         second handle on one value with no label of its own. -->
+                    <Border Grid.Row="7" Grid.ColumnSpan="3" Margin="0,6,0,0" Padding="0,5,0,0"
                             BorderBrush="{DynamicResource DeckAccent}" BorderThickness="0,1,0,0"
                             Visibility="{Binding HasKaraoke, Converter={StaticResource BoolToVisibility}}">
                         <Grid>
-                            <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                            </Grid.RowDefinitions>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="50"/>
+                                <ColumnDefinition Width="8"/>
+                                <ColumnDefinition Width="*"/>
+                            </Grid.ColumnDefinitions>
 
-                            <DockPanel Grid.Row="0" LastChildFill="False">
+                            <StackPanel Grid.Column="0" VerticalAlignment="Center">
                                 <TextBlock Text="KARAOKE" FontSize="9" FontWeight="Bold"
-                                           Foreground="{DynamicResource DeckAccent}"
-                                           VerticalAlignment="Center"/>
-                                <Button DockPanel.Dock="Left" Width="26" Height="20" Margin="8,0,0,0"
-                                        Padding="0" FontSize="11"
-                                        Style="{StaticResource TransportButton}"
-                                        Content="{Binding PlayGlyph}"
-                                        Command="{Binding PlayPauseCommand}"
-                                        ToolTip="Play/pause this deck (the karaoke stem follows the deck playhead)"/>
-                                <TextBlock Text="GAIN" FontSize="9" Margin="10,0,6,0"
-                                           Foreground="{StaticResource TextDimBrush}"
-                                           VerticalAlignment="Center"/>
-                                <Slider DockPanel.Dock="Left" Width="90" VerticalAlignment="Center"
-                                        Minimum="0" Maximum="1"
-                                        Value="{Binding KaraokeGain}"
-                                        ToolTip="0 = original only, 0.5 = both, 1 = karaoke only"/>
-                                <TextBlock Text="DELAY MS" FontSize="9" Margin="12,0,6,0"
-                                           Foreground="{StaticResource TextDimBrush}"
-                                           VerticalAlignment="Center"/>
-                                <RepeatButton DockPanel.Dock="Left" Width="20" Height="18" FontSize="10"
-                                              Style="{StaticResource NudgeButton}"
-                                              Delay="400" Interval="150"
-                                              Command="{Binding NudgeDelayCommand}" CommandParameter="-5"/>
-                                <TextBox DockPanel.Dock="Left" Width="56" Margin="3,0"
-                                         TextAlignment="Center" FontSize="11"
-                                         MinHeight="24" Padding="6,3"
-                                         Text="{Binding DelayMs, UpdateSourceTrigger=LostFocus, StringFormat=F0}"/>
-                                <RepeatButton DockPanel.Dock="Left" Width="20" Height="18" FontSize="10"
-                                              Style="{StaticResource NudgeButton}"
-                                              Delay="400" Interval="150"
-                                              Command="{Binding NudgeDelayCommand}" CommandParameter="5"/>
-                            </DockPanel>
+                                           Foreground="{DynamicResource DeckAccent}"/>
+                                <TextBlock Text="GAIN" FontSize="9" Margin="0,1,0,0"
+                                           Foreground="{StaticResource TextDimBrush}"/>
+                            </StackPanel>
 
-                            <!-- Karaoke seek: bound to the deck playhead, so both stems move together. -->
-                            <Slider Grid.Row="1" Margin="0,3,0,0" VerticalAlignment="Center"
-                                    Minimum="0" Maximum="{Binding DurationSeconds}"
-                                    Value="{Binding PositionSeconds, Mode=TwoWay}"
-                                    PreviewMouseLeftButtonDown="OnDeckSeekStart"
-                                    PreviewMouseLeftButtonUp="OnDeckSeekEnd"
-                                    LostMouseCapture="OnDeckSeekLostCapture"/>
+                            <DockPanel Grid.Column="2">
+                                <!-- Delay cluster first, so it holds the right edge
+                                     and the gain slider keeps the control column. -->
+                                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal"
+                                            VerticalAlignment="Center">
+                                    <TextBlock Text="DELAY MS" FontSize="9" Margin="12,0,6,0"
+                                               Foreground="{StaticResource TextDimBrush}"
+                                               VerticalAlignment="Center"/>
+                                    <RepeatButton Width="20" Height="18" FontSize="10"
+                                                  Style="{StaticResource NudgeButton}"
+                                                  Delay="400" Interval="150"
+                                                  Command="{Binding NudgeDelayCommand}" CommandParameter="-5"
+                                                  ToolTip="Trim the karaoke stem 5 ms earlier"/>
+                                    <TextBox Width="56" Margin="3,0"
+                                             TextAlignment="Center" FontSize="11"
+                                             MinHeight="24" Padding="6,3"
+                                             Text="{Binding DelayMs, UpdateSourceTrigger=LostFocus, StringFormat=F0}"
+                                             ToolTip="Karaoke stem offset in milliseconds"/>
+                                    <RepeatButton Width="20" Height="18" FontSize="10"
+                                                  Style="{StaticResource NudgeButton}"
+                                                  Delay="400" Interval="150"
+                                                  Command="{Binding NudgeDelayCommand}" CommandParameter="5"
+                                                  ToolTip="Trim the karaoke stem 5 ms later"/>
+                                    <Button Width="26" Height="20" Margin="8,0,0,0"
+                                            Padding="0" FontSize="11"
+                                            Style="{StaticResource TransportButton}"
+                                            Content="{Binding PlayGlyph}"
+                                            Command="{Binding PlayPauseCommand}"
+                                            ToolTip="Play/pause this deck (the karaoke stem follows the deck playhead)"/>
+                                </StackPanel>
+
+                                <Slider VerticalAlignment="Center" Minimum="0" Maximum="1"
+                                        Value="{Binding KaraokeGain}"
+                                        ToolTip="Karaoke mix: 0 = original only, 0.5 = both, 1 = karaoke only"/>
+                            </DockPanel>
                         </Grid>
                     </Border>
                 </Grid>
@@ -735,9 +758,27 @@
     <Grid Margin="12">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>   <!-- header -->
-            <RowDefinition Height="Auto"/>   <!-- decks + waveforms + transport (never clipped) -->
-            <RowDefinition Height="8"/>      <!-- splitter: deck block <-> browser -->
-            <RowDefinition Height="*" MinHeight="150"/>   <!-- browser + lyrics -->
+            <RowDefinition Height="Auto"/>   <!-- deck block: cards, transport, crossfader (never clipped) -->
+            <!-- Waveform: elastic, one part to the table's two - the 2:1 the review
+                 asked for. It used to sit inside the auto-sized deck block, which is
+                 why every pixel of window growth went to the library while the
+                 waveform stayed at 97 px (its released height).
+                 Star sizing divides the whole free band, not just the growth, so this
+                 also lifts the waveform at 900 px tall - to roughly a third of the
+                 band instead of 97 px - and the library gives up that difference. The
+                 review asked for exactly that share, so the baseline move is intended,
+                 not accidental; if 900 px ends up too tight the knob is the browser
+                 weight (2* -> 3*), not this row.
+                 MinHeight 103 is the released size (97 px card + its own 6 px top
+                 margin) and keeps a short window from squeezing the waveform out.
+                 The two canvases are MinHeight (was Height) and their rows are star,
+                 so the card's contents stretch with the row. -->
+            <RowDefinition Height="*" MinHeight="103"/>
+            <RowDefinition Height="6"/>      <!-- splitter: deck block <-> browser. 6 so
+                                                  the gap after the waveform matches the
+                                                  6 px card margins above it (the review
+                                                  saw 13 px here against 11 px there). -->
+            <RowDefinition Height="2*" MinHeight="150"/>   <!-- browser + lyrics: still the elastic one -->
             <RowDefinition Height="Auto"/>   <!-- status console: jobs, downloads, log -->
             <RowDefinition Height="Auto"/>   <!-- soundboard -->
             <RowDefinition Height="Auto"/>   <!-- footer -->
@@ -763,9 +804,8 @@
         <Grid Grid.Row="1">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>   <!-- deck cards -->
-                <RowDefinition Height="Auto"/>   <!-- stacked waveforms -->
-                <RowDefinition Height="Auto"/>   <!-- crossfader -->
                 <RowDefinition Height="Auto"/>   <!-- transport -->
+                <RowDefinition Height="Auto"/>   <!-- crossfader -->
             </Grid.RowDefinitions>
 
         <!-- ================= Decks ================= -->
@@ -793,121 +833,6 @@
             </ContentControl>
         </Grid>
 
-        <!-- ================= Stacked waveforms =================
-             One shared strip: deck A's waveform on top, deck B's directly under it,
-             each full width with its own playhead and its karaoke sub-stem tucked
-             beneath it. The canvases are the same control the deck cards used to
-             hold - same Tag ("primary"/"karaoke"), same Loaded/SizeChanged handlers -
-             so MainWindow.xaml.cs draws them exactly as before; only their parent
-             and therefore their width changed. -->
-        <Border Grid.Row="3" Style="{StaticResource Card}" Padding="8,4" Margin="0,6,0,0">
-            <Grid>
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>   <!-- deck A -->
-                    <RowDefinition Height="Auto"/>   <!-- deck B -->
-                </Grid.RowDefinitions>
-
-                <!-- ===== Deck A ===== -->
-                <Grid Grid.Row="0" DataContext="{Binding DeckA}">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                    </Grid.RowDefinitions>
-
-                    <Grid Grid.Row="0">
-                        <!-- Quiet bed so the peaks and the beat ticks read against
-                             the panel instead of floating on it. -->
-                        <Border CornerRadius="3" IsHitTestVisible="False">
-                            <Border.Background>
-                                <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                                    <GradientStop Color="#10151D" Offset="0"/>
-                                    <GradientStop Color="#0A0C10" Offset="1"/>
-                                </LinearGradientBrush>
-                            </Border.Background>
-                        </Border>
-                        <Canvas x:Name="WaveformA" Height="30" ClipToBounds="True" Tag="primary"
-                                Loaded="OnDeckWaveformLoaded"
-                                SizeChanged="OnDeckWaveformSizeChanged"/>
-                        <TextBlock Text="A" Margin="7,2,0,0" FontSize="11" FontWeight="Black"
-                                   HorizontalAlignment="Left" VerticalAlignment="Top"
-                                   Foreground="{StaticResource AccentABrush}"
-                                   IsHitTestVisible="False"/>
-                        <TextBlock Text="{Binding Bpm, StringFormat={}{0:0}}"
-                                   Margin="0,3,7,0" FontSize="9" FontFamily="Consolas"
-                                   HorizontalAlignment="Right" VerticalAlignment="Top"
-                                   Foreground="{StaticResource TextDimBrush}"
-                                   IsHitTestVisible="False">
-                            <TextBlock.Style>
-                                <Style TargetType="TextBlock">
-                                    <Setter Property="Visibility" Value="Visible"/>
-                                    <Style.Triggers>
-                                        <!-- No tempo analysis, no number: the card's
-                                             BPM readout already says "BPM —". -->
-                                        <DataTrigger Binding="{Binding Bpm}" Value="0">
-                                            <Setter Property="Visibility" Value="Collapsed"/>
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </TextBlock.Style>
-                        </TextBlock>
-                    </Grid>
-
-                    <Canvas Grid.Row="1" x:Name="KaraokeWaveformA" Height="12" Margin="0,2,0,0"
-                            ClipToBounds="True" Tag="karaoke"
-                            Visibility="{Binding HasKaraoke, Converter={StaticResource BoolToVisibility}}"
-                            Loaded="OnDeckWaveformLoaded"
-                            SizeChanged="OnDeckWaveformSizeChanged"/>
-                </Grid>
-
-                <!-- ===== Deck B ===== -->
-                <Grid Grid.Row="1" DataContext="{Binding DeckB}" Margin="0,4,0,0">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                    </Grid.RowDefinitions>
-
-                    <Grid Grid.Row="0">
-                        <Border CornerRadius="3" IsHitTestVisible="False">
-                            <Border.Background>
-                                <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                                    <GradientStop Color="#10151D" Offset="0"/>
-                                    <GradientStop Color="#0A0C10" Offset="1"/>
-                                </LinearGradientBrush>
-                            </Border.Background>
-                        </Border>
-                        <Canvas x:Name="WaveformB" Height="30" ClipToBounds="True" Tag="primary"
-                                Loaded="OnDeckWaveformLoaded"
-                                SizeChanged="OnDeckWaveformSizeChanged"/>
-                        <TextBlock Text="B" Margin="7,2,0,0" FontSize="11" FontWeight="Black"
-                                   HorizontalAlignment="Left" VerticalAlignment="Top"
-                                   Foreground="{StaticResource AccentBBrush}"
-                                   IsHitTestVisible="False"/>
-                        <TextBlock Text="{Binding Bpm, StringFormat={}{0:0}}"
-                                   Margin="0,3,7,0" FontSize="9" FontFamily="Consolas"
-                                   HorizontalAlignment="Right" VerticalAlignment="Top"
-                                   Foreground="{StaticResource TextDimBrush}"
-                                   IsHitTestVisible="False">
-                            <TextBlock.Style>
-                                <Style TargetType="TextBlock">
-                                    <Setter Property="Visibility" Value="Visible"/>
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding Bpm}" Value="0">
-                                            <Setter Property="Visibility" Value="Collapsed"/>
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </TextBlock.Style>
-                        </TextBlock>
-                    </Grid>
-
-                    <Canvas Grid.Row="1" x:Name="KaraokeWaveformB" Height="12" Margin="0,2,0,0"
-                            ClipToBounds="True" Tag="karaoke"
-                            Visibility="{Binding HasKaraoke, Converter={StaticResource BoolToVisibility}}"
-                            Loaded="OnDeckWaveformLoaded"
-                            SizeChanged="OnDeckWaveformSizeChanged"/>
-                </Grid>
-            </Grid>
-        </Border>
 
         <!-- ================= Crossfader =================
              One fader, equal-power curve: centre plays both decks at -3 dB, the
@@ -944,8 +869,13 @@
                                 <Border x:Name="bd" Background="{StaticResource PanelAltBrush}"
                                         BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
                                         CornerRadius="3">
-                                    <ContentPresenter HorizontalAlignment="Center"
-                                                      VerticalAlignment="Center"/>
+                                    <!-- A TextBlock with its own Foreground, not a presenter:
+                                         a ContentPresenter does not follow these triggers, so
+                                         the checked state painted light text on the cyan fill. -->
+                                    <TextBlock x:Name="label" Text="{TemplateBinding Content}"
+                                               Foreground="{TemplateBinding Foreground}"
+                                               HorizontalAlignment="Center"
+                                               VerticalAlignment="Center"/>
                                 </Border>
                                 <ControlTemplate.Triggers>
                                     <Trigger Property="IsMouseOver" Value="True">
@@ -955,7 +885,7 @@
                                     <Trigger Property="IsChecked" Value="True">
                                         <Setter TargetName="bd" Property="Background"
                                                 Value="{StaticResource AccentABrush}"/>
-                                        <Setter Property="Foreground" Value="#08131A"/>
+                                        <Setter TargetName="label" Property="Foreground" Value="#08131A"/>
                                     </Trigger>
                                 </ControlTemplate.Triggers>
                             </ControlTemplate>
@@ -965,10 +895,24 @@
             </Border.Resources>
             <Grid>
                 <Grid.ColumnDefinitions>
-                    <!-- Equal side columns keep the fader exactly centred. -->
+                    <!-- The right-hand group (karaoke pill, mic, master) is about
+                         575 px wide. Equal * side columns capped it at ~526 at a
+                         1500 window and ~476 at 1400, and a right-aligned child
+                         wider than its column is arranged past it, not clipped:
+                         at 1500 the pill drew over the B snap button and read
+                         "ARAOKE", at 1400 it fell out of the slot entirely.
+                         Star plus a 575 floor pins the column to the group's
+                         real width, so it can never overflow, and still lets it
+                         grow with the card. Centring needs 2*575 + 384 = 1534 px
+                         of card (a ~1600 window); from there up both stars stay
+                         equal and the fader is exactly centred again, instead of
+                         drifting right the way an Auto column did. Below it the
+                         min wins over the star split and the left column gives
+                         up the difference: 0 offset at >= 1600, 9 px left of
+                         card centre at 1580, 49 px at 1500, 99 px at 1400. -->
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*" MinWidth="575"/>
                 </Grid.ColumnDefinitions>
 
                 <!-- Transition status: live state, not a control. Collapsed
@@ -1208,11 +1152,129 @@
         </Border>
         </Grid>
 
+        <!-- ================= Stacked waveforms =================
+             One shared strip: deck A's waveform on top, deck B's directly under it,
+             each full width with its own playhead and its karaoke sub-stem tucked
+             beneath it. The canvases are the same control the deck cards used to
+             hold - same Tag ("primary"/"karaoke"), same Loaded/SizeChanged handlers -
+             so MainWindow.xaml.cs draws them exactly as before; only their parent
+             and therefore their width changed. -->
+        <Border Grid.Row="2" Style="{StaticResource Card}" Padding="8,4" Margin="0,6,0,0">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*"/>   <!-- deck A -->
+                    <RowDefinition Height="*"/>   <!-- deck B -->
+                </Grid.RowDefinitions>
+
+                <!-- ===== Deck A ===== -->
+                <Grid Grid.Row="0" DataContext="{Binding DeckA}">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <Grid Grid.Row="0">
+                        <!-- Quiet bed so the peaks and the beat ticks read against
+                             the panel instead of floating on it. -->
+                        <Border CornerRadius="3" IsHitTestVisible="False">
+                            <Border.Background>
+                                <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                                    <GradientStop Color="#10151D" Offset="0"/>
+                                    <GradientStop Color="#0A0C10" Offset="1"/>
+                                </LinearGradientBrush>
+                            </Border.Background>
+                        </Border>
+                        <Canvas x:Name="WaveformA" MinHeight="30" ClipToBounds="True" Tag="primary"
+                                Loaded="OnDeckWaveformLoaded"
+                                SizeChanged="OnDeckWaveformSizeChanged"/>
+                        <TextBlock Text="A" Margin="7,2,0,0" FontSize="11" FontWeight="Black"
+                                   HorizontalAlignment="Left" VerticalAlignment="Top"
+                                   Foreground="{StaticResource AccentABrush}"
+                                   IsHitTestVisible="False"/>
+                        <TextBlock Text="{Binding Bpm, StringFormat={}{0:0}}"
+                                   Margin="0,3,7,0" FontSize="9" FontFamily="Consolas"
+                                   HorizontalAlignment="Right" VerticalAlignment="Top"
+                                   Foreground="{StaticResource TextDimBrush}"
+                                   IsHitTestVisible="False">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Visible"/>
+                                    <Style.Triggers>
+                                        <!-- No tempo analysis, no number: the card's
+                                             BPM readout already says "BPM —". -->
+                                        <DataTrigger Binding="{Binding Bpm}" Value="0">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </Grid>
+
+                    <Canvas Grid.Row="1" x:Name="KaraokeWaveformA" Height="12" Margin="0,2,0,0"
+                            ClipToBounds="True" Tag="karaoke"
+                            Visibility="{Binding HasKaraoke, Converter={StaticResource BoolToVisibility}}"
+                            Loaded="OnDeckWaveformLoaded"
+                            SizeChanged="OnDeckWaveformSizeChanged"/>
+                </Grid>
+
+                <!-- ===== Deck B ===== -->
+                <Grid Grid.Row="1" DataContext="{Binding DeckB}" Margin="0,4,0,0">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+
+                    <Grid Grid.Row="0">
+                        <Border CornerRadius="3" IsHitTestVisible="False">
+                            <Border.Background>
+                                <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                                    <GradientStop Color="#10151D" Offset="0"/>
+                                    <GradientStop Color="#0A0C10" Offset="1"/>
+                                </LinearGradientBrush>
+                            </Border.Background>
+                        </Border>
+                        <Canvas x:Name="WaveformB" MinHeight="30" ClipToBounds="True" Tag="primary"
+                                Loaded="OnDeckWaveformLoaded"
+                                SizeChanged="OnDeckWaveformSizeChanged"/>
+                        <TextBlock Text="B" Margin="7,2,0,0" FontSize="11" FontWeight="Black"
+                                   HorizontalAlignment="Left" VerticalAlignment="Top"
+                                   Foreground="{StaticResource AccentBBrush}"
+                                   IsHitTestVisible="False"/>
+                        <TextBlock Text="{Binding Bpm, StringFormat={}{0:0}}"
+                                   Margin="0,3,7,0" FontSize="9" FontFamily="Consolas"
+                                   HorizontalAlignment="Right" VerticalAlignment="Top"
+                                   Foreground="{StaticResource TextDimBrush}"
+                                   IsHitTestVisible="False">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Visible"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Bpm}" Value="0">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </Grid>
+
+                    <Canvas Grid.Row="1" x:Name="KaraokeWaveformB" Height="12" Margin="0,2,0,0"
+                            ClipToBounds="True" Tag="karaoke"
+                            Visibility="{Binding HasKaraoke, Converter={StaticResource BoolToVisibility}}"
+                            Loaded="OnDeckWaveformLoaded"
+                            SizeChanged="OnDeckWaveformSizeChanged"/>
+                </Grid>
+            </Grid>
+        </Border>
+
         <!-- Splitter: balances the deck block against the browser -->
-        <GridSplitter Grid.Row="2" Style="{StaticResource RowSplitter}"/>
+        <!-- Height matches the 6 px row it lives in; the style's 8 would overflow
+             the row by a pixel at each end and sit on the card edges. -->
+        <GridSplitter Grid.Row="3" Height="6" Style="{StaticResource RowSplitter}"/>
 
         <!-- ================= Browser + Lyrics ================= -->
-        <Grid Grid.Row="3">
+        <Grid Grid.Row="4">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="3*"/>
                 <ColumnDefinition Width="12"/>
@@ -1224,43 +1286,16 @@
                 <TabControl x:Name="BrowserTabs" Style="{StaticResource BrowserTabControl}">
                 <TabItem Header="LIBRARY">
                 <DockPanel>
+                    <!-- Layout switcher: the ACTIVE mode is the filled pill, the
+                         other is plain text, matching every tab and segmented
+                         control on the window. It also sits with the actions at
+                         the right end of the row instead of continuing the
+                         TRACK BROWSER label as a third nav band. LastChildFill
+                         is off so the right-docked buttons keep their own
+                         widths (+ Queue was stretching to fill the row). -->
                     <DockPanel DockPanel.Dock="Top" Margin="4,0,4,8">
                         <TextBlock Text="TRACK BROWSER" FontSize="11" FontWeight="Bold"
                                    Foreground="{StaticResource TextDimBrush}" VerticalAlignment="Center"/>
-                        <Button Content="ARTIST" Margin="12,0,0,0"
-                                FontSize="10" Padding="6,3"
-                                ToolTip="Group tracks by tagged artist and album"
-                                Command="{Binding ShowArtistAlbumLayoutCommand}">
-                            <Button.Style>
-                                <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-                                    <Setter Property="FontSize" Value="10"/>
-                                    <Setter Property="Padding" Value="6,3"/>
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding IsArtistAlbumLayout}" Value="True">
-                                            <Setter Property="Background" Value="{StaticResource SelectionBrush}"/>
-                                            <Setter Property="Foreground" Value="{StaticResource AccentABrush}"/>
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </Button.Style>
-                        </Button>
-                        <Button Content="PATH" Margin="4,0,0,0"
-                                FontSize="10" Padding="6,3"
-                                ToolTip="Group tracks by their folder path"
-                                Command="{Binding ShowPathLayoutCommand}">
-                            <Button.Style>
-                                <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-                                    <Setter Property="FontSize" Value="10"/>
-                                    <Setter Property="Padding" Value="6,3"/>
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding IsPathLayout}" Value="True">
-                                            <Setter Property="Background" Value="{StaticResource SelectionBrush}"/>
-                                            <Setter Property="Foreground" Value="{StaticResource AccentABrush}"/>
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </Button.Style>
-                        </Button>
                         <Button DockPanel.Dock="Right" Content="Load &#x25B6;" Margin="8,0,0,0"
                                 Command="{Binding LoadSelectedTreeTrackCommand}"/>
                         <Button x:Name="ExpandButton" DockPanel.Dock="Right"
@@ -1270,10 +1305,56 @@
                                 FontSize="10" Padding="6,3"
                                 ToolTip="Add the selected track to the playback queue (Ctrl+Q)"
                                 Command="{Binding AddToQueueCommand}"/>
+                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal"
+                                    VerticalAlignment="Center" Margin="12,0,0,0">
+                            <Button Content="ARTIST"
+                                    ToolTip="Group tracks by tagged artist and album"
+                                    Command="{Binding ShowArtistAlbumLayoutCommand}">
+                                <Button.Style>
+                                    <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                        <Setter Property="FontSize" Value="10"/>
+                                        <Setter Property="Padding" Value="7,3"/>
+                                        <Setter Property="Background" Value="Transparent"/>
+                                        <Setter Property="BorderThickness" Value="0"/>
+                                        <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsArtistAlbumLayout}" Value="True">
+                                                <Setter Property="Background" Value="{StaticResource BorderBrush}"/>
+                                                <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Button.Style>
+                            </Button>
+                            <Button Content="PATH" Margin="2,0,0,0"
+                                    ToolTip="Group tracks by their folder path"
+                                    Command="{Binding ShowPathLayoutCommand}">
+                                <Button.Style>
+                                    <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                        <Setter Property="FontSize" Value="10"/>
+                                        <Setter Property="Padding" Value="7,3"/>
+                                        <Setter Property="Background" Value="Transparent"/>
+                                        <Setter Property="BorderThickness" Value="0"/>
+                                        <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsPathLayout}" Value="True">
+                                                <Setter Property="Background" Value="{StaticResource BorderBrush}"/>
+                                                <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Button.Style>
+                            </Button>
+                        </StackPanel>
                         <!-- Filter + sort strip, shared with the Spotify and YouTube
                              lists. Its filter box writes into SearchText, so the tree
-                             keeps filtering exactly as before. -->
-                        <ContentControl Margin="12,0,0,0" VerticalAlignment="Center"
+                             keeps filtering exactly as before. It is the toolbar's
+                             fill child (last child, so LastChildFill gives it the
+                             row), and its star column takes all the slack between the
+                             TRACK BROWSER label and the ARTIST / PATH group: no fixed
+                             width. The 12 px right margin is the gap to that group,
+                             which sits just left of + Queue. -->
+                        <ContentControl Margin="12,0,12,0" VerticalAlignment="Center"
                                         Focusable="False"
                                         Content="{Binding LibraryView}"
                                         ContentTemplate="{StaticResource FilterSortStrip}"/>
@@ -1297,7 +1378,7 @@
                                 <!-- + New (inline name, same pattern as the YouTube manage strip) -->
                                 <Button DockPanel.Dock="Top" Content="+ New" HorizontalAlignment="Left"
                                         FontSize="10" Padding="5,2" Margin="2,0,2,4"
-                                        ToolTip="Create an app-owned playlist"
+                                        ToolTip="Create an app-owned playlist from library tracks, or right-click a track and choose Add to playlist"
                                         Command="{Binding BeginCreatePlaylistCommand}"
                                         Visibility="{Binding IsNotCreatingPlaylist, Converter={StaticResource BoolToVisibility}}"/>
 
@@ -1315,11 +1396,6 @@
                                     <Button Content="&#x2715;" FontSize="10" Padding="4,1" Margin="2,0,0,0"
                                             ToolTip="Cancel" Command="{Binding CancelCreatePlaylistCommand}"/>
                                 </StackPanel>
-
-                                <TextBlock DockPanel.Dock="Top" TextWrapping="Wrap" FontSize="10" Margin="4,0,6,4"
-                                           Text="No playlists yet. Use + New to make one from library tracks, or right-click a track and choose Add to playlist."
-                                           Foreground="{StaticResource TextDimBrush}"
-                                           Visibility="{Binding HasNoInternalPlaylists, Converter={StaticResource BoolToVisibility}}"/>
 
                                 <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                                     <ItemsControl ItemsSource="{Binding PlaylistRail}">
@@ -1521,7 +1597,7 @@
                             </DockPanel>
                         </Border>
 
-                        <Grid Grid.Column="1">
+                        <Grid Grid.Column="1" Margin="6,0,0,0">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
@@ -1550,7 +1626,8 @@
                                       ItemTemplate="{StaticResource LibraryNodeRow}"
                                       ContextMenu="{StaticResource TrackMenu}"
                                       Tag="{Binding TrackMenu}"
-                                      ScrollViewer.CanContentScroll="True">
+                                      ScrollViewer.CanContentScroll="True"
+                                      ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                                 <!-- Virtualisation is the difference between "5 000 rows
                                      open in 10 s" and a scrolled window: without it every
                                      TreeViewItem of every expanded folder is built, even
@@ -1893,9 +1970,10 @@
                                   SelectedItem="{Binding SelectedLyricsSource}"
                                   ToolTip="Lyric provider for this track (Auto = normal priority chain)"/>
 
-                        <Button x:Name="LyricsSourceMoreButton" Grid.Column="2" Content="&#x22EF;"
+                        <Button x:Name="LyricsSourceMoreButton" Grid.Column="2" Content="&#x2026;"
                                 Width="20" Height="20" Margin="4,0,0,0" Padding="0" FontSize="12"
                                 VerticalAlignment="Center"
+                                AutomationProperties.Name="Try other lyric sources"
                                 ToolTip="Try other lyric sources&#10;for this track"
                                 Command="{Binding TryOtherSourcesCommand}"/>
 
@@ -2166,7 +2244,7 @@
              pause/resume, cancel-all and retry keep working. The log is a third
              tab, not a competing pane. Collapsed it is a single 30 px strip that
              still states what is running, so nothing hides behind an icon. -->
-        <Border Grid.Row="4" Style="{StaticResource Card}" Padding="0" Margin="0,6,0,0"
+        <Border Grid.Row="5" Style="{StaticResource Card}" Padding="0" Margin="0,6,0,0"
                 AutomationProperties.Name="Activity console">
             <DockPanel>
                 <DockPanel DockPanel.Dock="Top" Margin="8,3,8,3" LastChildFill="False">
@@ -2241,7 +2319,7 @@
                                 <ItemsControl ItemsSource="{Binding Rows, Source={x:Static activity:ActivityFeed.Shared}}">
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate>
-                                            <Border x:Name="jobRow" Height="28" Margin="0,0,0,2" Padding="6,0"
+                                            <Border x:Name="jobRow" MinHeight="28" Margin="0,0,0,2" Padding="6,0"
                                                     CornerRadius="3" BorderThickness="1"
                                                     ToolTip="{Binding Detail}">
                                                 <Border.Style>
@@ -2252,6 +2330,13 @@
                                                             <DataTrigger Binding="{Binding State}" Value="Failed">
                                                                 <Setter Property="BorderBrush" Value="{StaticResource DangerBrush}"/>
                                                                 <Setter Property="Background" Value="#241A1E"/>
+                                                            </DataTrigger>
+                                                            <!-- A standing condition, not a failed job: amber
+                                                                 border and tint, so it reads as "look at this"
+                                                                 without borrowing the failure colour. -->
+                                                            <DataTrigger Binding="{Binding State}" Value="Warning">
+                                                                <Setter Property="BorderBrush" Value="{StaticResource WarningBrush}"/>
+                                                                <Setter Property="Background" Value="#241F14"/>
                                                             </DataTrigger>
                                                             <DataTrigger Binding="{Binding State}" Value="Cancelled">
                                                                 <Setter Property="Opacity" Value="0.6"/>
@@ -2265,6 +2350,14 @@
                                                         <RowDefinition Height="3"/>
                                                     </Grid.RowDefinitions>
                                                     <Grid VerticalAlignment="Center">
+                                                        <Grid.RowDefinitions>
+                                                            <!-- The job's own line. -->
+                                                            <RowDefinition Height="Auto"/>
+                                                            <!-- Its message, on its own line: at 170 px
+                                                                 wide the stage column cut every long
+                                                                 error off before its instruction. -->
+                                                            <RowDefinition Height="Auto"/>
+                                                        </Grid.RowDefinitions>
                                                         <Grid.ColumnDefinitions>
                                                             <ColumnDefinition Width="74"/>
                                                             <ColumnDefinition Width="*"/>
@@ -2312,12 +2405,18 @@
                                                                         <DataTrigger Binding="{Binding State}" Value="Failed">
                                                                             <Setter Property="Text" Value="{Binding Title, StringFormat={}⚠ {0}}"/>
                                                                         </DataTrigger>
+                                                                        <!-- A standing condition gets the same mark: nothing
+                                                                             failed, but the operator still needs to see it. -->
+                                                                        <DataTrigger Binding="{Binding State}" Value="Warning">
+                                                                            <Setter Property="Text" Value="{Binding Title, StringFormat={}⚠ {0}}"/>
+                                                                        </DataTrigger>
                                                                     </Style.Triggers>
                                                                 </Style>
                                                             </TextBlock.Style>
                                                         </TextBlock>
 
-                                                        <!-- Stage, or the error itself on a failed row -->
+                                                        <!-- The state, always as a word. The message
+                                                             itself now has its own line below. -->
                                                         <TextBlock Grid.Column="2" FontSize="10"
                                                                    VerticalAlignment="Center"
                                                                    TextTrimming="CharacterEllipsis"
@@ -2328,8 +2427,35 @@
                                                                     <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
                                                                     <Style.Triggers>
                                                                         <DataTrigger Binding="{Binding State}" Value="Failed">
-                                                                            <Setter Property="Text" Value="{Binding Detail}"/>
                                                                             <Setter Property="Foreground" Value="{StaticResource DangerBrush}"/>
+                                                                        </DataTrigger>
+                                                                        <DataTrigger Binding="{Binding State}" Value="Warning">
+                                                                            <Setter Property="Foreground" Value="{StaticResource WarningBrush}"/>
+                                                                        </DataTrigger>
+                                                                    </Style.Triggers>
+                                                                </Style>
+                                                            </TextBlock.Style>
+                                                        </TextBlock>
+
+                                                        <!-- The message, on its own line under the title
+                                                             and full width, so a long error keeps the
+                                                             sentence that says what to do. Wraps rather
+                                                             than trims. One line of the console for a job
+                                                             that has nothing to say, two when it does. -->
+                                                        <TextBlock x:Name="jobDetail" Grid.Row="1" Grid.Column="1"
+                                                                   Grid.ColumnSpan="5" FontSize="10"
+                                                                   TextWrapping="Wrap" Margin="0,1,8,4"
+                                                                   Text="{Binding Detail}"
+                                                                   Visibility="{Binding ShowsMessage, Converter={StaticResource BoolToVisibility}}">
+                                                            <TextBlock.Style>
+                                                                <Style TargetType="TextBlock">
+                                                                    <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+                                                                    <Style.Triggers>
+                                                                        <DataTrigger Binding="{Binding State}" Value="Failed">
+                                                                            <Setter Property="Foreground" Value="{StaticResource DangerBrush}"/>
+                                                                        </DataTrigger>
+                                                                        <DataTrigger Binding="{Binding State}" Value="Warning">
+                                                                            <Setter Property="Foreground" Value="{StaticResource WarningBrush}"/>
                                                                         </DataTrigger>
                                                                     </Style.Triggers>
                                                                 </Style>
@@ -2349,6 +2475,9 @@
                                                                         </DataTrigger>
                                                                         <DataTrigger Binding="{Binding State}" Value="Failed">
                                                                             <Setter Property="Foreground" Value="{StaticResource DangerBrush}"/>
+                                                                        </DataTrigger>
+                                                                        <DataTrigger Binding="{Binding State}" Value="Warning">
+                                                                            <Setter Property="Foreground" Value="{StaticResource WarningBrush}"/>
                                                                         </DataTrigger>
                                                                     </Style.Triggers>
                                                                 </Style>
@@ -2751,7 +2880,7 @@
              Collapsed by default; the header alone is ~34 px, which is what keeps
              the window scroll-free at 1400x900. Everything inside binds to the
              Board VM, so a missing board simply leaves an empty (collapsed) panel. -->
-        <Border Grid.Row="5" Style="{StaticResource Card}" Padding="0" Margin="0,6,0,0"
+        <Border Grid.Row="6" Style="{StaticResource Card}" Padding="0" Margin="0,6,0,0"
                 DataContext="{Binding Soundboard}">
             <Expander Style="{StaticResource SoundboardExpander}" IsExpanded="False">
                 <Grid>
@@ -2865,7 +2994,7 @@
         </Border>
 
         <!-- ================= Footer ================= -->
-        <DockPanel Grid.Row="6" Margin="0,8,0,0">
+        <DockPanel Grid.Row="7" Margin="0,8,0,0">
             <Button Content="&#x1F4C1; Folders" Click="OnSettingsButtonClick"
                     ToolTip="Configure the Music and Karaoke folders"/>
             <TextBlock Margin="10,0" VerticalAlignment="Center"

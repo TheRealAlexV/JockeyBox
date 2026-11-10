@@ -14,6 +14,14 @@ public enum DownloadState
     Done,
     Failed,
     Cancelled,
+
+    /// <summary>
+    /// Not a job that ran: a standing condition the operator should know about,
+    /// such as a feature that stays off until something is installed. Finished
+    /// like the rest, so it clears with the others, but it is not a failure and
+    /// is never coloured like one.
+    /// </summary>
+    Warning,
 }
 
 /// <summary>Where a queued download is going.</summary>

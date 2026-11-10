@@ -6,7 +6,6 @@ using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
-using System.Windows.Threading;
 using JockeyBox.Library;
 using JockeyBox.ViewModels;
 using JockeyBox.Views;
@@ -25,7 +24,7 @@ namespace JockeyBox.Selftest;
 /// </summary>
 internal static class PerfProbe
 {
-    public static bool Requested(string[] args) => Find(args, "--perf") != null;
+    public static bool Requested(string[] args) => Harness.Flag(args, "--perf") != null;
 
     public static int Run(string[] args)
     {
@@ -60,7 +59,7 @@ internal static class PerfProbe
         window.Show();
 
         int width = 1600, height = 1000;
-        string? sizeText = Find(args, "--perf-size");
+        string? sizeText = Harness.Flag(args, "--perf-size");
         if (sizeText != null)
         {
             string[] parts = sizeText.Split('x', 'X');
@@ -90,9 +89,9 @@ internal static class PerfProbe
         // First run on a fresh sandbox scans the fixture library; wait for it so
         // the switch numbers are measured against a non-empty library.
         int waitMs = 600000;
-        var waited = PumpUntil(() => vm.Tracks.Count > 0, waitMs);
+        var waited = UiPump.PumpUntil(() => vm.Tracks.Count > 0, waitMs);
         startup.Stop();
-        Pump(400);
+        UiPump.Pump(400);
         window.UpdateLayout();
 
         Line($"perf: startup total={startup.Elapsed.TotalMilliseconds:F0}ms tracks={vm.Tracks.Count} playlists={vm.PlaylistRail.Count} library-waited={waited}");
@@ -139,7 +138,7 @@ internal static class PerfProbe
             var sw = Stopwatch.StartNew();
             vm.SelectPlaylistCommand.Execute(entry.row);
             var afterCommand = sw.Elapsed.TotalMilliseconds;
-            PumpUntil(() => !vm.IsPlaylistLoading, 120000);
+            UiPump.PumpUntil(() => !vm.IsPlaylistLoading, 120000);
             var settled = sw.Elapsed.TotalMilliseconds;
 
             window.UpdateLayout();
@@ -151,7 +150,7 @@ internal static class PerfProbe
             Line($"perf: switch name={entry.name} stored={entry.stored} command={afterCommand:F1}ms settle={settled:F1}ms layout={layout.Elapsed.TotalMilliseconds:F1}ms realized={realized}");
             Line($"perf: switch phases {PerfTrace.Dump()}");
             switchResults.Add((entry.name, afterCommand, settled, entry.stored));
-            Pump(120);
+            UiPump.Pump(120);
         }
 
         // Warm repeats: every playlist is cached now, so this is the "clicking
@@ -163,7 +162,7 @@ internal static class PerfProbe
             foreach (var entry in rowsByPlaylist)
             {
                 vm.SelectPlaylistCommand.Execute(entry.row);
-                PumpUntil(() => !vm.IsPlaylistLoading, 120000);
+                UiPump.PumpUntil(() => !vm.IsPlaylistLoading, 120000);
                 content?.UpdateLayout();
                 warmSwitches++;
             }
@@ -176,7 +175,7 @@ internal static class PerfProbe
         if (big.row != null)
         {
             vm.SelectPlaylistCommand.Execute(big.row);
-            PumpUntil(() => !vm.IsPlaylistLoading, 120000);
+            UiPump.PumpUntil(() => !vm.IsPlaylistLoading, 120000);
             content?.UpdateLayout();
 
             var expand = Stopwatch.StartNew();
@@ -267,14 +266,14 @@ internal static class PerfProbe
             addWatch.Stop();
             Line($"perf: mutation add3 ui-ms={addWatch.Elapsed.TotalMilliseconds:F1} rows={scratch.Tracks.Count} last-save={store.LastSaveStatsForPerf ?? "deferred"}");
 
-            Pump(1200);
+            UiPump.Pump(1200);
             Line($"perf: mutation settled last-save={store.LastSaveStatsForPerf ?? "deferred"}");
 
             var deleteWatch = Stopwatch.StartNew();
             store.Remove(scratch);
             deleteWatch.Stop();
             Line($"perf: mutation delete ui-ms={deleteWatch.Elapsed.TotalMilliseconds:F1}");
-            Pump(1200);
+            UiPump.Pump(1200);
         }
 
         // ---- drag burst: 20 reorders inside the 5 272-row list ---------------
@@ -294,7 +293,7 @@ internal static class PerfProbe
             }
             dragWatch.Stop();
             Line($"perf: drag moves=40 rows={rows} total={dragWatch.Elapsed.TotalMilliseconds:F0}ms per-move={dragWatch.Elapsed.TotalMilliseconds / 40:F1}ms");
-            Pump(1200);
+            UiPump.Pump(1200);
             Line($"perf: drag mirror-writes={store.JsonMirrorWritesForPerf - writesBefore} last-save={store.LastSaveStatsForPerf ?? "deferred"}");
 
             // The flow that used to hurt most: edit the list, then switch away.
@@ -310,7 +309,7 @@ internal static class PerfProbe
         if (vm.PlaylistRail.FirstOrDefault(r => r.Playlist is { IsInternal: false })?.Playlist is { } target)
         {
             vm.SelectPlaylistCommand.Execute(vm.PlaylistRail.First(r => ReferenceEquals(r.Playlist, target)));
-            PumpUntil(() => !vm.IsPlaylistLoading, 120000);
+            UiPump.PumpUntil(() => !vm.IsPlaylistLoading, 120000);
             content?.UpdateLayout();
 
             var add = Stopwatch.StartNew();
@@ -331,11 +330,11 @@ internal static class PerfProbe
             add.Stop();
             Line($"perf: mutation add3 target={target.Name} rows={target.Tracks.Count} ui-ms={add.Elapsed.TotalMilliseconds:F1} store-rev={store?.Revision}");
 
-            Pump(2000);
+            UiPump.Pump(2000);
             Line($"perf: mutation save {store?.LastSaveStatsForPerf ?? "n/a"}");
         }
 
-        string? outPath = Find(args, "--perf-out");
+        string? outPath = Harness.Flag(args, "--perf-out");
         if (!string.IsNullOrWhiteSpace(outPath))
         {
             try
@@ -385,46 +384,6 @@ internal static class PerfProbe
             if (child is T hit) return hit;
             var deep = FindDescendant<T>(child);
             if (deep != null) return deep;
-        }
-        return null;
-    }
-
-    private static bool PumpUntil(Func<bool> condition, int timeoutMs)
-    {
-        var watch = Stopwatch.StartNew();
-        while (!condition() && watch.ElapsedMilliseconds < timeoutMs)
-            Pump(25);
-        return condition();
-    }
-
-    private static void Pump(int milliseconds)
-    {
-        var frame = new DispatcherFrame();
-        var timer = new DispatcherTimer(DispatcherPriority.Background)
-        {
-            Interval = TimeSpan.FromMilliseconds(Math.Max(1, milliseconds)),
-        };
-        timer.Tick += (_, _) =>
-        {
-            timer.Stop();
-            frame.Continue = false;
-        };
-        timer.Start();
-        Dispatcher.PushFrame(frame);
-    }
-
-    private static string? Find(string[] args, string flag)
-    {
-        for (int i = 0; i < args.Length; i++)
-        {
-            if (string.Equals(args[i], flag, StringComparison.OrdinalIgnoreCase))
-            {
-                if (i + 1 < args.Length && !args[i + 1].StartsWith("--", StringComparison.Ordinal))
-                    return args[i + 1];
-                return "";
-            }
-            if (args[i].StartsWith(flag + "=", StringComparison.OrdinalIgnoreCase))
-                return args[i][(flag.Length + 1)..];
         }
         return null;
     }
