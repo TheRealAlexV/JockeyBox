@@ -54,23 +54,68 @@ is_scratch() {
   return 1
 }
 
+# Best effort list an operator can act on: PID, start time, path. It decides
+# nothing - app_running() has already concluded - it only says what to close.
+print_running_processes() {
+  command -v powershell.exe >/dev/null 2>&1 || return 0
+  timeout 60 powershell.exe -NoProfile -NonInteractive -Command \
+    'Get-Process -Name JockeyBox -ErrorAction SilentlyContinue | ForEach-Object { "      pid {0}  started {1}  {2}" -f $_.Id, $_.StartTime, $_.Path }' \
+    2>/dev/null | tr -d '\r' || true
+}
+
 # Refuse to touch the install while Windows has the app running. Never kills it.
+#
+# Fails CLOSED (2026-11-11): only a positive, parsed answer of "no matching
+# process" counts as not running. A missing tool, a non-zero exit, a timeout, or
+# empty output all mean we do not know - and guessing "not running" is what puts
+# this script into a copy of a locked exe, where the operator sees
+# "cp: cannot remove ...: Input/output error" instead of a clean refusal.
 app_running() {
+  local out rc why=""
+
   if command -v tasklist.exe >/dev/null 2>&1; then
-    timeout 30 tasklist.exe /FI "IMAGENAME eq JockeyBox.exe" /NH /FO CSV 2>/dev/null \
-      | grep -qi '^"JockeyBox.exe"'
-    return $?
-  fi
-  if command -v powershell.exe >/dev/null 2>&1; then
-    if timeout 60 powershell.exe -NoProfile -NonInteractive -Command \
-        'if (Get-Process -Name JockeyBox -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }' \
-        >/dev/null 2>&1; then
+    out="$(timeout 30 tasklist.exe /FI "IMAGENAME eq JockeyBox.exe" /NH /FO CSV 2>/dev/null)" && rc=0 || rc=$?
+    if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -qi '^"JockeyBox\.exe"'; then
+      echo "    app     running: tasklist.exe reports a match (exit $rc)"
+      printf '%s\n' "$out" | grep -i '^"JockeyBox\.exe"' | sed 's/^/      /'
+      print_running_processes
       return 0
     fi
-    return 1
+    if [ "$rc" -ne 0 ]; then
+      why="tasklist.exe exited $rc"
+    elif [ -z "$(printf '%s' "$out" | tr -d '[:space:]')" ]; then
+      why="tasklist.exe returned no output"
+    else
+      # Non-empty and no JockeyBox.exe row: that is tasklist's own notice that
+      # nothing matched. The one answer we trust.
+      echo "    app     not running: tasklist.exe found no JockeyBox.exe"
+      return 1
+    fi
+  else
+    why="tasklist.exe not in PATH"
   fi
-  echo "deploy-portable: cannot probe for a running JockeyBox.exe (no tasklist.exe or powershell.exe in PATH)." >&2
-  echo "deploy-portable: close the app and re-run where Windows interop works." >&2
+
+  # tasklist did not answer usably - ask Windows a second way before deciding.
+  if command -v powershell.exe >/dev/null 2>&1; then
+    out="$(timeout 60 powershell.exe -NoProfile -NonInteractive -Command \
+      'Get-Process -Name JockeyBox -ErrorAction SilentlyContinue | ForEach-Object { "      pid {0}  started {1}  {2}" -f $_.Id, $_.StartTime, $_.Path }' 2>/dev/null)" && rc=0 || rc=$?
+    out="$(printf '%s' "$out" | tr -d '\r')"
+    if [ "$rc" -eq 0 ] && [ -n "$(printf '%s' "$out" | tr -d '[:space:]')" ]; then
+      echo "    app     running: powershell.exe reports a match (tasklist: $why)"
+      printf '%s\n' "$out" | sed 's/^/    /'
+      return 0
+    fi
+    if [ "$rc" -eq 0 ]; then
+      echo "    app     not running: powershell.exe found no JockeyBox process (tasklist: $why)"
+      return 1
+    fi
+    why="$why; powershell.exe exited $rc"
+  else
+    why="$why; powershell.exe not in PATH"
+  fi
+
+  echo "    app     cannot tell ($why) - assuming JockeyBox.exe is running." >&2
+  echo "deploy-portable: refusing to touch the install: cannot prove the app is closed." >&2
   return 0
 }
 
