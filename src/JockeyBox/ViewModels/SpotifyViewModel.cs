@@ -569,7 +569,10 @@ public partial class SpotifyViewModel : ObservableObject
 
         if (string.IsNullOrWhiteSpace(track.VideoId))
         {
-            StatusText = "No YouTube version chosen for that track yet \u2014 find versions first.";
+            // The dead end the search window exists to remove: a row with no
+            // upload picked cannot be auditioned, so open the search for it
+            // instead of telling the operator to go and find one somewhere else.
+            FindYouTubeVersion(track);
             return;
         }
 
@@ -601,13 +604,82 @@ public partial class SpotifyViewModel : ObservableObject
 
     private static string PreviewUrl(string videoId) => $"https://www.youtube.com/watch?v={videoId}";
 
+    /// <summary>Hand one already-chosen upload to the browser.</summary>
     [RelayCommand]
     private void OpenVersionOnYouTube(VersionCandidate? candidate) => OpenOnYouTube(candidate?.Entry.VideoId);
 
+    /// <summary>
+    /// "Find on YouTube": open the search window for the selected row, filled in
+    /// with its artist and title. This is the menu item's primary action now -
+    /// opening a video id in a browser left the row unfixed, because the row only
+    /// ever had an id once someone had already chosen an upload for it.
+    /// </summary>
     [RelayCommand]
-    private void OpenSelectedOnYouTube() =>
-        OpenOnYouTube(SelectedTrack?.VideoId ?? VersionsTarget?.VideoId);
+    private void OpenSelectedOnYouTube() => FindYouTubeVersion(SelectedTrack ?? VersionsTarget);
 
+    /// <summary>
+    /// The window the operator is auditioning uploads in. One at a time: the
+    /// second entry point retargets it rather than stacking a twin on top.
+    /// </summary>
+    private YouTubeSearchWindow? _searchWindow;
+
+    /// <summary>
+    /// Open the search window for <paramref name="track"/>, or refocus the open
+    /// one. The query is the row's own "Artist Title", which is exactly what the
+    /// versions panel and the download queue search with, so a pick here means
+    /// the same thing a pick there does.
+    /// </summary>
+    private void FindYouTubeVersion(SourceTrack? track)
+    {
+        if (track is null)
+        {
+            StatusText = "Pick a row first, then search YouTube for it.";
+            return;
+        }
+
+        // Re-targeting means the old window's preview must not keep streaming
+        // under a new list, and the old window's pick action belongs to a row
+        // the operator is no longer looking at.
+        if (_searchWindow is { IsLoaded: true })
+        {
+            _searchWindow.Close();
+            _searchWindow = null;
+        }
+
+        var query = track.SearchQuery;
+        var vm = new YouTubeSearchViewModel(_settings, _stream, query, track.DisplayName, entry => ChooseVersion(track, entry));
+        var window = new YouTubeSearchWindow(vm);
+        var owner = Application.Current?.MainWindow;
+        if (owner != null && owner.IsVisible && !ReferenceEquals(owner, window))
+            window.Owner = owner;
+
+        _searchWindow = window;
+        window.Closed += (_, _) => _searchWindow = null;
+        window.Show();
+        StatusText = $"Looking for \u201c{query}\u201d on YouTube.";
+    }
+
+    /// <summary>
+    /// "Use" from the search window: the same state the versions panel's pick
+    /// sets - VideoId is the upload to fetch, the row keeps its Spotify identity
+    /// - minus the download, because auditioning a song is not ordering it. The
+    /// row can then be previewed and queued from the tab.
+    /// </summary>
+    private void ChooseVersion(SourceTrack target, YtEntry entry)
+    {
+        target.VideoId = entry.VideoId;
+        target.State = SourceTrackState.New;
+        target.Error = null;
+        Log.Info($"Spotify: {target.DisplayName} -> YouTube {entry.VideoId} \"{entry.Title}\" ({entry.Uploader})");
+
+        StatusText = $"{target.DisplayName} now uses \u201c{entry.Title}\u201d ({entry.Uploader}).";
+
+        // The versions panel listed candidates for this row and the operator has
+        // just answered the question it was asking.
+        if (ReferenceEquals(VersionsTarget, target)) CloseVersions();
+    }
+
+    /// <summary>Browser fallback for a row that already has an upload picked.</summary>
     private void OpenOnYouTube(string? videoId)
     {
         if (string.IsNullOrWhiteSpace(videoId))

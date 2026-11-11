@@ -8,9 +8,11 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using JockeyBox.Playback;
 using JockeyBox.Tools;
 using JockeyBox.ViewModels;
 using JockeyBox.Views;
+using JockeyBox.YouTube;
 
 namespace JockeyBox.Selftest;
 
@@ -65,9 +67,32 @@ internal static class UiShot
             $"uishot: home {AppPaths.Home}, settings {settingsPath}, last-write {settingsStamp}");
         Console.Out.Flush();
 
-        Window window = target == "settings"
-            ? new SettingsWindow(Settings.AppSettings.Load())
-            : new MainWindow();
+        Window window = target switch
+        {
+            "settings" => new SettingsWindow(Settings.AppSettings.Load()),
+            "youtubesearch" => new YouTubeSearchWindow(StubYouTubeSearch(Harness.Flag(args, "--uishot-audition") != null)),
+            "youtubetab" => new MainWindow(),
+            "spotifytab" => new MainWindow(),
+            _ => new MainWindow(),
+        };
+
+        // A tab capture has to open on its tab. Selecting it before Show is how
+        // the app looks the moment the tab is clicked, and needs no posted input:
+        // this window is shown offscreen and never activated, so a synthesized
+        // click would land on whatever has focus on the desktop instead.
+        string? tabHeader = target switch
+        {
+            "youtubetab" => "YOUTUBE",
+            "spotifytab" => "SPOTIFY",
+            _ => null,
+        };
+
+        if (tabHeader != null && !SelectBrowserTab(window, tabHeader))
+        {
+            Console.Error.WriteLine($"uishot: no browser tab headed {tabHeader}");
+            Console.Error.Flush();
+            return 3;
+        }
 
         window.WindowStartupLocation = WindowStartupLocation.Manual;
         window.Left = -6000;
@@ -82,6 +107,16 @@ internal static class UiShot
             mainWindow.ConsoleToggle.IsChecked = true;
 
 
+
+        // --uishot-rows: fill the YouTube tab's list with the same literal rows the
+        // search window uses, so the row template, its density and its clipping are
+        // photographable. Without it every YouTube capture shows an empty list and
+        // nothing about a row has ever been proven. No search, no network, no yt-dlp.
+        if (Harness.Flag(args, "--uishot-rows") != null && window.DataContext is MainViewModel rowsVm)
+        {
+            foreach (var entry in StubSearchRows) rowsVm.YouTube.Results.Add(entry);
+            rowsVm.YouTube.SelectedResult = rowsVm.YouTube.Results[0];
+        }
 
         window.Show();
 
@@ -341,6 +376,11 @@ internal static class UiShot
         // a binding that resolved to nothing from one that resolved and then laid
         // out at zero width, because both leave no glyphs behind. The visual tree
         // separates them, so keep the dump rather than re-deriving it per capture.
+        // Opt-in: the laid-out box of each track list. A list squeezed shut holds no
+        // text, so the text dump cannot show how much of it there is and "how many
+        // rows fit" would be a guess rather than a measurement.
+        if (Harness.Flag(args, "--uishot-measure") != null) MeasureTrackLists(host);
+
         string? textDumpPath = Harness.Flag(args, "--uishot-textdump");
         if (!string.IsNullOrWhiteSpace(textDumpPath)) DumpTextBlocks(host, textDumpPath);
 
@@ -572,6 +612,163 @@ internal static class UiShot
         }
 
         return region.Contains(bounds) ? "inside" : "clipped";
+    }
+
+    /// <summary>
+    /// Select a browser tab by its header text. Header, not index: an inserted tab
+    /// would silently change what a number means, and a capture that photographs
+    /// the wrong tab is worse than no capture.
+    /// </summary>
+    private static bool SelectBrowserTab(Window window, string header)
+    {
+        if (window is not MainWindow main) return false;
+
+        foreach (var item in main.BrowserTabs.Items)
+        {
+            if (item is TabItem tab && string.Equals(tab.Header as string, header, StringComparison.Ordinal))
+            {
+                main.BrowserTabs.SelectedItem = tab;
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// <c>--uishot-window youtubesearch</c>: the Find on YouTube window with its
+    /// results already listed.
+    ///
+    /// <para><b>Why literal rows.</b> A capture must be the same picture on every
+    /// run, and this path must never reach the network: a real search would make
+    /// the PNG depend on what YouTube returned that minute and would put yt-dlp
+    /// inside the capture. The window only searches on open while its list is
+    /// empty, so filling the list here is also what keeps the run offline.</para>
+    ///
+    /// <para><b>What it cannot show.</b> The audition strip at the bottom is bound
+    /// to the shared preview transport's real state and only appears while that
+    /// transport is streaming this window's own URL. Showing it would mean
+    /// starting audio in a headless capture, so it is absent from the picture
+    /// rather than faked.</para>
+    /// </summary>
+    private static YouTubeSearchViewModel StubYouTubeSearch(bool auditioning)
+    {
+        var vm = new YouTubeSearchViewModel(
+            Settings.AppSettings.Load(),
+            StreamPreviewTransport.CreateDefault(),
+            "Daft Punk Around The World",
+            "Daft Punk \u2014 Around The World",
+            pick: _ => { });
+
+        foreach (var entry in StubSearchRows) vm.Results.Add(entry);
+
+        // The state the window is in right after its own search: first row selected.
+        vm.SelectedResult = vm.Results[0];
+
+        // --uishot-audition: the strip's own layout, from a stubbed state. Nothing
+        // is streamed and no audio starts - the transport is untouched, so this
+        // proves the strip lays out, not that a real preview works. Off by default
+        // so the ordinary capture never shows a state the app was not in.
+        if (auditioning)
+        {
+            vm.PreviewTitle = StubSearchRows[0].Title;
+            vm.PreviewClock = "0:42 / 4:09";
+            vm.PlayGlyph = "\u23F8";
+            vm.HasPreview = true;
+        }
+
+        return vm;
+    }
+
+    /// <summary>Rows the capture lists, in the order a search ranks them.</summary>
+    private static readonly YtEntry[] StubSearchRows =
+    {
+        new("K0HSD_i2DvA", "Daft Punk - Around The World (Official Video)", "Daft Punk", 249, null, 402_331_884, false),
+        new("sQ7Z7x1z8xw", "Daft Punk - Around The World (Official Audio)", "Daft Punk", 250, null, 61_204_772, false),
+        new("1k3x5wFq9n4", "Around The World (Extended Version)", "Daft Punk Archive", 428, null, 3_918_402, false),
+        new("Ht7cZ5xT0nA", "Daft Punk - Around The World (Live at Coachella 2006)", "festival recordings", 312, null, 12_884_019, false),
+        new("pQ2sYbT8mRc", "Around The World - Daft Punk (Lyrics)", "LyricVault", 252, null, 8_772_310, false),
+        new("Zx9Lm2Kq7Vw", "Daft Punk - Around The World (Funk Cover)", "The Groove Unit", 261, null, 214_905, false),
+        new("c4Bd1nR8WyT", "Around The World (Remix) - Daft Punk", "House Tools", 379, null, 1_102_447, false),
+        new("M8v0Pd6YsQz", "Daft Punk - Around The World (Bass Boosted)", "Bass Channel", 251, null, 5_338_901, false),
+    };
+
+    /// <summary>
+    /// <c>--uishot-measure</c>: the laid-out box of each track list, in px, and how
+    /// many whole rows that box holds. Row pitch comes from the row template's own
+    /// numbers: TrackRowGrid is a fixed 28 px and the item container adds 3 px above
+    /// and below, so a row is 34 px and a partly visible row does not count.
+    /// </summary>
+    private static void MeasureTrackLists(Visual root)
+    {
+        const double rowPitch = 34;
+
+        foreach (var view in Descendants<YouTubeView>(root))
+        {
+            var list = view.ResultList;
+            Console.Out.WriteLine(
+                $"uishot: youtube ResultList {list.ActualWidth:0.0}x{list.ActualHeight:0.0} px -> {Math.Floor(list.ActualHeight / rowPitch):0} whole rows");
+            DumpRowChain(list);
+        }
+
+        // Every list in the tree, named, so two tabs in the same browser card can be
+        // compared without a second flag per view. A list that is squeezed has no
+        // text of its own, so this is the only place its size shows up. TreeView is
+        // here because the Library tab's track table is one, not a ListBox.
+        foreach (var element in Descendants<FrameworkElement>(root))
+        {
+            if (element is not (ListBox or TreeView)) continue;
+            var name = string.IsNullOrEmpty(element.Name) ? element.GetType().Name : element.Name;
+            Console.Out.WriteLine($"uishot: list {name} {element.ActualWidth:0.0}x{element.ActualHeight:0.0} px");
+        }
+
+        Console.Out.Flush();
+    }
+
+    /// <summary>
+    /// Walk from an element up to the window, printing every Grid on the way with
+    /// the height each of its rows actually took.
+    ///
+    /// <para><b>Why.</b> A star row that measured zero paints nothing, so the
+    /// screenshot shows only the chrome that took the space and the list looks
+    /// "missing" rather than "squeezed". The row heights are the only evidence of
+    /// which row is the one eating the slot, and of what a fix actually bought.</para>
+    /// </summary>
+    private static void DumpRowChain(DependencyObject start)
+    {
+        for (var node = start; node is not null; node = VisualTreeHelper.GetParent(node))
+        {
+            if (node is not Grid grid || grid.RowDefinitions.Count < 2) continue;
+
+            var rows = new StringBuilder();
+            for (int i = 0; i < grid.RowDefinitions.Count; i++)
+            {
+                var def = grid.RowDefinitions[i];
+                double taken = 0;
+                foreach (var child in grid.Children.OfType<FrameworkElement>())
+                {
+                    if (Grid.GetRow(child) != i) continue;
+                    taken = Math.Max(taken, child.ActualHeight);
+                }
+
+                rows.Append($"  [{i}] {def.Height} -> {taken:0.0}");
+            }
+
+            Console.Out.WriteLine($"uishot:   grid rows:{rows}");
+        }
+    }
+
+    /// <summary>Every descendant of one type, in tree order.</summary>
+    private static IEnumerable<T> Descendants<T>(DependencyObject root)
+        where T : DependencyObject
+    {
+        int count = VisualTreeHelper.GetChildrenCount(root);
+        for (int i = 0; i < count; i++)
+        {
+            var child = VisualTreeHelper.GetChild(root, i);
+            if (child is T match) yield return match;
+            foreach (var nested in Descendants<T>(child)) yield return nested;
+        }
     }
 
     /// <summary>One field of the dump: newlines and tabs escaped, empty as <c>''</c>, 60 chars max.</summary>

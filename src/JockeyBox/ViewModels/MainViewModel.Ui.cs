@@ -117,6 +117,13 @@ public sealed class TrackMenuCapabilities : ObservableObject
     public ICommand? MakeKaraoke { get; init; }
     public ICommand? ShowInExplorer { get; init; }
     public ICommand? Tags { get; init; }
+
+    /// <summary>
+    /// "Find on YouTube" on a track row. Takes no parameter on purpose: it reads
+    /// the row the surface selected and opens the YouTube search window filled
+    /// with that row's "Artist Title", so the command carries a query rather than
+    /// a video id - a row with no upload picked yet has no id to carry.
+    /// </summary>
     public ICommand? FindOnYouTube { get; init; }
     public ICommand? FindOnSpotify { get; init; }
 

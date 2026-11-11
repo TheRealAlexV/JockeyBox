@@ -235,70 +235,76 @@
              Compact, one row above the panes: sign-in, remote playlist creation,
              and the two per-track writes. Every button's tooltip explains why it
              is disabled when it is. -->
-        <Grid Grid.Row="0" Height="26" Margin="0,0,0,6">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="Auto"/>
-                <ColumnDefinition Width="Auto"/>
-                <ColumnDefinition Width="Auto"/>
-                <ColumnDefinition Width="Auto"/>
-                <ColumnDefinition Width="Auto"/>
-                <ColumnDefinition Width="Auto"/>
-                <ColumnDefinition Width="Auto"/>
-                <ColumnDefinition Width="Auto"/>
-            </Grid.ColumnDefinitions>
+        <!-- One wrapping strip instead of nine rigid columns. At a wide window this is
+             still a single 26px row; when the pane cannot hold every button they flow
+             onto a second line instead of running under the right edge. -->
+        <WrapPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,6">
 
-            <TextBlock Grid.Column="0" Text="{Binding YouTubeAccountText}"
-                       FontSize="10.5" VerticalAlignment="Center"
-                       TextTrimming="CharacterEllipsis" Margin="0,0,10,0"
-                       ToolTip="The Google account YouTube writes will use. Credentials live in %APPDATA%\JockeyBox\youtube-oauth.json.">
-                <TextBlock.Style>
-                    <Style TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
-                        <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
-                        <Style.Triggers>
-                            <DataTrigger Binding="{Binding IsYouTubeConnected}" Value="True">
-                                <Setter Property="Foreground" Value="{StaticResource AccentABrush}"/>
-                            </DataTrigger>
-                        </Style.Triggers>
-                    </Style>
-                </TextBlock.Style>
-            </TextBlock>
+            <!-- Search lives in this strip, not in the pane: a 42 px input row of
+                 its own cost the results list a whole row, and at the designed size
+                 the pane barely has three. Same controls, same behaviour, same
+                 reachability - they just wrap onto another line when narrow instead
+                 of shortening the list. -->
+            <TextBox Width="150" FontSize="11.5" VerticalContentAlignment="Center"
+                     MinHeight="24" Margin="0,0,6,0"
+                     Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
+                     KeyDown="OnSearchKeyDown"
+                     ToolTip="Search YouTube by title, artist, a phrase, or a video / playlist link"
+                     AutomationProperties.Name="Search YouTube"/>
+            <Button Content="Search" Style="{StaticResource ToolButton}"
+                    MinWidth="64" Margin="0,0,10,0" VerticalAlignment="Center"
+                    Command="{Binding SearchCommand}" ToolTip="Search YouTube"/>
 
-            <Button Grid.Column="1" Content="{Binding YouTubeConnectLabel}"
+            <!-- Filter and sort for the results, kept with the query they narrow. -->
+            <ContentControl x:Name="FilterHost" Focusable="False" VerticalAlignment="Center"
+                            Margin="0,0,10,0"
+                            ContentTemplate="{StaticResource FilterSortStrip}"/>
+
+            <TextBlock Text="{Binding SearchStatus}" Style="{StaticResource MetaText}"
+                       MaxWidth="140" VerticalAlignment="Center" Margin="0,0,10,0"
+                       ToolTip="{Binding SearchStatus}" TextTrimming="CharacterEllipsis"/>
+
+            <Button Content="{Binding YouTubeConnectLabel}"
                     Style="{StaticResource ToolButton}" Margin="0,0,6,0"
                     Command="{Binding ConnectYouTubeCommand}"
                     ToolTip="Sign in with Google, or change the connected channel"/>
 
-            <Button Grid.Column="2" Content="Import my playlists"
+            <Button Content="Import my playlists"
                     Style="{StaticResource ToolButton}" Margin="0,0,6,0"
                     Command="{Binding ImportMyPlaylistsCommand}"
                     ToolTip="{Binding ImportMyPlaylistsHint}"/>
 
-            <Button Grid.Column="3" Content="Add to YouTube"
+            <Button Content="Add to YouTube"
                     Style="{StaticResource ToolButton}" Margin="0,0,6,0"
                     Command="{Binding AddSelectedToYouTubeCommand}"
                     ToolTip="{Binding AddToYouTubeHint}"/>
 
-            <Button Grid.Column="4" Content="Remove from YouTube"
+            <Button Content="Remove from YouTube"
                     Style="{StaticResource ToolButton}" Margin="0,0,10,0"
                     Command="{Binding RemoveFromYouTubeCommand}"
                     ToolTip="{Binding RemoveFromYouTubeHint}"/>
 
-            <TextBox Grid.Column="5" Width="118" Height="24" Padding="6,2" FontSize="11"
-                     VerticalContentAlignment="Center"
-                     Text="{Binding RemotePlaylistName, UpdateSourceTrigger=PropertyChanged}"
-                     ToolTip="Name for a new playlist created on your YouTube channel"/>
+            <!-- Creating a channel playlist is its own job, so it travels as one unit:
+                 a named field, its privacy and the button that creates it. Without the
+                 label an empty box reads as an unlabelled control. -->
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center" Margin="10,0,0,0">
+                <TextBlock Text="New playlist" Style="{StaticResource SectionLabel}" Margin="0,0,6,0"/>
+                <TextBox Width="118" Height="24" Padding="6,2" FontSize="11"
+                         VerticalContentAlignment="Center"
+                         Text="{Binding RemotePlaylistName, UpdateSourceTrigger=PropertyChanged}"
+                         ToolTip="Name for a new playlist created on your YouTube channel"/>
 
-            <ComboBox Grid.Column="6" Width="82" Height="24" FontSize="11" Margin="6,0,0,0"
-                      ItemsSource="{Binding PrivacyOptions}"
-                      SelectedItem="{Binding SelectedRemotePrivacy}"
-                      ToolTip="Privacy of the new YouTube playlist"/>
+                <ComboBox Width="82" Height="24" FontSize="11" Margin="6,0,0,0"
+                          ItemsSource="{Binding PrivacyOptions}"
+                          SelectedItem="{Binding SelectedRemotePrivacy}"
+                          ToolTip="Privacy of the new YouTube playlist"/>
 
-            <Button Grid.Column="7" Content="+ Remote"
-                    Style="{StaticResource ToolButton}" Margin="6,0,0,0"
-                    Command="{Binding CreateRemotePlaylistCommand}"
-                    ToolTip="{Binding CreateRemoteHint}"/>
-        </Grid>
+                <Button Content="+ Remote"
+                        Style="{StaticResource ToolButton}" Margin="6,0,0,0"
+                        Command="{Binding CreateRemotePlaylistCommand}"
+                        ToolTip="{Binding CreateRemoteHint}"/>
+            </StackPanel>
+        </WrapPanel>
 
         <!-- ================= Two panes, both full height ================= -->
         <Grid Grid.Row="1">
@@ -310,50 +316,57 @@
 
             <!-- ============ Search results ============ -->
             <Border Grid.Column="0" Style="{StaticResource PaneCard}">
-                <Grid>
+                <!-- The results list must never be squeezed shut.
+                     Measured on the live tree at 1400x900: the pane is handed 150 px
+                     and its fixed chrome needs 105 (head 14, search 42, paste 27,
+                     action foot 22, preview strip 0 while idle) plus 52 for the filter
+                     strip and the column headers. The star row was therefore receiving
+                     nothing and ResultList measured 0x0 at every window size, so no
+                     result could ever be shown at the size the app is designed for.
+                     The Grid now has a floor of chrome + 52 + two whole rows (68) =
+                     257, and the ScrollViewer scrolls the pane when the slot cannot
+                     give that much: the list keeps its rows, the chrome stays
+                     reachable, and neither vanishes. -->
+                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled"
+                              Focusable="False" PanningMode="VerticalOnly">
+                    <ScrollViewer.Resources>
+                        <!-- Thinner and dimmer than a list's own bar, and only there
+                             while the pane is too short: it reads as "there is more
+                             pane", not as a second scrollbar to choose between. -->
+                        <Style TargetType="ScrollBar" BasedOn="{StaticResource {x:Type ScrollBar}}">
+                            <Setter Property="Width" Value="6"/>
+                            <Setter Property="Opacity" Value="0.55"/>
+                            <Style.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter Property="Opacity" Value="1"/>
+                                </Trigger>
+                            </Style.Triggers>
+                        </Style>
+                    </ScrollViewer.Resources>
+                <!-- Floor = the chrome left in the pane (head 14 + column headers 26
+                     + paste 27 + action foot 22 = 89) plus two whole rows (68). The
+                     search row and filter strip now live in the tab toolbar, so this
+                     fits inside the 150 px the pane gets at the designed size and
+                     three rows show without scrolling. -->
+                <Grid MinHeight="157">
                     <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
                     </Grid.RowDefinitions>
 
-                    <!-- Section head + search feedback -->
-                    <Grid Grid.Row="0" Height="14">
-                        <TextBlock Text="{Binding LeftPaneTitle}" Style="{StaticResource SectionLabel}"/>
-                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                            <TextBlock Text="Searching&#x2026;" FontSize="10.5"
-                                       Foreground="{StaticResource AccentBBrush}" Margin="0,0,6,0"
-                                       VerticalAlignment="Center"
-                                       Visibility="{Binding IsSearching, Converter={StaticResource BoolToVisibility}}"/>
-                            <TextBlock Text="{Binding SearchStatus}" Style="{StaticResource MetaText}"
-                                       MaxWidth="170" ToolTip="{Binding SearchStatus}"/>
-                        </StackPanel>
-                    </Grid>
-
-                    <!-- Search + import disclosure -->
-                    <Grid Grid.Row="1" Margin="0,4,0,0">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="*"/>
-                            <ColumnDefinition Width="Auto"/>
-                        </Grid.ColumnDefinitions>
-                        <TextBox Grid.Column="0" FontSize="12" VerticalContentAlignment="Center"
-                                 Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}"
-                                 KeyDown="OnSearchKeyDown"
-                                 ToolTip="Search YouTube by title, artist, a phrase, or a video / playlist link"/>
-                        <Button Grid.Column="1" Content="Search" Style="{StaticResource ToolButton}"
-                                Width="64" Margin="6,0,0,0"
-                                Command="{Binding SearchCommand}" ToolTip="Search YouTube"/>
-                    </Grid>
+                    <!-- The pane's section title and search feedback moved to the tab
+                         toolbar. That 14 px row was the difference between two and
+                         three whole result rows at the designed window size. -->
 
                     <!-- Paste row: a link (or bare id) becomes a listing of what it holds -->
-                    <StackPanel Grid.Row="2" Margin="0,6,0,0">
+                    <StackPanel Grid.Row="1" Margin="0,4,0,0">
                         <Grid Height="24">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto"/>
-                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="*" MinWidth="110"/>
                                 <ColumnDefinition Width="Auto"/>
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
@@ -369,7 +382,8 @@
                                     Command="{Binding LoadImporterCommand}"
                                     ToolTip="List what this link contains (Enter does the same)"/>
                             <ToggleButton Grid.Column="3" Content="Downloaded"
-                                          Style="{StaticResource StripToggle}" Margin="6,0,0,0"
+                                          Style="{StaticResource StripToggle}"
+                                          Width="Auto" MinWidth="86" Margin="6,0,0,0"
                                           IsChecked="{Binding IsDownloadedView, Mode=TwoWay}"
                                           ToolTip="Browse the files that came from YouTube"/>
                         </Grid>
@@ -392,8 +406,11 @@
                         </Grid>
                     </StackPanel>
 
-                    <!-- Content pane: search results, an importer listing, or the downloaded view -->
-                    <Grid Grid.Row="3" Margin="0,4,0,0">
+                    <!-- Content pane: search results, an importer listing, or the downloaded view.
+                         ClipToBounds: this cell is the pane's star row, so when a short window
+                         squeezes it shut its own filter strip and headers would otherwise paint
+                         over the preview bar below instead of being cut at the row boundary. -->
+                    <Grid Grid.Row="0" Margin="0,4,0,0" ClipToBounds="True">
 
                         <!-- Search results -->
                         <Grid Visibility="{Binding ShowSearchResults,
@@ -401,14 +418,11 @@
                         <Grid>
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="*"/>
+                                <RowDefinition Height="*" MinHeight="68"/>
                             </Grid.RowDefinitions>
-                            <ContentControl Grid.Row="0" x:Name="FilterHost" Focusable="False"
-                                            ContentTemplate="{StaticResource FilterSortStrip}"/>
-                            <ContentControl Grid.Row="1" Content="{StaticResource TrackColumnHeaders}"
+                            <ContentControl Grid.Row="0" Content="{StaticResource TrackColumnHeaders}"
                                             Focusable="False" IsTabStop="False"/>
-                        <ListBox Grid.Row="2" x:Name="ResultList" ItemsSource="{Binding Results}"
+                        <ListBox Grid.Row="1" x:Name="ResultList" ItemsSource="{Binding Results}"
                                  SelectedItem="{Binding SelectedResult}"
                                  ItemContainerStyle="{StaticResource MediaRow}"
                                  Background="Transparent" BorderThickness="0"
@@ -422,10 +436,19 @@
                                  ContextMenu="{StaticResource TrackMenu}">
                         </ListBox>
 
-                        <TextBlock Text="Search YouTube, or paste a video / playlist link."
-                                   FontSize="11" TextWrapping="Wrap" TextAlignment="Center"
-                                   Foreground="{StaticResource TextDimBrush}"
-                                   HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="250">
+                        <!-- Empty state for the list body. It belongs in the list row
+                             (2), never in row 0 with the filter strip, it must not
+                             swallow clicks meant for the list behind it, and it is a
+                             single trimmed line. ClipToBounds is what stops it spilling
+                             onto the preview bar when the list row is squeezed to a few
+                             pixels by a short window. -->
+                        <Grid Grid.Row="2" ClipToBounds="True">
+                            <TextBlock IsHitTestVisible="False"
+                                       Text="Type a title or artist above, or paste a link to list a playlist."
+                                       FontSize="11" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis"
+                                       Foreground="{StaticResource TextDimBrush}"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"
+                                       MaxWidth="340" Margin="12,0">
                             <TextBlock.Style>
                                 <Style TargetType="TextBlock">
                                     <Setter Property="Visibility" Value="Collapsed"/>
@@ -440,7 +463,8 @@
                                     </Style.Triggers>
                                 </Style>
                             </TextBlock.Style>
-                        </TextBlock>
+                            </TextBlock>
+                        </Grid>
                         </Grid>
 
                         <!-- Importer listing: what the pasted link holds, in source order -->
@@ -514,8 +538,6 @@
                                     </DataTemplate>
                                 </ListBox.ItemTemplate>
                             </ListBox>
-                        </Grid>
-
                             <TextBlock Grid.Row="3" Text="{Binding ImportEmptyText}"
                                        FontSize="11" TextWrapping="Wrap" TextAlignment="Center"
                                        Foreground="{StaticResource TextDimBrush}"
@@ -531,6 +553,7 @@
                                     </Style>
                                 </TextBlock.Style>
                             </TextBlock>
+                        </Grid>
                         </Grid>
 
                         <!-- Files that came from YouTube, resolved from the ledger, not the file name -->
@@ -620,11 +643,35 @@
                         </Grid>
                     </Grid>
 
-                    <!-- Preview strip: position / seek / play-pause for what the deck is playing -->
-                    <views:PreviewBar Grid.Row="4" DataContext="{Binding Preview}"/>
+                    <!-- Preview strip: position / seek / play-pause for what the deck is playing.
+                         Collapsed while there is nothing to show: an idle strip is 32 px of
+                         dead height in a pane that only gets 150 px, and it is exactly what
+                         pushed the results list to zero. It appears the moment there is a
+                         stream, a load in flight, a status line or a position to report. -->
+                    <views:PreviewBar Grid.Row="2" DataContext="{Binding Preview}">
+                        <views:PreviewBar.Style>
+                            <Style TargetType="views:PreviewBar">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsAvailable}" Value="True">
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding IsLoading}" Value="True">
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding IsPlaying}" Value="True">
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding HasStatus}" Value="True">
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </views:PreviewBar.Style>
+                    </views:PreviewBar>
 
                     <!-- Actions on the selected result, inline with its name -->
-                    <Grid Grid.Row="5" Height="22" Margin="0,4,0,0">
+                    <Grid Grid.Row="3" Height="22" Margin="0,4,0,0">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="*"/>
@@ -648,6 +695,7 @@
                                    Margin="8,0,2,0"/>
                     </Grid>
                 </Grid>
+                </ScrollViewer>
             </Border>
 
             <GridSplitter Grid.Column="1" Style="{StaticResource PaneSplitter}"
@@ -1068,16 +1116,34 @@
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
+                <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
             <TextBlock Grid.Column="0" Text="{Binding StatusText}" FontSize="10.5"
                        Foreground="{StaticResource TextDimBrush}" TextTrimming="CharacterEllipsis"
                        VerticalAlignment="Center" ToolTip="{Binding StatusText}"/>
-            <TextBlock Grid.Column="1" Text="YouTube&#x2026;" FontSize="10.5"
+            <!-- The account label used to sit in the toolbar and cost it a wrapped
+                 line; down here it is the same information for 0 px. -->
+            <TextBlock Grid.Column="1" Text="{Binding YouTubeAccountText}" FontSize="10.5"
+                       VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                       MaxWidth="220" Margin="8,0,0,0"
+                       ToolTip="The Google account YouTube writes will use. Credentials live in %APPDATA%\JockeyBox\youtube-oauth.json.">
+                <TextBlock.Style>
+                    <Style TargetType="TextBlock" BasedOn="{StaticResource {x:Type TextBlock}}">
+                        <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsYouTubeConnected}" Value="True">
+                                <Setter Property="Foreground" Value="{StaticResource AccentABrush}"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </TextBlock.Style>
+            </TextBlock>
+            <TextBlock Grid.Column="2" Text="YouTube&#x2026;" FontSize="10.5"
                        Foreground="{StaticResource AccentABrush}" Margin="8,0,0,0"
                        VerticalAlignment="Center"
                        ToolTip="A YouTube Data API request is running"
                        Visibility="{Binding IsYouTubeBusy, Converter={StaticResource BoolToVisibility}}"/>
-            <TextBlock Grid.Column="2" Text="Working&#x2026;" FontSize="10.5"
+            <TextBlock Grid.Column="3" Text="Working&#x2026;" FontSize="10.5"
                        Foreground="{StaticResource AccentABrush}" Margin="8,0,0,0"
                        VerticalAlignment="Center"
                        Visibility="{Binding IsBusy, Converter={StaticResource BoolToVisibility}}"/>

@@ -66,7 +66,7 @@
             Height="26">
         <Grid>
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" MinWidth="120"/>
+                <ColumnDefinition Width="*" MinWidth="76"/>
                 <ColumnDefinition Width="150"/>
                 <ColumnDefinition Width="46"/>
                 <ColumnDefinition Width="46"/>
@@ -99,7 +99,7 @@
                               ItemsSource="{Binding Children}">
         <Grid Style="{StaticResource TrackRowGrid}">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" MinWidth="120"/>
+                <ColumnDefinition Width="*" MinWidth="76"/>
                 <ColumnDefinition Width="150"/>
                 <ColumnDefinition Width="46"/>
                 <ColumnDefinition Width="46"/>
@@ -194,7 +194,7 @@
     <DataTemplate x:Key="RemoteTrackRow">
         <Grid Style="{StaticResource TrackRowGrid}">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" MinWidth="120"/>
+                <ColumnDefinition Width="*" MinWidth="76"/>
                 <ColumnDefinition Width="150"/>
                 <ColumnDefinition Width="46"/>
                 <ColumnDefinition Width="46"/>
@@ -258,7 +258,7 @@
     <DataTemplate x:Key="YouTubeResultRow">
         <Grid Style="{StaticResource TrackRowGrid}">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="*" MinWidth="120"/>
+                <ColumnDefinition Width="*" MinWidth="76"/>
                 <ColumnDefinition Width="150"/>
                 <ColumnDefinition Width="46"/>
                 <ColumnDefinition Width="46"/>
