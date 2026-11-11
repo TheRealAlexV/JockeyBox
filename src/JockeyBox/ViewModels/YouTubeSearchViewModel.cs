@@ -54,6 +54,12 @@ public partial class YouTubeSearchViewModel : ObservableObject
         TargetLabel = targetLabel ?? "";
 
         _stream.StateChanged += OnTransportChanged;
+
+        // The player says why a preview was refused (no yt-dlp, extractor change,
+        // age gate) on StatusChanged; without this the window looked like a click
+        // that did nothing. Both tabs already show these words.
+        _stream.StatusChanged += OnStatusChanged;
+
         RefreshTransport();
     }
 
@@ -164,7 +170,21 @@ public partial class YouTubeSearchViewModel : ObservableObject
     {
         if (entry is null) return;
 
-        if (entry.VideoId == PlayingVideoId)
+        if (string.IsNullOrWhiteSpace(entry.VideoId))
+        {
+            StatusText = "This row has no YouTube upload id \u2014 search again.";
+            return;
+        }
+
+        var url = Url(entry.VideoId);
+
+        // Stop only a stream this player still owns: the transport is shared with
+        // both tabs and the deck, so it can be stopped from outside this window
+        // while PlayingVideoId still names the last row clicked here. Left as it
+        // was, that stale flag turned the next click into a silent Stop.
+        var ownsStream = string.Equals(_stream.CurrentUrl, url, StringComparison.OrdinalIgnoreCase)
+                         && (_stream.IsPlaying || _stream.IsLoading);
+        if (entry.VideoId == PlayingVideoId && ownsStream)
         {
             StopPreview();
             return;
@@ -239,6 +259,7 @@ public partial class YouTubeSearchViewModel : ObservableObject
     public void Shutdown()
     {
         _stream.StateChanged -= OnTransportChanged;
+        _stream.StatusChanged -= OnStatusChanged;
         _generation++;
         if (_previewUrl is not null) _stream.StopIfUrl(_previewUrl);
         _previewUrl = null;
@@ -257,6 +278,23 @@ public partial class YouTubeSearchViewModel : ObservableObject
         }
 
         RefreshTransport();
+    }
+
+    /// <summary>
+    /// The player's own words for this preview, on the strip: "Resolving stream…",
+    /// a download percentage, or the reason a resolve was refused. A blank note is
+    /// the player clearing its own line, so it never wipes a search message.
+    /// </summary>
+    private void OnStatusChanged(object? sender, string message)
+    {
+        var app = Application.Current;
+        if (app is not null && !app.Dispatcher.CheckAccess())
+        {
+            app.Dispatcher.BeginInvoke(new Action(() => OnStatusChanged(sender, message)));
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(message)) StatusText = message;
     }
 
     private void RefreshTransport()

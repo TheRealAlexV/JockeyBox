@@ -46,6 +46,9 @@ public sealed class StreamPreviewTransport : ViewModels.IPreviewTransport, IDisp
 
     public double PositionSeconds => _player.PositionSeconds;
 
+    /// <summary>Self-test only: the player this transport drives, for the audio probe.</summary>
+    internal PreviewStreamPlayer SelfTestPlayer => _player;
+
     /// <summary>Real length of the stream or fallback file; 0 while unknown.</summary>
     public double DurationSeconds => _player.DurationSeconds;
 

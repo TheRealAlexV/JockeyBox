@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Threading;
 using System.Windows;
 using System.Windows.Threading;
 using JockeyBox.Selftest;
@@ -31,7 +32,8 @@ public partial class App : Application
         // Headless modes are exempt from *focus*, never from the guard.
         Tools.SingleInstance.Headless =
             SelftestRequested(e.Args) || LibraryDump.Requested(e.Args) ||
-            UiShot.Requested(e.Args) || PerfProbe.Requested(e.Args);
+            UiShot.Requested(e.Args) || PerfProbe.Requested(e.Args) ||
+            PreviewCheck.Requested(e.Args);
 
         if (!Tools.SingleInstance.TryAcquire(Tools.AppPaths.Home, out string owner, out int ownerPid))
         {
@@ -66,6 +68,38 @@ public partial class App : Application
             int exitCode = SelftestRunner.Run(Console.Out, verbose: HasFlag(e.Args, "--selftest-verbose"));
             Console.Out.Flush();
             Shutdown(exitCode);
+            return;
+        }
+
+        // --preview-check: audition one upload through the real yt-dlp + libVLC
+        // path and exit 0 only when the position actually moved
+        // (see Selftest/PreviewCheck.cs). Console mode: no window, no tray.
+        if (PreviewCheck.Requested(e.Args))
+        {
+            int checkExit = 1;
+
+            // A hung check must not read as a passing one: the mode exits
+            // non-zero on its own deadline instead of waiting forever.
+            var watchdog = new Thread(() =>
+            {
+                Thread.Sleep(PreviewCheck.TimeoutMs);
+                Console.Error.WriteLine("preview-check: gave up waiting");
+                Console.Error.Flush();
+                Environment.Exit(3);
+            }) { IsBackground = true };
+            watchdog.Start();
+
+            try
+            {
+                checkExit = PreviewCheck.Run(e.Args);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine("preview-check failed: " + ex);
+            }
+
+            Console.Out.Flush();
+            Shutdown(checkExit);
             return;
         }
 

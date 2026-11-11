@@ -187,6 +187,30 @@ public sealed class PreviewStreamPlayer : IDisposable
             ? _vlcError ?? "libVLC failed to load, so previews cannot play"
             : "yt-dlp is not installed, so previews cannot be streamed";
 
+    /// <summary>
+    /// Self-test only: what libVLC reports about the audio path it actually
+    /// chose, so a check can tell "playing" from "playing silently". Lives here
+    /// because this type is the only owner of the engine.
+    /// </summary>
+    internal string AudioPathProbe()
+    {
+        if (_player == null) return "state=none (libVLC did not load)";
+
+        try
+        {
+            var track = _player.AudioTrack;
+            return $"state={_player.State} audioTrack={track.ToString(CultureInfo.InvariantCulture)} " +
+                   $"audioTracks={_player.AudioTrackCount} " +
+                   $"device=\"{_player.OutputDevice ?? "default"}\" " +
+                   $"volume={_player.Volume.ToString(CultureInfo.InvariantCulture)} mute={_player.Mute} " +
+                   $"vlc={_engine?.Version ?? "?"}";
+        }
+        catch (Exception ex)
+        {
+            return $"probe failed: {ex.Message}";
+        }
+    }
+
     /// <summary>Raised when play state, position, length, volume or mute changes.</summary>
     public event EventHandler? StateChanged;
 
@@ -656,8 +680,16 @@ public sealed class PreviewStreamPlayer : IDisposable
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true,
-            WorkingDirectory = ToolBootstrap.ToolsDir,
         };
+
+        // Nothing passed on these paths is a relative path - the -o template is an
+        // absolute temp path and cookies come from the browser - so the working
+        // directory only has to exist. It used to be the app-managed tools folder,
+        // which on a machine where the bundled download never ran made Process.Start
+        // throw "the directory name is invalid" before yt-dlp was touched.
+        var exeDir = Path.GetDirectoryName(ytDlp);
+        if (!string.IsNullOrEmpty(exeDir) && Directory.Exists(exeDir)) info.WorkingDirectory = exeDir;
+
         foreach (var argument in args) info.ArgumentList.Add(argument);
         AppendCookieArgs(info);
 
