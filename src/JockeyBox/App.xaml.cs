@@ -24,6 +24,43 @@ public partial class App : Application
         // They must stay first: the hooks rewrite argv and may exit the process.
         VelopackApp.Build().Run();
 
+        // One instance per resolved home, taken before any store is opened so a
+        // refused launch never touches library.db. Two processes on one home are
+        // two independent SQLite writers - the writer gate in Data/JockeyBoxDatabase
+        // is in-process only - so the only reliable prevention is not starting.
+        // Headless modes are exempt from *focus*, never from the guard.
+        Tools.SingleInstance.Headless =
+            SelftestRequested(e.Args) || LibraryDump.Requested(e.Args) ||
+            UiShot.Requested(e.Args) || PerfProbe.Requested(e.Args);
+
+        if (!Tools.SingleInstance.TryAcquire(Tools.AppPaths.Home, out string owner, out int ownerPid))
+        {
+            if (!Tools.SingleInstance.Headless)
+                Tools.SingleInstance.SignalExisting(Tools.AppPaths.Home, ownerPid);
+
+            // A refused capture must fail loudly. Every verification step in this
+            // project runs a headless mode and trusts its exit status, so exit 0
+            // with no PNG written is indistinguishable from a success that left a
+            // stale file on disk. A second windowed launch stays 0: it is a normal
+            // thing for the operator to do, and the existing window is coming
+            // forward anyway.
+            int refusalCode = Tools.SingleInstance.Headless ? 1 : 0;
+
+            Tools.Log.Warn(
+                $"single-instance: refused this launch: home {Tools.AppPaths.Home} is already owned by pid {owner}. " +
+                $"Close that window first; this process exits with code {refusalCode}, without opening the database or showing a window.");
+
+            // Not Shutdown(): the WPF shutdown path spends ~6 s tearing down an
+            // application that never opened a store or a window, and a second
+            // launch is expected to vanish. Nothing here needs unwinding - the
+            // pid file and the mutex belong to the owner, and the OS closes this
+            // process's handles.
+            Environment.Exit(refusalCode);
+            return;
+        }
+
+        Exit += (_, _) => Tools.SingleInstance.Release();
+
         if (SelftestRequested(e.Args))
         {
             int exitCode = SelftestRunner.Run(Console.Out, verbose: HasFlag(e.Args, "--selftest-verbose"));
@@ -96,6 +133,20 @@ public partial class App : Application
         Data.LibraryBoot.Boot();
 
         base.OnStartup(e);
+
+        // The holder's half of a refused second launch: bring this window forward.
+        // MainWindow arrives with StartupUri, so it exists by the first dispatcher
+        // pump; the null check covers that gap. A headless run never gets here.
+        Tools.SingleInstance.ListenForActivation(() => Dispatcher.Invoke(() =>
+        {
+            var window = MainWindow;
+            if (window is null) return;
+
+            if (window.WindowState == WindowState.Minimized) window.WindowState = WindowState.Normal;
+            window.Show();
+            window.Activate();
+            Tools.Log.Info($"single-instance: brought the window forward for a second launch (pid {Environment.ProcessId})");
+        }));
     }
 
     /// <summary>
