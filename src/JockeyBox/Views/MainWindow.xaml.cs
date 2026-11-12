@@ -122,7 +122,39 @@ public partial class MainWindow : Window
         // consumed here before any window/command binding can act on it.
         PreviewKeyDown += OnSoundboardHotkeyCapture;
 
-        Closed += (_, _) => _vm.Dispose();
+        Closed += (_, _) => CloseViewModel();
+    }
+
+    /// <summary>
+    /// Tear the session down from the main window's close without letting a
+    /// failure there defeat the close itself.
+    ///
+    /// <para>WPF decides whether to shut the application down after its Closed
+    /// handlers have returned, so an exception out of this teardown does not fail
+    /// a save: the window is gone, the Application never reaches its shutdown
+    /// decision, and the process is left with no window of any kind while still
+    /// holding the home's single-instance lock and port 17890. That is the state
+    /// the operator had to stop by pid on 2026-11-11, with no exit-path line in
+    /// the log beyond the step that threw. Log it and let the close finish.</para>
+    /// </summary>
+    private void CloseViewModel()
+    {
+        try
+        {
+            _vm.Dispose();
+        }
+        catch (Exception ex)
+        {
+            // Type, message and stack: the stack names the call that threw, and
+            // TeardownReached names how much of the exit path was skipped, so a
+            // reader needs no debugger to know which step broke. Then the close
+            // finishes, which is the part that keeps WPF's shutdown decision
+            // reachable.
+            Tools.Log.Error(
+                $"shutdown: view-model teardown failed in '{_vm.TeardownReached}'. " +
+                $"Every later step was skipped, including the library.json re-mirror that marks a clean exit. " +
+                $"The window still closes, so the process can shut down.{Environment.NewLine}{ex}");
+        }
     }
 
     /// <summary>

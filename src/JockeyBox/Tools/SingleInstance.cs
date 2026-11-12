@@ -108,6 +108,28 @@ public static class SingleInstance
         return true;
     }
 
+    /// <summary>
+    /// Whether the owning process has a window that can be brought forward right
+    /// now. A live process with <c>MainWindowHandle == 0</c> cannot be activated:
+    /// calling <c>Activate()</c>/<c>SetForegroundWindow</c> on that zero handle
+    /// does nothing, which is why a relaunch used to look like "nothing happened".
+    /// </summary>
+    public static bool HasWindow(int pid)
+    {
+        if (pid <= 0) return false;
+
+        try
+        {
+            using var process = Process.GetProcessById(pid);
+            process.Refresh();
+            return process.MainWindowHandle != IntPtr.Zero;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private static string ReadOwner(string home, out int pid)
     {
         pid = 0;

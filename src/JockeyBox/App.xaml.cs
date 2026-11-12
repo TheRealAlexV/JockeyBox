@@ -33,13 +33,10 @@ public partial class App : Application
         Tools.SingleInstance.Headless =
             SelftestRequested(e.Args) || LibraryDump.Requested(e.Args) ||
             UiShot.Requested(e.Args) || PerfProbe.Requested(e.Args) ||
-            PreviewCheck.Requested(e.Args);
+            PreviewCheck.Requested(e.Args) || LingerCheck.Requested(e.Args);
 
         if (!Tools.SingleInstance.TryAcquire(Tools.AppPaths.Home, out string owner, out int ownerPid))
         {
-            if (!Tools.SingleInstance.Headless)
-                Tools.SingleInstance.SignalExisting(Tools.AppPaths.Home, ownerPid);
-
             // A refused capture must fail loudly. Every verification step in this
             // project runs a headless mode and trusts its exit status, so exit 0
             // with no PNG written is indistinguishable from a success that left a
@@ -47,6 +44,44 @@ public partial class App : Application
             // thing for the operator to do, and the existing window is coming
             // forward anyway.
             int refusalCode = Tools.SingleInstance.Headless ? 1 : 0;
+
+            if (!Tools.SingleInstance.Headless)
+            {
+                Tools.SingleInstance.SignalExisting(Tools.AppPaths.Home, ownerPid);
+
+                // An owner with no window cannot be brought forward: Activate() on a
+                // zero handle does nothing, which is the "close the app, open it
+                // again, nothing happens" the operator reported. Give the owner a
+                // moment to finish showing one (a relaunch during startup is the
+                // common case), then say plainly what is wrong on the console as well
+                // as in the log, so a person with no log tail is not left guessing.
+                DateTime grace = DateTime.UtcNow.AddSeconds(3);
+                while (DateTime.UtcNow < grace && !Tools.SingleInstance.HasWindow(ownerPid))
+                    Thread.Sleep(150);
+
+                if (!Tools.SingleInstance.HasWindow(ownerPid))
+                {
+                    // Distinct from 0 (the normal "brought the window forward"
+                    // refusal) and from 1 (a refused headless capture), so a script
+                    // can tell a windowless owner apart from both.
+                    //
+                    // "No window" is genuinely ambiguous: the owner may have none,
+                    // or it may have one this process cannot see because it runs on
+                    // another desktop or in another session. Both mean the same
+                    // thing here - Activate() on a zero handle would do nothing - so
+                    // the message says what was observed rather than guessing which.
+                    const int windowlessCode = 3;
+                    string text =
+                        $"JockeyBox is already running as pid {ownerPid}, but no window for that process could be found from here. " +
+                        $"It may have no window, or its window may be on another desktop or in another session, where this launch cannot see or raise it. " +
+                        $"Nothing will be opened, because the home is still owned - close pid {ownerPid} in Task Manager, then start JockeyBox again. " +
+                        $"(This launch exits with code {windowlessCode}.)";
+                    Console.Error.WriteLine(text);
+                    Tools.Log.Warn($"single-instance: {text}");
+                    Environment.Exit(windowlessCode);
+                    return;
+                }
+            }
 
             Tools.Log.Warn(
                 $"single-instance: refused this launch: home {Tools.AppPaths.Home} is already owned by pid {owner}. " +
@@ -62,6 +97,17 @@ public partial class App : Application
         }
 
         Exit += (_, _) => Tools.SingleInstance.Release();
+
+        // --linger-check: close the main window exactly as its X does and exit 0
+        // only when the process then ends by itself (see Selftest/LingerCheck.cs).
+        // It arms the check and returns to the app's own message loop instead of
+        // calling Shutdown(): the last-window-close path is what is under test, and
+        // a Shutdown() here would pass the check whether or not that path works.
+        if (LingerCheck.Requested(e.Args))
+        {
+            LingerCheck.Arm(e.Args);
+            return;
+        }
 
         if (SelftestRequested(e.Args))
         {

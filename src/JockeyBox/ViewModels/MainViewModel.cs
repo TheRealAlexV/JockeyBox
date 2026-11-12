@@ -4266,20 +4266,39 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private static string Format(TimeSpan t) => t.TotalHours >= 1
         ? t.ToString(@"h\:mm\:ss") : t.ToString(@"m\:ss");
 
+    /// <summary>
+    /// Selftest seam: <c>--linger-check --throw</c> fails the teardown here, where
+    /// a store can fail in the field, so the close path's survival is falsified by
+    /// a run rather than assumed. Null in every real run.
+    /// </summary>
+    internal static Action? TeardownFault;
+
+    /// <summary>
+    /// The last teardown group <see cref="Dispose"/> entered. Logged with a
+    /// failure, so whoever reads the log knows how much of the exit path was
+    /// skipped and not only that it broke.
+    /// </summary>
+    internal string TeardownReached { get; private set; } = "not started";
+
+    private void TeardownStep(string name) => TeardownReached = name;
+
     public void Dispose()
     {
+        TeardownStep("timers");
         _uiTimer.Stop();
         _rescanDebounce.Stop();
         _searchDebounce.Stop();
         _autoSyncTimer.Stop();
         _lyricsSettingsSave.Stop();
         // Flush a queue write that hadn't hit its debounce yet.
+        TeardownStep("queue and download stores");
         _queueStore.Dispose();
         _downloadQueue.Dispose();
         _scanCts?.Cancel();
         _lyricsCts?.Cancel();
         _lyricsCandidatesCts?.Cancel();
         // Persist a pending lyric offset drag that hadn't hit its debounce yet.
+        TeardownStep("settings and lyric metadata");
         _settings.Save();
         // Per-track lyric metadata (offset, pinned sources, sections) lives in
         // the store now: flush anything the debounce still holds, then stop
@@ -4287,19 +4306,30 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _trackMeta.Changed -= OnTrackMetadataChanged;
         _trackMeta.Save();
         _trackMeta.Dispose();
+        TeardownStep("audio, hotkeys and the local api");
         ShutdownAudio2();
+        TeardownStep("soundboard");
         Soundboard?.Save();
+
+        // The failure seam: after this point come the playlist drain, the
+        // separation worker, the watcher, the transport, the tag cache and the
+        // library.json re-mirror that marks a clean exit.
+        TeardownFault?.Invoke();
+
         // The playlist store mirrors every save into library.db on a coalescing
         // writer; drain it and close it so the last add/rename of the session is
         // on disk before the process exits.
+        TeardownStep("playlist drain, separation, watcher, transport");
         _playlistStore.Dispose();
         _separation.Dispose();
         _watcher.Dispose();
         _transport.Dispose();
+        TeardownStep("tag cache and the library.json re-mirror");
         _tagCache.Save();
         // library.json was just rewritten by us. Mirror it into SQLite now and
         // record its stamp, so the tags land in the database and the next start
         // sees a matching file instead of reimporting what we wrote ourselves.
         Data.LibraryBoot.SyncFromDisk("library.json saved at shutdown");
+        TeardownStep("complete");
     }
 }
