@@ -7,6 +7,14 @@
 # dist/portable holds except known build scratch, then md5s every deployed file
 # source-vs-target and fails the run if anything differs.
 #
+# md5 source == target proves a copy was faithful; it cannot prove the *source was
+# complete*. dist/portable is gitignored and never cleaned, and `dotnet publish -o`
+# never deletes stale files, so what sits there is a property of that directory at
+# deploy time, not of the commit. scripts/portable-payload.manifest pins the expected
+# payload; the preflight below refuses to copy when a listed file is missing or when
+# the directory holds a file the manifest does not list. A short payload is a hard
+# failure, never a warning.
+#
 # Additive only: never deletes in the target, no rsync --delete. The install keeps
 # its *.bak-* exe history, JockeyBox-win-Setup.exe, logs and data/ untouched.
 #
@@ -14,27 +22,43 @@
 #   scripts/deploy-portable.sh --dry-run     plan only, writes nothing
 #   scripts/deploy-portable.sh               deploy + verify
 #   scripts/deploy-portable.sh --target DIR  deploy somewhere else
+#   scripts/deploy-portable.sh --write-manifest
+#                                            rewrite the payload manifest from
+#                                            dist/portable, deploy nothing
 #
-# Exit: 0 ok, 1 bad argument / app running / verification failure.
+# Exit: 0 ok, 1 bad argument / app running / manifest mismatch / verification failure.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SRC="$ROOT/dist/portable"
 TARGET="/mnt/c/Dev/JockeyBox"
+MANIFEST="$ROOT/scripts/portable-payload.manifest"
 DRY=0
+WRITE_MANIFEST=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run|-n) DRY=1; shift ;;
+    --write-manifest) WRITE_MANIFEST=1; shift ;;
     --target)     TARGET="${2:?--target needs a directory}"; shift 2 ;;
-    -h|--help)    sed -n '2,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)    sed -n '2,29p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *)            echo "deploy-portable: unknown argument: $1" >&2; echo "try --help" >&2; exit 1 ;;
   esac
 done
 
 [ -d "$SRC" ] || { echo "deploy-portable: no build output at $SRC - run build/build.sh first" >&2; exit 1; }
 [ -f "$SRC/JockeyBox.exe" ] || { echo "deploy-portable: $SRC/JockeyBox.exe missing - run build/build.sh first" >&2; exit 1; }
-[ -d "$TARGET" ] || { echo "deploy-portable: target $TARGET is not a directory" >&2; exit 1; }
+
+# Temp files are cleaned on every exit path, including a refusal.
+TMP_LIST=""; TMP_WANT=""; TMP_HAVE=""; TMP_NEW=""
+tmp_cleanup() {
+  local f
+  for f in "$TMP_LIST" "$TMP_WANT" "$TMP_HAVE" "$TMP_NEW"; do
+    [ -n "$f" ] && rm -f "$f"
+  done
+  return 0
+}
+trap tmp_cleanup EXIT
 
 # Build scratch that must not be deployed: debug symbols and Python bytecode cache.
 # Everything else in dist/portable is payload the exe needs at runtime, and is
@@ -53,6 +77,101 @@ is_scratch() {
   esac
   return 1
 }
+
+# The payload as a manifest records it: every regular file under SRC except build
+# scratch, relative, POSIX slashes, sorted. One source of truth for both writing
+# the manifest and checking it.
+payload_list() {
+  ( cd "$SRC" && find . -type f -printf '%P\n' | LC_ALL=C sort ) | while IFS= read -r rel; do
+    is_scratch "$rel" || printf '%s\n' "$rel"
+  done
+}
+
+# Record the current dist/portable as the expected payload, deploy nothing. Updating
+# the manifest is a deliberate act with a reviewable diff, never a side effect of a
+# deploy that already happened.
+write_manifest() {
+  local added=() removed=()
+  TMP_NEW="$(mktemp)"; TMP_WANT="$(mktemp)"
+  payload_list > "$TMP_NEW"
+  if [ -f "$MANIFEST" ]; then LC_ALL=C sort "$MANIFEST" > "$TMP_WANT"; else : > "$TMP_WANT"; fi
+  mapfile -t added   < <(comm -13 "$TMP_WANT" <(LC_ALL=C sort "$TMP_NEW"))
+  mapfile -t removed < <(comm -23 "$TMP_WANT" <(LC_ALL=C sort "$TMP_NEW"))
+
+  echo "==> write-manifest"
+  echo "    source    $SRC"
+  echo "    manifest  $MANIFEST"
+  echo "    files     $(wc -l < "$TMP_NEW")"
+  if [ "${#added[@]}" -eq 0 ] && [ "${#removed[@]}" -eq 0 ]; then
+    echo "    dist/portable already matches - no lines added or removed."
+  fi
+  if [ "${#added[@]}" -gt 0 ]; then
+    echo "    added     ${#added[@]} line(s)"
+    printf '      + %s\n' "${added[@]:0:40}"
+    [ "${#added[@]}" -gt 40 ] && echo "      ... and $(( ${#added[@]} - 40 )) more"
+  fi
+  if [ "${#removed[@]}" -gt 0 ]; then
+    echo "    removed   ${#removed[@]} line(s)"
+    printf '      - %s\n' "${removed[@]:0:40}"
+    [ "${#removed[@]}" -gt 40 ] && echo "      ... and $(( ${#removed[@]} - 40 )) more"
+  fi
+  cp -f "$TMP_NEW" "$MANIFEST"
+  echo "    wrote it; nothing was deployed. Commit the diff deliberately."
+}
+
+# Refuse to deploy a payload that is not the one the commit promises. md5 below can
+# only prove the copy was faithful; this is what proves the source was complete.
+# Runs in --dry-run too, so a plan can catch a short payload before it ships.
+preflight_payload() {
+  local missing=() unexpected=()
+  if [ ! -f "$MANIFEST" ]; then
+    echo "deploy-portable: no payload manifest at $MANIFEST" >&2
+    echo "                without it a short payload cannot be told from a correct one." >&2
+    echo "                run: scripts/deploy-portable.sh --write-manifest" >&2
+    exit 1
+  fi
+  TMP_WANT="$(mktemp)"; TMP_HAVE="$(mktemp)"
+  LC_ALL=C sort "$MANIFEST" > "$TMP_WANT"
+  payload_list > "$TMP_HAVE"
+  mapfile -t missing    < <(comm -23 "$TMP_WANT" "$TMP_HAVE")   # listed, not on disk
+  mapfile -t unexpected < <(comm -13 "$TMP_WANT" "$TMP_HAVE")   # on disk, not listed
+  PAYLOAD_COUNT="$(wc -l < "$TMP_HAVE")"
+  MANIFEST_COUNT="$(wc -l < "$TMP_WANT")"
+
+  if [ "${#missing[@]}" -eq 0 ] && [ "${#unexpected[@]}" -eq 0 ]; then
+    echo "    payload  $PAYLOAD_COUNT file(s) match scripts/portable-payload.manifest"
+    return 0
+  fi
+
+  echo "deploy-portable: dist/portable does not match scripts/portable-payload.manifest" >&2
+  echo "                nothing was copied." >&2
+  if [ "${#missing[@]}" -gt 0 ]; then
+    echo "    missing     ${#missing[@]} file(s) the manifest lists but dist/portable does not:" >&2
+    printf '      %s\n' "${missing[@]:0:40}" >&2
+    [ "${#missing[@]}" -gt 40 ] && echo "      ... and $(( ${#missing[@]} - 40 )) more" >&2
+  fi
+  if [ "${#unexpected[@]}" -gt 0 ]; then
+    echo "    unexpected  ${#unexpected[@]} file(s) in dist/portable the manifest does not list:" >&2
+    printf '      %s\n' "${unexpected[@]:0:40}" >&2
+    [ "${#unexpected[@]}" -gt 40 ] && echo "      ... and $(( ${#unexpected[@]} - 40 )) more" >&2
+  fi
+  echo >&2
+  echo "  dist/portable is a directory, not a property of the commit: dotnet publish -o" >&2
+  echo "  never deletes stale files. A payload file that went missing ships a dead feature" >&2
+  echo "  and md5 still passes, because the copy was faithful." >&2
+  echo "  Inspect the difference, then record the payload deliberately:" >&2
+  echo "      scripts/deploy-portable.sh --write-manifest" >&2
+  exit 1
+}
+
+if [ "$WRITE_MANIFEST" -eq 1 ]; then
+  write_manifest
+  exit 0
+fi
+
+preflight_payload
+
+[ -d "$TARGET" ] || { echo "deploy-portable: target $TARGET is not a directory" >&2; exit 1; }
 
 # Best effort list an operator can act on: PID, start time, path. It decides
 # nothing - app_running() has already concluded - it only says what to close.
@@ -130,11 +249,10 @@ fi
 
 datefmt() { date +%m%d-%H%M; }
 
-TMPLIST="$(mktemp)"
-trap 'rm -f "$TMPLIST"' EXIT
+TMP_LIST="$(mktemp)"
 
 # Every regular file in the payload, relative to SRC, sorted for a stable plan.
-( cd "$SRC" && find . -type f -printf '%P\n' | LC_ALL=C sort ) > "$TMPLIST"
+( cd "$SRC" && find . -type f -printf '%P\n' | LC_ALL=C sort ) > "$TMP_LIST"
 
 copied=0 identical=0 skipped=0 verified=0 bytes=0
 copied_list=() identical_list=() skip_list=() mismatched=()
@@ -203,7 +321,7 @@ while IFS= read -r rel; do
   fi
   copied_list+=("$rel"); copied=$((copied + 1)); bytes=$((bytes + size))
   verified=$((verified + 1))
-done < "$TMPLIST"
+done < "$TMP_LIST"
 
 echo
 if [ "${#mismatched[@]}" -gt 0 ]; then
@@ -230,6 +348,7 @@ fi
 for rel in "${copied_list[@]}"; do total_bytes=$((total_bytes + $(stat -c %s "$SRC/$rel"))); done
 
 echo "==> $( [ "$DRY" -eq 1 ] && echo "plan (nothing written)" || echo "summary" )"
+printf '    payload   %s file(s) == %s manifest line(s)\n' "$PAYLOAD_COUNT" "$MANIFEST_COUNT"
 printf '    copied    %s file(s), %s bytes\n' "$copied" "$total_bytes"
 printf '    identical %s file(s)\n' "$identical"
 printf '    skipped   %s build-scratch file(s) (*.pdb, __pycache__)\n' "$skipped"
