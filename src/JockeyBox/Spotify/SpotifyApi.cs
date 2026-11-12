@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -199,6 +200,7 @@ public sealed class SpotifyApi
 
         var result = new List<SourceTrack>();
         var pages = 0;
+        var withAddedAt = 0;
 
         try
         {
@@ -207,7 +209,7 @@ public sealed class SpotifyApi
                 using (page)
                 {
                     pages++;
-                    AppendTracks(page.RootElement, null, result);
+                    withAddedAt += AppendTracks(page.RootElement, null, result);
                     Log.Debug($"Spotify playlist {playlistId}: page {pages}, {result.Count} tracks so far.");
                     url = GetNextUrl(page.RootElement);
                 }
@@ -220,6 +222,7 @@ public sealed class SpotifyApi
             page?.Dispose();
         }
 
+        Log.Debug($"Spotify playlist {playlistId}: {result.Count} items, {withAddedAt} with added_at");
         if (pages >= MaxPages) Log.Warn($"Spotify playlist {playlistId}: stopped at the {MaxPages}-page cap ({result.Count} tracks).");
         return result;
     }
@@ -230,17 +233,19 @@ public sealed class SpotifyApi
         var result = new List<SourceTrack>();
         string? url = $"{BaseUrl}/me/tracks?limit=50";
         var pages = 0;
+        var withAddedAt = 0;
 
         while (!string.IsNullOrEmpty(url) && pages < MaxPages && result.Count < MaxItems)
         {
             using var doc = await GetJsonAsync(url, ct);
             pages++;
 
-            AppendTracks(doc.RootElement, "Liked Songs", result);
+            withAddedAt += AppendTracks(doc.RootElement, "Liked Songs", result);
             Log.Debug($"Spotify liked songs: page {pages}, {result.Count} tracks so far.");
             url = GetNextUrl(doc.RootElement);
         }
 
+        Log.Debug($"Spotify liked songs: {result.Count} items, {withAddedAt} with added_at");
         if (pages >= MaxPages) Log.Warn($"Spotify liked songs: stopped at the {MaxPages}-page cap ({result.Count} tracks).");
         return result;
     }
@@ -451,14 +456,18 @@ public sealed class SpotifyApi
     /// Append the playable tracks of one page. Accepts both envelope shapes
     /// (`items[].track` for saved tracks, `items[].item` on the newer playlist
     /// endpoint) and drops local files, episodes and id-less entries.
+    /// Returns how many appended rows carried a usable <c>added_at</c>, so the
+    /// caller can log coverage once per load.
     /// </summary>
-    private static void AppendTracks(JsonElement root, string? playlistName, List<SourceTrack> target)
+    private static int AppendTracks(JsonElement root, string? playlistName, List<SourceTrack> target)
     {
-        if (!root.TryGetProperty("items", out var items) || items.ValueKind != JsonValueKind.Array) return;
+        if (!root.TryGetProperty("items", out var items) || items.ValueKind != JsonValueKind.Array) return 0;
+
+        var withAddedAt = 0;
 
         foreach (var entry in items.EnumerateArray())
         {
-            if (target.Count >= MaxItems) return;
+            if (target.Count >= MaxItems) return withAddedAt;
             if (entry.ValueKind != JsonValueKind.Object) continue;
 
             if (!TryGetTrackObject(entry, out var track)) continue;
@@ -466,8 +475,37 @@ public sealed class SpotifyApi
             var dto = DeserializeTrack(track);
             if (dto is not { IsPlayable: true }) continue;
 
-            target.Add(dto.ToSourceTrack(playlistName));
+            // added_at belongs to the entry, not the track object, so it is read
+            // here rather than inside TryGetTrackObject.
+            var addedAt = ReadAddedAt(entry);
+            if (addedAt != null) withAddedAt++;
+
+            target.Add(dto.ToSourceTrack(playlistName, addedAt));
         }
+
+        return withAddedAt;
+    }
+
+    /// <summary>
+    /// `added_at` off one playlist/saved-track entry, or null when absent, JSON
+    /// null, empty or unparseable. Spotify documents it as nullable and this runs
+    /// inside a paging loop, so every failure is silent: one bad value must never
+    /// abort a load. Internal rather than private so the parser is unit-testable.
+    /// </summary>
+    internal static DateTimeOffset? ReadAddedAt(JsonElement entry)
+    {
+        if (entry.ValueKind != JsonValueKind.Object) return null;
+        if (!entry.TryGetProperty("added_at", out var value) || value.ValueKind != JsonValueKind.String) return null;
+
+        var raw = value.GetString();
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+
+        // RoundtripKind keeps the instant exactly as Spotify stated it (the value
+        // is documented as UTC with a Z offset, and DateTimeOffset comparisons are
+        // UTC-normalised anyway) instead of rewriting the offset.
+        return DateTimeOffset.TryParse(raw, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed)
+            ? parsed
+            : null;
     }
 
     private static bool TryGetTrackObject(JsonElement entry, out JsonElement track)

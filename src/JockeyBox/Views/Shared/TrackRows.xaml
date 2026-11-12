@@ -364,7 +364,7 @@
             <TextBlock Grid.Column="2" Text="SORT" Style="{StaticResource StripLabel}"
                        Margin="10,0,6,0"/>
             <ComboBox Grid.Column="3" Style="{StaticResource StripSortCombo}"
-                      ItemsSource="{x:Static vm:TrackSortChoices.All}"
+                      ItemsSource="{Binding SortChoices}"
                       DisplayMemberPath="Label"
                       SelectedValuePath="Value"
                       SelectedValue="{Binding SortField, Mode=TwoWay}"

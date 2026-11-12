@@ -84,7 +84,11 @@ public partial class SpotifyView : UserControl
         FilterHost.Content = new TrackListView(
             "Filter the track list by title, artist or album",
             text => vm.FilterText = text,
-            (field, descending) => vm.ApplySort(field, descending));
+            (field, descending) => vm.ApplySort(field, descending))
+        {
+            // Only this surface offers "Date added": its rows are the ones with AddedAt.
+            SortChoices = TrackSortChoices.Spotify,
+        };
 
         // "Add to Playlist" is a submenu of the user's own playlists, refreshed on
         // every open so a playlist created a second ago is already there.

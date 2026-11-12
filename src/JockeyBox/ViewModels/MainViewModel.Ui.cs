@@ -25,6 +25,7 @@ public enum TrackSortField
     Bpm,
     Key,
     Length,
+    DateAdded,
 }
 
 /// <summary>One entry in the shared sort selector.</summary>
@@ -40,6 +41,12 @@ public static class TrackSortChoices
         new TrackSortChoice(TrackSortField.Bpm, "BPM"),
         new TrackSortChoice(TrackSortField.Key, "Key"),
         new TrackSortChoice(TrackSortField.Length, "Length"),
+    };
+
+    /// <summary>The Spotify list only: it is the surface whose rows carry a date added.</summary>
+    public static IReadOnlyList<TrackSortChoice> Spotify { get; } = new List<TrackSortChoice>(All)
+    {
+        new TrackSortChoice(TrackSortField.DateAdded, "Date added"),
     };
 }
 
@@ -71,6 +78,9 @@ public partial class TrackListView : ObservableObject
 
     /// <summary>Read by the box's tooltip and its automation name.</summary>
     public string FilterHint { get; }
+
+    /// <summary>Sort fields this list offers; the library and YouTube keep the default.</summary>
+    public IReadOnlyList<TrackSortChoice> SortChoices { get; init; } = TrackSortChoices.All;
 
     public string DirectionLabel => SortDescending ? "DESC" : "ASC";
 

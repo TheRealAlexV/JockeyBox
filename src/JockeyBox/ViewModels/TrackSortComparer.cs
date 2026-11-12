@@ -80,6 +80,7 @@ public sealed class TrackSortComparer : IComparer, IComparer<TrackEntry>
         TrackSortField.Bpm => CompareNumber(SourceBpm(a), SourceBpm(b)),
         TrackSortField.Key => CompareKey(SourceKey(a), SourceKey(b)),
         TrackSortField.Length => CompareNumber(Number(a.DurationMs), Number(b.DurationMs)),
+        TrackSortField.DateAdded => CompareNumber(a.AddedAt, b.AddedAt),
         _ => CompareText(a.Title, b.Title),
     };
 
@@ -119,8 +120,8 @@ public sealed class TrackSortComparer : IComparer, IComparer<TrackEntry>
         return _descending ? -result : result;
     }
 
-    /// <summary>Missing numbers sort last both ways; present numbers swap operands for descending.</summary>
-    private int CompareNumber(double? a, double? b)
+    /// <summary>Missing values sort last both ways; present values swap operands for descending.</summary>
+    private int CompareNumber<T>(T? a, T? b) where T : struct, IComparable<T>
     {
         var aMissing = a is null;
         var bMissing = b is null;

@@ -49,6 +49,9 @@ public partial class SourceTrack : ObservableObject
     /// <summary>YouTube id once known (always set for YouTube items, filled in when a Spotify track resolves).</summary>
     public string? VideoId { get; set; }
 
+    /// <summary>When the track was added to the playlist it was fetched from; null when the source did not supply one.</summary>
+    public DateTimeOffset? AddedAt { get; set; }
+
     /// <summary>
     /// Musical key in Camelot notation ("8A", "12B") when a remote API or a
     /// local tag supplies one. The setter normalises a note name ("Am") into

@@ -84,8 +84,11 @@ public static class SpotifyMapping
     /// Normalise a track into a <see cref="SourceTrack"/>. <paramref name="playlistName"/>
     /// is stamped on the result so the playlist download layout can use it; the
     /// track state is left at its default (<see cref="SourceTrackState.New"/>).
+    /// <paramref name="addedAt"/> comes from the entry, not the track DTO (the
+    /// wire shape puts <c>added_at</c> beside the track, not inside it), and is
+    /// null when Spotify did not supply one.
     /// </summary>
-    public static SourceTrack ToSourceTrack(this SpotifyTrackDto dto, string? playlistName) => new()
+    public static SourceTrack ToSourceTrack(this SpotifyTrackDto dto, string? playlistName, DateTimeOffset? addedAt = null) => new()
     {
         Id = dto.Id ?? "",
         Source = MediaSource.Spotify,
@@ -101,5 +104,6 @@ public static class SpotifyMapping
         DurationMs = dto.DurationMs,
         VideoId = null,
         PlaylistName = playlistName,
+        AddedAt = addedAt,
     };
 }
