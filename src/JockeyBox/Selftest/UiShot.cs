@@ -6,6 +6,7 @@ using System.Linq;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using JockeyBox.Playback;
@@ -288,6 +289,112 @@ internal static class UiShot
             }
         }
 
+        // Opt-in: a right-click menu cannot appear in any capture path below. A
+        // ContextMenu is a Popup with its own HWND and its own visual tree, and the
+        // primary capture detaches the window content and renders it alone, so the
+        // menu is never part of that tree. Open the real menu here, while the window
+        // is still live, render it and its open submenu as separate bitmaps, and
+        // composite them onto the window image afterwards. Nothing here runs for a
+        // normal shot or for the application itself: it is behind --uishot-menu.
+        BitmapSource? menuShot = null;
+        BitmapSource? submenuShot = null;
+        double menuX = 0;
+        double menuY = 0;
+        double submenuX = 0;
+        double submenuY = 0;
+        if (Harness.Flag(args, "--uishot-menu") != null)
+        {
+            var live = window.Content as DependencyObject;
+            // Pick the surface by the menu it carries, not by control type: several
+            // trees in this window have their own menus (the queue's, the playlist
+            // rail's) and only the track list carries the karaoke submenu. Choosing
+            // the first TreeView found captured the wrong menu entirely.
+            var hosts = live is null
+                ? new List<FrameworkElement>()
+                : Descendants<FrameworkElement>(live)
+                    .Where(e => e.ContextMenu?.Items.OfType<MenuItem>().Any(i =>
+                        (i.Header as string)?.StartsWith("Make Karaoke", StringComparison.Ordinal) == true) == true)
+                    .ToList();
+            var owner = hosts.OfType<TreeView>().FirstOrDefault() ?? hosts.FirstOrDefault();
+            var menu = owner?.ContextMenu;
+            if (live is null || owner is null || menu is null)
+            {
+                Console.Error.WriteLine(
+                    "uishot: --uishot-menu found no surface carrying a Make Karaoke Version menu");
+                Console.Error.Flush();
+            }
+            else
+            {
+                var tree = owner;
+                menu.PlacementTarget = tree;
+                menu.Placement = PlacementMode.Relative;
+                menu.HorizontalOffset = 40;
+                menu.VerticalOffset = 60;
+                menu.IsOpen = true;
+                UiPump.Pump(300);
+
+                menuShot = RenderElement(menu);
+                var karaoke = menu.Items.OfType<MenuItem>().FirstOrDefault(i =>
+                    (i.Header as string)?.StartsWith("Make Karaoke", StringComparison.Ordinal) == true);
+                if (menuShot is null)
+                {
+                    Console.Error.WriteLine("uishot: --uishot-menu opened but the menu laid out at zero size");
+                    Console.Error.Flush();
+                }
+                else if (karaoke is not null)
+                {
+                    karaoke.IsSubmenuOpen = true;
+                    UiPump.Pump(300);
+                    // The theme's MenuItem template declares its submenu Popup with no
+                    // x:Name, so FindName("PART_Popup") resolves to nothing and the
+                    // three karaoke entries were silently dropped from the capture.
+                    // Walk the template's visual tree to the Popup instead.
+                    var popup = Descendants<Popup>(karaoke).FirstOrDefault()
+                        ?? karaoke.Template?.FindName("PART_Popup", karaoke) as Popup;
+                    if (popup?.Child is FrameworkElement submenu)
+                    {
+                        submenuShot = RenderElement(submenu);
+                        // The submenu opens level with its own item, so anchor it there
+                        // rather than at the top of the parent, which is where it would
+                        // land if it were bolted to the corner.
+                        submenuY = karaoke.TranslatePoint(new Point(0, 0), menu).Y;
+                    }
+                }
+
+                menu.IsOpen = false;
+                UiPump.Pump(50);
+
+                // Anchor over the tree the menu belongs to, from its live position,
+                // so the composite reads as "this menu on that panel". The capture
+                // re-lays the content out at its own size, so scale across.
+                if (menuShot is not null)
+                {
+                    if (live is FrameworkElement liveElement
+                        && liveElement.ActualWidth > 0 && liveElement.ActualHeight > 0)
+                    {
+                        Point corner = tree.TranslatePoint(new Point(0, 0), liveElement);
+                        menuX = corner.X * (width / liveElement.ActualWidth) + 48;
+                        menuY = corner.Y * (height / liveElement.ActualHeight) + 80;
+                    }
+
+                    // Keep the pair inside the canvas: the submenu opens to the right
+                    // and would otherwise be cut off, and the parent menu was clipped
+                    // at the bottom edge before this clamp existed.
+                    double need = menuShot.PixelWidth + (submenuShot?.PixelWidth ?? 0) + 24;
+                    if (menuX + need > width) menuX = Math.Max(8, width - need);
+                    if (menuX < 8) menuX = 8;
+                    if (menuY + menuShot.PixelHeight > height)
+                        menuY = Math.Max(8, height - menuShot.PixelHeight);
+                    if (menuY < 8) menuY = 8;
+
+                    submenuX = menuX + menuShot.PixelWidth - 3;
+                    submenuY += menuY;
+                    if (submenuShot is not null && submenuY + submenuShot.PixelHeight > height)
+                        submenuY = Math.Max(8, height - submenuShot.PixelHeight);
+                }
+            }
+        }
+
         // Opt-in second render path (Variant B): no detach, no re-host. The window is
         // already shown, so give it the target size, force a layout pass on it, and
         // render the window visual itself. Both PNGs come from the same settled state
@@ -386,6 +493,32 @@ internal static class UiShot
 
         var bitmap = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
         bitmap.Render(host);
+
+        // The menu bitmaps were taken from the live popups above; lay them over the
+        // window now, in one drawing pass, so the saved PNG is a single image of the
+        // window with its menu open. Menu-less captures never enter this block.
+        if (menuShot is not null)
+        {
+            var composed = new DrawingVisual();
+            using (DrawingContext dc = composed.RenderOpen())
+            {
+                dc.DrawImage(bitmap, new Rect(0, 0, width, height));
+                dc.DrawImage(menuShot, new Rect(menuX, menuY, menuShot.PixelWidth, menuShot.PixelHeight));
+                if (submenuShot is not null)
+                {
+                    dc.DrawImage(submenuShot,
+                        new Rect(submenuX, submenuY, submenuShot.PixelWidth, submenuShot.PixelHeight));
+                }
+            }
+
+            var merged = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
+            merged.Render(composed);
+            bitmap = merged;
+            Console.Out.WriteLine(
+                $"uishot: menu composited at {menuX:0},{menuY:0} " +
+                $"({menuShot.PixelWidth}x{menuShot.PixelHeight}), submenu " +
+                (submenuShot is null ? "absent" : $"{submenuShot.PixelWidth}x{submenuShot.PixelHeight}"));
+        }
 
         var encoder = new PngBitmapEncoder();
         encoder.Frames.Add(BitmapFrame.Create(bitmap));
@@ -756,6 +889,23 @@ internal static class UiShot
 
             Console.Out.WriteLine($"uishot:   grid rows:{rows}");
         }
+    }
+
+    /// <summary>
+    /// Render one laid-out element on its own. A Popup's content has its own visual
+    /// tree, so the window render can never contain it; this is how the menu becomes
+    /// pixels. Null when the element never got a size, so an empty menu is reported
+    /// rather than shipped as a transparent rectangle.
+    /// </summary>
+    private static BitmapSource? RenderElement(FrameworkElement element)
+    {
+        int w = (int)Math.Ceiling(element.ActualWidth);
+        int h = (int)Math.Ceiling(element.ActualHeight);
+        if (w <= 0 || h <= 0) return null;
+
+        var shot = new RenderTargetBitmap(w, h, 96, 96, PixelFormats.Pbgra32);
+        shot.Render(element);
+        return shot;
     }
 
     /// <summary>Every descendant of one type, in tree order.</summary>
