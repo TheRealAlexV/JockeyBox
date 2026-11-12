@@ -81,9 +81,14 @@ public partial class TrackEntry : ObservableObject
 
     public bool HasBoth => KaraokePath != null && MusicPath != null;
 
-    /// <summary>True when a karaoke version still needs to be generated.</summary>
+    /// <summary>
+    /// True when a karaoke version still needs to be generated. False for a
+    /// derived vocals-only row: that file is the output of a separation and a
+    /// derived track is not a source to render karaoke from.
+    /// </summary>
     public bool NeedsKaraoke => MusicPath != null && KaraokePath == null
-                                && Separation is SeparationState.None or SeparationState.Failed;
+                                && Separation is SeparationState.None or SeparationState.Failed
+                                && !DerivedVocals.IsVocalsFile(MusicPath);
 
     /// <summary>Browser icon: generation state or pairing status.</summary>
     public string KaraokeStatus => Separation switch
@@ -92,6 +97,9 @@ public partial class TrackEntry : ObservableObject
         SeparationState.Running => $"\u2699 {SeparationProgress}%",
         SeparationState.Failed => "\u2716 failed",
         _ when HasBoth => "\u2713",
+        // A derived vocals row is not an offer to render anything: it has no
+        // karaoke state of its own to show (Library/DerivedVocals).
+        _ when DerivedVocals.IsVocalsFile(MusicPath) => "",
         _ when KaraokePath == null => "\u2b55 needed",
         _ => "no music",
     };

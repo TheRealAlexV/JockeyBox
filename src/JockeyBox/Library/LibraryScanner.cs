@@ -119,6 +119,22 @@ public class LibraryScanner
             progress?.Report((++done, list.Count));
         }
 
+        // A vocals-only render is an ordinary row (it plays on a deck like any
+        // other file), but it is the source's own audio, not a second song: one
+        // " (Vocals)" on the title makes it distinguishable, searchable and
+        // sorted beside its original, and it borrows the artist when the render
+        // carries none. Recomputed from the files on every scan - never from the
+        // previous title - so a rescan cannot stack suffixes or add a row.
+        foreach (var track in list)
+        {
+            if (!DerivedVocals.IsVocalsFile(track.MusicPath)) continue;
+
+            var source = tracks.GetValueOrDefault(DerivedVocals.SourceKey(track.RelativeKey));
+            track.Title = DerivedVocals.TitleWithSuffix(
+                FirstNonEmpty(source?.Title, track.Title, DerivedVocals.SourceName(track.MusicPath)));
+            track.Artist = FirstNonEmpty(source?.Artist, track.Artist);
+        }
+
         _tagCache.Prune(list.SelectMany(t => new[] { t.KaraokePath, t.MusicPath })
                             .Where(p => p != null)!);
         _tagCache.Save();
@@ -137,8 +153,23 @@ public class LibraryScanner
     {
         foreach (var file in files)
         {
-            ct.ThrowIfCancellationRequested();
             var key = PairKey(root, file);
+
+            // A vocals-only render is a track of its own, never the partner of
+            // its source: attaching it here would put the vocals on deck A of a
+            // karaoke pair as if they were the instrumental. It still becomes an
+            // ordinary row wherever the scan finds it - pass 2b walks the karaoke
+            // root unfiltered, so this shared path is where the rule has to hold.
+            if (DerivedVocals.IsVocalsFile(file))
+            {
+                tracks.TryAdd(key, new TrackEntry
+                {
+                    RelativeKey = key,
+                    RelativePath = Path.GetRelativePath(root, file),
+                    MusicPath = file,
+                });
+                continue;
+            }
             if (tracks.TryGetValue(key, out var entry))
             {
                 entry.KaraokePath ??= file;
@@ -154,6 +185,9 @@ public class LibraryScanner
             }
         }
     }
+
+    private static string FirstNonEmpty(params string?[] values) =>
+        values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v))?.Trim() ?? "";
 
     /// <summary>
     /// True when both settings name one folder (or the karaoke root is unset):
