@@ -17,7 +17,11 @@ public enum KaraokeStemMode
     VocalsOnly,
 }
 
-/// <summary>Shared model presets used by both the Settings dropdown and the context-menu submenu.</summary>
+/// <summary>
+/// Model catalogue kept for reference. Nothing reads it today: the Settings
+/// dropdown that used to list it was removed, and the context menu picks a stem
+/// mode instead of a filename. The live mapping is <see cref="For"/>.
+/// </summary>
 public static class SeparationModels
 {
     public static readonly (string Filename, string Description)[] Presets =
@@ -44,20 +48,4 @@ public static class SeparationModels
         KaraokeStemMode.VocalsOnly => ("Kim_Vocal_2.onnx", "Vocals"),
         _ => ("UVR-MDX-NET-Inst_HQ_3.onnx", "Instrumental"),
     };
-
-    /// <summary>
-    /// The mode a legacy model-filename choice stands for. Old settings and the
-    /// context-menu submenu still pass a filename; this keeps that input working
-    /// without letting a filename pick a stem on its own.
-    /// </summary>
-    public static KaraokeStemMode FromFilename(string? filename)
-    {
-        var name = (filename ?? "").Trim();
-        if (name.Equals("UVR_MDXNET_KARA_2.onnx", StringComparison.OrdinalIgnoreCase))
-            return KaraokeStemMode.InstrumentalKeepBacking;
-        if (name.Contains("Vocal", StringComparison.OrdinalIgnoreCase)
-            && !name.Contains("UVR-MDX-NET", StringComparison.OrdinalIgnoreCase))
-            return KaraokeStemMode.VocalsOnly;
-        return KaraokeStemMode.Instrumental;
-    }
 }

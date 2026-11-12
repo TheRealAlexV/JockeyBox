@@ -108,13 +108,6 @@ public class SeparationService : IDisposable
         return _queue.Writer.TryWrite(job);
     }
 
-    /// <summary>
-    /// Legacy entry point: callers used to pass a model filename. The mode owns
-    /// the model now, so the filename is mapped to the mode it stands for.
-    /// </summary>
-    public bool Enqueue(TrackEntry track, string? modelOverride)
-        => Enqueue(track, SeparationModels.FromFilename(modelOverride));
-
     /// <summary>Jobs are per (track, mode): one track may hold an instrumental
     /// job and a vocals job at the same time.</summary>
     private static string JobKey(string relativeKey, KaraokeStemMode mode)

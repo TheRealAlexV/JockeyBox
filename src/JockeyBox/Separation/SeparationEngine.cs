@@ -37,6 +37,97 @@ public partial class SeparationEngine
     /// <summary>True when the engine venv is ready to separate.</summary>
     public static bool IsInstalled => File.Exists(CliPath) && File.Exists(VenvPython);
 
+    // ---- GPU readiness -------------------------------------------------------
+
+    /// <summary>
+    /// The CUDA runtime DLLs inside the venv, relative to the venv root. The
+    /// venv installs a +cpu torch wheel, so the package's own device probe can
+    /// never select CUDA: these files are the only honest readiness signal.
+    /// Pure file existence, resolved from a venv root so it is testable against
+    /// a fake tree.
+    /// </summary>
+    internal static readonly string[] CudaDllPaths =
+    {
+        "Lib/site-packages/nvidia/cu13/bin/x86_64/cudart64_13.dll",
+        "Lib/site-packages/nvidia/cu13/bin/x86_64/cublas64_13.dll",
+        "Lib/site-packages/nvidia/cu13/bin/x86_64/cublasLt64_13.dll",
+        "Lib/site-packages/nvidia/cudnn/bin/cudnn64_9.dll",
+        "Lib/site-packages/nvidia/cudnn/bin/cudnn_ops64_9.dll",
+        "Lib/site-packages/nvidia/cudnn/bin/cudnn_cnn64_9.dll",
+        "Lib/site-packages/onnxruntime/capi/onnxruntime_providers_cuda.dll",
+    };
+
+    /// <summary>True when every CUDA DLL the GPU path needs is present.</summary>
+    internal static bool CudaReady(string venvRoot)
+    {
+        foreach (var relative in CudaDllPaths)
+        {
+            var path = Path.Combine(venvRoot,
+                relative.Replace('/', Path.DirectorySeparatorChar));
+            if (!File.Exists(path)) return false;
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// The program handed to <c>python.exe -c</c>. It makes the CUDA DLLs
+    /// findable (a directory that is absent is skipped, so a CPU-only machine
+    /// keeps working), then - only when the launcher asked for it - forces the
+    /// execution provider onto the Separator instance, because
+    /// <c>setup_torch_device</c> sees a CPU-only torch and never picks CUDA.
+    /// Finally it hands over to the package's own CLI entry point.
+    ///
+    /// Paths come from <c>sys.prefix</c>, never a hardcoded venv path, so the
+    /// DLLs can never drift from the interpreter the app launched.
+    /// </summary>
+    internal const string CudaBootstrap = """
+import os, sys
+_nd = os.path.join(sys.prefix, 'Lib', 'site-packages', 'nvidia')
+for _d in (os.path.join(_nd, 'cu13', 'bin', 'x86_64'), os.path.join(_nd, 'cudnn', 'bin')):
+    if os.path.isdir(_d):
+        os.add_dll_directory(_d)
+if os.environ.get('JOCKEYBOX_UVR_CUDA') == '1':
+    import audio_separator.separator.separator as _as
+    _orig = _as.Separator.__init__
+    def _init(self, *a, **k):
+        _orig(self, *a, **k)
+        self.onnx_execution_provider = ['CUDAExecutionProvider']
+    _as.Separator.__init__ = _init
+from audio_separator.utils.cli import main
+main()
+""";
+
+    /// <summary>
+    /// The separator's argv: <c>-c</c>, the bootstrap as ONE argument, then the
+    /// separation flags. The package's CLI calls <c>parse_args()</c> with no
+    /// list, so it reads <c>sys.argv[1:]</c> - under <c>-c</c> those are exactly
+    /// these arguments (<c>sys.argv[0]</c> is <c>-c</c>), spaces in paths
+    /// included, and the exit code passes through unchanged.
+    /// </summary>
+    internal static List<string> BuildLaunchArgs(SeparationRequest request, string outputDir)
+    {
+        var args = new List<string> { "-c", CudaBootstrap };
+        args.AddRange(BuildSeparationArgs(request, outputDir));
+        return args;
+    }
+
+    /// <summary>
+    /// The child's environment: UTF-8 on both streams (progress and model names
+    /// are read as text), plus the CUDA opt-in the bootstrap looks for. The flag
+    /// is set only when the DLLs are present, so a CPU-only machine never pays
+    /// for a provider load that cannot succeed.
+    /// </summary>
+    internal static Dictionary<string, string> BuildSeparationEnv(bool cudaReady)
+    {
+        var env = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["PYTHONIOENCODING"] = "utf-8",
+            ["PYTHONUTF8"] = "1",
+        };
+        if (cudaReady) env["JOCKEYBOX_UVR_CUDA"] = "1";
+        return env;
+    }
+
     // ---- environment setup -------------------------------------------------
 
     /// <summary>
@@ -255,7 +346,6 @@ public partial class SeparationEngine
         var (model, stem) = SeparationModels.For(request.Mode);
         return new List<string>
         {
-            request.InputPath,
             "--model_filename", model,
             "--output_dir", outputDir,
             "--model_file_dir", ModelsDir,
@@ -264,6 +354,7 @@ public partial class SeparationEngine
             "--normalization", "1.0",
             "--single_stem", stem,
             "--log_level", "info",
+            request.InputPath,
         };
     }
 
@@ -314,66 +405,28 @@ public partial class SeparationEngine
 
         try
         {
-            var psi = new ProcessStartInfo
+            var cudaReady = CudaReady(VenvDir);
+            var run = await RunSeparationAsync(request, tempDir, cudaReady, progress, ct);
+
+            if (run.ProviderDegraded)
             {
-                FileName = CliPath,
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                StandardOutputEncoding = Encoding.UTF8,
-                StandardErrorEncoding = Encoding.UTF8,
-            };
-            foreach (var arg in BuildSeparationArgs(request, tempDir))
-                psi.ArgumentList.Add(arg);
-            psi.EnvironmentVariables["PYTHONIOENCODING"] = "utf-8";
-            psi.EnvironmentVariables["PYTHONUTF8"] = "1";
-
-            var stderrTail = new Queue<string>(8);
-            using var process = new Process { StartInfo = psi };
-
-            void HandleLine(string? line)
-            {
-                if (string.IsNullOrWhiteSpace(line)) return;
-                lock (stderrTail)
-                {
-                    if (stderrTail.Count >= 8) stderrTail.Dequeue();
-                    stderrTail.Enqueue(line);
-                }
-
-                var phase = line.Contains("ownload", StringComparison.Ordinal)
-                    ? "downloading model" : "separating";
-                var pm = ProgressRegex().Match(line);
-                if (pm.Success && int.TryParse(pm.Groups[1].Value, out int pct) && pct <= 100)
-                    progress.Report((pct, phase));
-                else if (phase == "downloading model")
-                    progress.Report((0, phase));
+                // The requested provider degraded silently: the stem is valid,
+                // the run just spent its time on CPU. Clear it and run once
+                // more without the opt-in, then continue on that result.
+                Log.Warn($"audio-separator: {ProviderDegradedWarning}");
+                foreach (var partial in Directory.GetFiles(tempDir)) TryDelete(partial);
+                run = await RunSeparationAsync(request, tempDir, cudaReady: false, progress, ct);
             }
 
-            process.Start();
+            Log.Info(cudaReady
+                ? run.ProviderDegraded
+                    ? "audio-separator: cpu (provider unavailable, retried on cpu)"
+                    : "audio-separator: cuda"
+                : "audio-separator: cpu (cuda libraries not present)");
 
-            // tqdm rewrites its progress line with bare \r (no newline), so
-            // event-based line reading would sit silent until the very end.
-            // Pump both streams raw and split on \r or \n to get live percts.
-            var pumps = Task.WhenAll(
-                PumpLinesAsync(process.StandardOutput, HandleLine),
-                PumpLinesAsync(process.StandardError, HandleLine));
-
-            using var reg = ct.Register(() =>
-            {
-                try { process.Kill(entireProcessTree: true); } catch { }
-            });
-            await process.WaitForExitAsync(CancellationToken.None);
-            await pumps;
-            ct.ThrowIfCancellationRequested();
-
-            if (process.ExitCode != 0)
-            {
-                string detail;
-                lock (stderrTail) detail = string.Join('\n', stderrTail);
+            if (run.ExitCode != 0)
                 throw new InvalidOperationException(
-                    $"audio-separator exited with code {process.ExitCode}:\n{detail}");
-            }
+                    $"audio-separator exited with code {run.ExitCode}:\n{run.Tail}");
 
             var stem = PickStem(tempDir, request.Mode)
                 ?? throw new InvalidOperationException(
@@ -433,6 +486,93 @@ public partial class SeparationEngine
                    || Path.GetFileName(f).Contains("no_vocals", StringComparison.OrdinalIgnoreCase))
             ?? files.FirstOrDefault(f =>
                    !Path.GetFileName(f).Contains("vocal", StringComparison.OrdinalIgnoreCase));
+    }
+
+    // ---- one separation subprocess -------------------------------------------
+
+    /// <summary>
+    /// What mdx_separator prints, at info level, when the provider it was asked
+    /// for silently degrades to CPU. Detecting it is what makes the retry
+    /// possible without raising --log_level to debug (whose noise would drown
+    /// the percentage lines the progress bar reads).
+    /// </summary>
+    internal const string ProviderDegradedWarning = "could not activate requested provider";
+
+    private sealed record SeparationRun(int ExitCode, string Tail, bool ProviderDegraded);
+
+    private static ProcessStartInfo BuildStartInfo(SeparationRequest request, string outputDir,
+                                                   bool cudaReady)
+    {
+        var psi = new ProcessStartInfo
+        {
+            FileName = VenvPython,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            StandardOutputEncoding = Encoding.UTF8,
+            StandardErrorEncoding = Encoding.UTF8,
+        };
+        foreach (var arg in BuildLaunchArgs(request, outputDir))
+            psi.ArgumentList.Add(arg);
+        foreach (var (name, value) in BuildSeparationEnv(cudaReady))
+            psi.EnvironmentVariables[name] = value;
+        return psi;
+    }
+
+    /// <summary>
+    /// Run the separator once and pump its output through the progress parser.
+    /// Both streams are scanned for the provider-degradation warning, which is
+    /// the only signal that a GPU request was not honoured.
+    /// </summary>
+    private static async Task<SeparationRun> RunSeparationAsync(
+        SeparationRequest request, string outputDir, bool cudaReady,
+        IProgress<(int percent, string phase)> progress, CancellationToken ct)
+    {
+        var stderrTail = new Queue<string>(8);
+        var degraded = false;
+        using var process = new Process { StartInfo = BuildStartInfo(request, outputDir, cudaReady) };
+
+        void HandleLine(string? line)
+        {
+            if (string.IsNullOrWhiteSpace(line)) return;
+            lock (stderrTail)
+            {
+                if (stderrTail.Count >= 8) stderrTail.Dequeue();
+                stderrTail.Enqueue(line);
+                if (line.Contains(ProviderDegradedWarning, StringComparison.OrdinalIgnoreCase))
+                    degraded = true;
+            }
+
+            var phase = line.Contains("ownload", StringComparison.Ordinal)
+                ? "downloading model" : "separating";
+            var pm = ProgressRegex().Match(line);
+            if (pm.Success && int.TryParse(pm.Groups[1].Value, out int pct) && pct <= 100)
+                progress.Report((pct, phase));
+            else if (phase == "downloading model")
+                progress.Report((0, phase));
+        }
+
+        process.Start();
+
+        // tqdm rewrites its progress line with bare \r (no newline), so
+        // event-based line reading would sit silent until the very end.
+        // Pump both streams raw and split on \r or \n to get live percts.
+        var pumps = Task.WhenAll(
+            PumpLinesAsync(process.StandardOutput, HandleLine),
+            PumpLinesAsync(process.StandardError, HandleLine));
+
+        using var reg = ct.Register(() =>
+        {
+            try { process.Kill(entireProcessTree: true); } catch { }
+        });
+        await process.WaitForExitAsync(CancellationToken.None);
+        await pumps;
+        ct.ThrowIfCancellationRequested();
+
+        string tail;
+        lock (stderrTail) tail = string.Join('\n', stderrTail);
+        return new SeparationRun(process.ExitCode, tail, degraded);
     }
 
     private static void TryDelete(string path)

@@ -18,8 +18,6 @@ namespace JockeyBox.Views;
 
 public partial class SettingsWindow : Window
 {
-    private static readonly string[] FormatPresets = { "FLAC", "MP3", "WAV" };
-
     private readonly AppSettings _settings;
     /// <summary>
     /// The state the controls were stamped from, detached at construction. Save
@@ -49,9 +47,6 @@ public partial class SettingsWindow : Window
 
         MusicDirBox.Text = settings.MusicDirectory;
 
-        foreach (var f in FormatPresets) FormatBox.Items.Add(f);
-        FormatBox.SelectedItem = FormatPresets.Contains(settings.SeparationOutputFormat)
-            ? settings.SeparationOutputFormat : "FLAC";
         PythonBox.Text = settings.PythonPath;
         GpuCheck.IsChecked = settings.SeparationUseGpu;
         UpdateEngineState();
@@ -696,7 +691,6 @@ public partial class SettingsWindow : Window
         _settings.MusicDirectory = music;
         // One root: karaoke stems live beside their originals (Library/KaraokeNaming).
         _settings.KaraokeDirectory = music;
-        _settings.SeparationOutputFormat = (FormatBox.SelectedItem as string) ?? "FLAC";
         _settings.PythonPath = PythonBox.Text.Trim();
         _settings.SeparationUseGpu = GpuCheck.IsChecked == true;
         _settings.LyricsApiBaseUrl = apiUrl;

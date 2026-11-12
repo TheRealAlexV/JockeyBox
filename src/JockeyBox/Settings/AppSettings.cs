@@ -218,12 +218,8 @@ public class AppSettings
     // Vocal removal engine (UVR models via the audio-separator CLI)
     /// <summary>Optional explicit python.exe used to build the engine venv; empty = auto-detect.</summary>
     public string PythonPath { get; set; } = "";
-    /// <summary>UVR model filename passed to audio-separator (auto-downloaded on first use).</summary>
-    public string SeparationModel { get; set; } = "UVR-MDX-NET-Inst_HQ_3.onnx";
     /// <summary>Install the CUDA (NVIDIA GPU) build of the engine - much faster, ~3 GB download.</summary>
     public bool SeparationUseGpu { get; set; }
-    /// <summary>Output format for generated karaoke files (FLAC = lossless, no ffmpeg needed).</summary>
-    public string SeparationOutputFormat { get; set; } = "FLAC";
 
     // Lyrics
     public string LyricsApiBaseUrl { get; set; } = "";

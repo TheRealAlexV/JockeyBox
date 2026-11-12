@@ -61,9 +61,99 @@ public sealed class KaraokeRenderTests
     {
         var args = SeparationEngine.BuildSeparationArgs(Request(KaraokeStemMode.Instrumental), @"C:\Temp\sep-1");
 
-        Assert.Equal(@"C:\Music\Artist\Song.mp3", args[0]);
+        // The input is the CLI's positional, so it goes last, after the flags.
+        Assert.Equal(@"C:\Music\Artist\Song.mp3", args[^1]);
+        Assert.Single(args.Where(a => a == @"C:\Music\Artist\Song.mp3"));
         Assert.Equal(SeparationEngine.ModelsDir, ValueOf(args, "--model_file_dir"));
         Assert.Equal("info", ValueOf(args, "--log_level"));
+    }
+
+    // ---- launch form -------------------------------------------------------
+
+    [Fact]
+    public void Launch_runs_the_venv_python_with_the_bootstrap_as_one_argument()
+    {
+        var request = Request(KaraokeStemMode.Instrumental);
+        var args = SeparationEngine.BuildLaunchArgs(request, @"C:\Temp\sep-1");
+
+        Assert.Equal("-c", args[0]);
+        Assert.Equal("--model_filename", args[2]);
+
+        var bootstrap = args[1];
+        Assert.Contains("os.add_dll_directory", bootstrap);
+        Assert.Contains("sys.prefix", bootstrap);
+        Assert.Contains("os.path.isdir", bootstrap);
+        Assert.Contains("CUDAExecutionProvider", bootstrap);
+        Assert.Contains("JOCKEYBOX_UVR_CUDA", bootstrap);
+        Assert.Contains("from audio_separator.utils.cli import main", bootstrap);
+
+        // One argument, never the program split on its newlines.
+        Assert.Single(args.Where(a => a.Contains("os.add_dll_directory", StringComparison.Ordinal)));
+
+        // The separator's own argv sits behind the bootstrap, unchanged.
+        Assert.Equal(
+            SeparationEngine.BuildSeparationArgs(request, @"C:\Temp\sep-1"),
+            args.Skip(2).ToList());
+    }
+
+    [Fact]
+    public void The_ready_check_covers_the_seven_cuda_dlls()
+    {
+        var dlls = SeparationEngine.CudaDllPaths.Select(p => p.Replace('/', '\\')).ToList();
+
+        Assert.Equal(7, dlls.Count);
+        Assert.Contains(dlls, p => p.EndsWith(@"nvidia\cu13\bin\x86_64\cudart64_13.dll", StringComparison.Ordinal));
+        Assert.Contains(dlls, p => p.EndsWith(@"nvidia\cu13\bin\x86_64\cublas64_13.dll", StringComparison.Ordinal));
+        Assert.Contains(dlls, p => p.EndsWith(@"nvidia\cu13\bin\x86_64\cublasLt64_13.dll", StringComparison.Ordinal));
+        Assert.Contains(dlls, p => p.EndsWith(@"nvidia\cudnn\bin\cudnn64_9.dll", StringComparison.Ordinal));
+        Assert.Contains(dlls, p => p.EndsWith(@"nvidia\cudnn\bin\cudnn_ops64_9.dll", StringComparison.Ordinal));
+        Assert.Contains(dlls, p => p.EndsWith(@"nvidia\cudnn\bin\cudnn_cnn64_9.dll", StringComparison.Ordinal));
+        Assert.Contains(dlls, p => p.EndsWith(@"onnxruntime\capi\onnxruntime_providers_cuda.dll", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void Cuda_is_ready_only_when_every_dll_is_present()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "jockeybox-cuda-" + Guid.NewGuid().ToString("N")[..8]);
+        var dlls = SeparationEngine.CudaDllPaths
+            .Select(rel => Path.Combine(root, rel.Replace('/', Path.DirectorySeparatorChar)))
+            .ToList();
+
+        try
+        {
+            Assert.False(SeparationEngine.CudaReady(root));
+
+            foreach (var dll in dlls) PlantFile(dll);
+            Assert.True(SeparationEngine.CudaReady(root));
+
+            // Any one missing disables the GPU path.
+            foreach (var dll in dlls)
+            {
+                File.Delete(dll);
+                Assert.False(SeparationEngine.CudaReady(root));
+                PlantFile(dll);
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(root, recursive: true); } catch { }
+        }
+    }
+
+    [Fact]
+    public void Environment_asks_for_cuda_only_when_the_libraries_are_there()
+    {
+        var ready = SeparationEngine.BuildSeparationEnv(cudaReady: true);
+        Assert.Equal("1", ready["JOCKEYBOX_UVR_CUDA"]);
+
+        var cpu = SeparationEngine.BuildSeparationEnv(cudaReady: false);
+        Assert.False(cpu.ContainsKey("JOCKEYBOX_UVR_CUDA"));
+
+        foreach (var env in new[] { ready, cpu })
+        {
+            Assert.Equal("utf-8", env["PYTHONIOENCODING"]);
+            Assert.Equal("1", env["PYTHONUTF8"]);
+        }
     }
 
     [Fact]
@@ -215,6 +305,12 @@ public sealed class KaraokeRenderTests
         var i = args.ToList().IndexOf(flag);
         Assert.True(i >= 0 && i + 1 < args.Count, $"'{flag}' missing from argv: {string.Join(' ', args)}");
         return args[i + 1];
+    }
+
+    private static void PlantFile(string path)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllBytes(path, Array.Empty<byte>());
     }
 
     /// <summary>None of these may appear: each one trims, pads, or time-stretches.</summary>

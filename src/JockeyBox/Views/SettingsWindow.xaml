@@ -364,16 +364,6 @@
                         <ColumnDefinition Width="150"/>
                         <ColumnDefinition Width="*"/>
                     </Grid.ColumnDefinitions>
-                    <TextBlock Grid.Column="0" Text="Output format" VerticalAlignment="Center"
-                               ToolTip="FLAC (lossless) and WAV work out of the box; MP3 additionally requires ffmpeg on PATH."/>
-                    <ComboBox x:Name="FormatBox" Grid.Column="1" Margin="0,4" Width="140" HorizontalAlignment="Left"/>
-                </Grid>
-
-                <Grid Margin="0,0,0,4">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="150"/>
-                        <ColumnDefinition Width="*"/>
-                    </Grid.ColumnDefinitions>
                     <TextBlock Grid.Column="0" Text="Python (optional)" VerticalAlignment="Center"
                                ToolTip="Explicit python.exe used to build the engine environment. Leave empty to auto-detect."/>
                     <TextBox x:Name="PythonBox" Grid.Column="1" Margin="0,4"/>
