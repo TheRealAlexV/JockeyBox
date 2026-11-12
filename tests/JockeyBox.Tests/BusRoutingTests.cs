@@ -112,48 +112,7 @@ public sealed class BusRoutingTests
     }
 
     [Fact]
-    public async Task Karaoke_mode_sends_karaoke_stem_to_Main_and_original_to_the_aid_bus()
-    {
-        string original = TestAudio.WriteConstantWav(0.20f);
-        string karaoke = TestAudio.WriteConstantWav(0.50f);
-        try
-        {
-            using var engine = new AudioEngine();
-            engine.Fader.Snap(0, 0);
-            engine.KaraokeMode = true;
-            engine.OutputDelayMs = 50; // 5 blocks: proves the aid bus is pre-delay
-
-            // Settle the delay buffer first: moving the tap crossfades from the
-            // old one (as it must for a live delay change), so the onset test has
-            // to run once the 50 ms tap is fully in place.
-            TestAudio.RenderBlocks(engine, new TestAudio.BusTap(), blocks: 12);
-
-            await engine.DeckA.LoadAsync(original, karaoke);
-
-            var tap = new TestAudio.BusTap();
-            TestAudio.RenderBlocks(engine, tap, blocks: 20);
-
-            Assert.Equal(0.50f, tap.Peak(BusKind.Main), 3);
-            Assert.Equal(0.20f, tap.Peak(BusKind.KaraokeAid), 3);
-            Assert.Equal(0.50f, tap.Peak(BusKind.Bridge), 3);
-
-            // The operator's cue is immediate; Main is 50 ms (5 blocks) behind it.
-            int aidAt = tap.FirstAudibleBlock(BusKind.KaraokeAid);
-            int mainAt = tap.FirstAudibleBlock(BusKind.Main);
-            Assert.True(aidAt >= 0, "karaoke aid never became audible");
-            Assert.True(mainAt >= 0, "main never became audible");
-            Assert.True(mainAt - aidAt >= 4,
-                $"main should be delayed by ~5 blocks after the cue (aid {aidAt}, main {mainAt})");
-        }
-        finally
-        {
-            TestAudio.TryDelete(original);
-            TestAudio.TryDelete(karaoke);
-        }
-    }
-
-    [Fact]
-    public async Task Karaoke_aid_is_silent_when_karaoke_mode_is_off()
+    public async Task Karaoke_aid_stays_silent_while_both_stems_play_in_the_mix()
     {
         string original = TestAudio.WriteConstantWav(0.20f);
         string karaoke = TestAudio.WriteConstantWav(0.50f);
@@ -167,8 +126,8 @@ public sealed class BusRoutingTests
             TestAudio.RenderBlocks(engine, tap, blocks: 12);
 
             Assert.Equal(0f, tap.Peak(BusKind.KaraokeAid), 4);
-            // Karaoke mode off keeps the historical mix: both stems summed, with
-            // the deck's karaoke gain (0.5 by default) on the sub-stem.
+            // No global karaoke mode: a deck's sub-stem stays in the mix, with the
+            // deck's karaoke gain (0.5 by default) on it, and the aid bus is silent.
             Assert.Equal(0.45f, tap.Peak(BusKind.Main), 3);
         }
         finally

@@ -161,11 +161,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
             System.Windows.Application.Current.Dispatcher);
         _separation.StatusChanged += message => StatusText = message;
 
-        // Karaoke mode: reuses this same separation queue, so progress, the
-        // status line and the row glyph are the existing ones (MainViewModel.
-        // KaraokeMode.cs). The mode's engine flag is adopted here too.
-        InitializeKaraokeMode();
-
         // Lyrics header: the offset slider writes through to the metadata store
         // on every drag step (the store debounces its own save); the settings
         // debounce below is only for the global default.
@@ -2478,6 +2473,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private void LoadTrack(TrackEntry track, bool fromQueue = false, PlaybackDeck? targetDeck = null,
                            bool activate = true)
     {
+        // The karaoke pair's one release point: the pair path never comes through
+        // here, so every ordinary load ends the pair by construction.
+        ReleaseKaraokePair();
+
         if (!fromQueue)
         {
             // Played outside the queue: leave the queue's rows alone, but
@@ -2494,12 +2493,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
         // only exists as its sub-stem (a karaoke-only track has no sub-stem).
         var musicPath = track.MusicPath ?? track.KaraokePath;
         var karaokePath = track.MusicPath != null ? track.KaraokePath : null;
-
-        // Karaoke mode: the deck plays the stem on Main and the original on the
-        // operator's Karaoke Aid. A missing stem is queued for this track alone
-        // (never a library sweep) and attached in place when it lands, so the
-        // deck starts on the mix and flips to the split render mid-track.
-        karaokePath = ApplyKaraokePlan(deck, track, musicPath, karaokePath);
 
         try
         {
@@ -2610,6 +2603,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
     partial void OnSelectedTreeNodeChanged(BrowserNode? value)
     {
         AddToQueueCommand.NotifyCanExecuteChanged();
+        PlayKaraokeSelectedCommand.NotifyCanExecuteChanged();
+        QueueKaraokeSelectedCommand.NotifyCanExecuteChanged();
         NotifyMediaCommandStates();
         if (value == null) return; // tree rebuild / filtered out: keep the key for restore
         _lastSelectedTrackKey = value.Track is { } track
@@ -3103,6 +3098,32 @@ public partial class MainViewModel : ObservableObject, IDisposable
     /// </summary>
     private async Task StartQueueItemAsync(PlaybackQueueItem item, bool autoAdvance = false)
     {
+        // A pair's original row never starts on its own - it is the second deck of
+        // the pair - so a request for it starts the pair instead.
+        if (item.PairRole == KaraokePairRole.Original)
+        {
+            var lead = Queue.FirstOrDefault(q => q.PairRole == KaraokePairRole.Karaoke
+                && string.Equals(q.PairKey, item.PairKey, StringComparison.OrdinalIgnoreCase));
+            if (lead != null) item = lead;
+        }
+
+        if (item.PairRole == KaraokePairRole.Karaoke && item.Track is { } pairTrack)
+        {
+            // One unit: both rows are spent when the pair starts. The pair loads
+            // through the deck path, not LoadTrack, so its lock survives and the
+            // original row is never started separately.
+            if (item.PairKey is { } key)
+                foreach (var mate in Queue.Where(q =>
+                             string.Equals(q.PairKey, key, StringComparison.OrdinalIgnoreCase)))
+                    mate.IsPlayed = true;
+
+            LoadKaraokePair(pairTrack);
+            SetCurrentQueueIndex(Queue.IndexOf(item));
+            MarkQueueState();
+            SaveQueue();
+            return;
+        }
+
         var deck = item.DeckTarget;
         if (autoAdvance && _transport.IsDeckPlaying(deck))
         {
@@ -3220,6 +3241,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
             Artist = item.Artist,
             Played = item.IsPlayed,
             Deck = item.DeckTarget.ToPersistedString(),
+            Pair = item.PairKey,
+            Role = PlaybackQueueItem.PersistPairRole(item.PairRole),
         }));
     }
 
@@ -3258,6 +3281,14 @@ public partial class MainViewModel : ObservableObject, IDisposable
         finally
         {
             _restoringQueue = false;
+        }
+
+        // A pair whose mate did not come back (its file is gone) is a normal row.
+        foreach (var item in Queue.Where(i => i.PairKey != null).ToList())
+        {
+            if (!Queue.Any(other => !ReferenceEquals(other, item) &&
+                    string.Equals(other.PairKey, item.PairKey, StringComparison.OrdinalIgnoreCase)))
+                item.DropPair();
         }
 
         SetCurrentQueueIndex(-1);
@@ -4039,6 +4070,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 if (fromQueue) _ = AdvanceQueueAfterEndAsync();
             }
         }
+
+        // Stopped with nothing loaded: the pair is over. Every ordinary load
+        // releases inside LoadTrack; this covers the operator who stops and
+        // loads nothing at all.
+        if (_karaokePairLoaded && !DeckA.IsLoaded && !DeckB.IsLoaded) ReleaseKaraokePair();
     }
 
     private void OnTransportStateChanged()

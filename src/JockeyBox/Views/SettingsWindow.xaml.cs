@@ -90,7 +90,6 @@ public partial class SettingsWindow : Window
         FillDeviceBox(BridgeOutputBox, devices, settings.BridgeOutputDeviceId);
 
         SoundboardFollowsMainCheck.IsChecked = settings.SoundboardFollowsMain;
-        KaraokeModeCheck.IsChecked = settings.KaraokeModeEnabled;
 
         LoadMicDevices(settings);
 
@@ -717,7 +716,6 @@ public partial class SettingsWindow : Window
         _settings.MonitorOutputDeviceId = SelectedDeviceId(MonitorOutputBox);
         _settings.BridgeOutputDeviceId = SelectedDeviceId(BridgeOutputBox);
         _settings.SoundboardFollowsMain = SoundboardFollowsMainCheck.IsChecked == true;
-        _settings.KaraokeModeEnabled = KaraokeModeCheck.IsChecked == true;
 
         // Recording devices: the rows ARE the list. An enabled row is the whole
         // MicDeviceSettings record, so a save can never resurrect a device the

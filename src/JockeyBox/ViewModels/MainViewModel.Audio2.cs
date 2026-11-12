@@ -108,9 +108,6 @@ public partial class MainViewModel
         OutputDelayMs = _settings.OutputDelayMs;
         TransitionMode = _settings.TransitionMode;
         TransitionFadeSeconds = _settings.TransitionFadeSeconds;
-        // Restore the saved flag into the binding. At this point there is no engine
-        // yet, so the property's change handler is a no-op beyond the log line.
-        KaraokeModeEnabled = _settings.KaraokeModeEnabled;
         DeckA.SetTempoRange(_settings.ManualTempoRangePercent);
         DeckB.SetTempoRange(_settings.ManualTempoRangePercent);
 
@@ -645,29 +642,6 @@ public partial class MainViewModel
     // ---------------------------------------------------------------- six-bus route
 
     /// <summary>
-    /// Karaoke mode: Main carries the karaoke stem and the Karaoke aid bus carries
-    /// the original vocal stem for the operator's headphones.
-    ///
-    /// <para>Bound two-way from the KARAOKE toggle in the transport bar and from the
-    /// Settings dialog. The live engine flag flips immediately; saving the document
-    /// here means the next cold start agrees with what the operator just heard.</para>
-    /// </summary>
-    [ObservableProperty] private bool _karaokeModeEnabled;
-
-    partial void OnKaraokeModeEnabledChanged(bool value)
-    {
-        // Only a real flip rewrites the document; restoring the saved value in the
-        // constructor must not touch the file.
-        var persist = _settings.KaraokeModeEnabled != value;
-        _settings.KaraokeModeEnabled = value;
-        if (_transport?.Engine != null) _transport.Engine.KaraokeMode = value;
-        Log.Info(value
-            ? "karaoke mode: on — Main = karaoke stem, Karaoke aid = original stem"
-            : "karaoke mode: off — Main = full mix");
-        if (persist) _settings.Save();
-    }
-
-    /// <summary>
     /// Adopt a Settings save without a restart: the transport re-reads the document,
     /// rebuilds the six-bus route (it reopens outputs only when something actually
     /// changed) and re-applies the recording-device strips.
@@ -680,11 +654,6 @@ public partial class MainViewModel
     {
         // Reads AppSettings from disk, so it must run after the dialog wrote it.
         _transport.ApplyDeckSettingsChange(PlaybackDeck.A);
-
-        // The dialog may have changed the flag from its own checkbox. Going through
-        // the property keeps the engine, the log and the document in agreement; the
-        // setter ignores a value that already matches, so a no-op Save costs nothing.
-        KaraokeModeEnabled = _settings.KaraokeModeEnabled;
 
         RefreshMicDeviceCount();
     }

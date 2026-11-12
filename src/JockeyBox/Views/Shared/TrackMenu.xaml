@@ -30,6 +30,20 @@
                   Command="{Binding PlacementTarget.Tag.Play, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
                   Visibility="{Binding PlacementTarget.Tag.CanPlay, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={StaticResource MenuVisibility}}"/>
 
+        <!-- 1a. Karaoke pair actions. Always present where the surface can express a
+             pair; disabled (not removed) when this row has no karaoke file on disk.
+             Play loads the instrumental on A and the original on B; Queue adds the
+             two rows as one unit. -->
+        <MenuItem Header="Play Karaoke Track"
+                  AutomationProperties.Name="Play Karaoke Track"
+                  Command="{Binding PlacementTarget.Tag.PlayKaraoke, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                  Visibility="{Binding PlacementTarget.Tag.CanPlayKaraoke, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={StaticResource MenuVisibility}}"/>
+
+        <MenuItem Header="Queue Karaoke Track"
+                  AutomationProperties.Name="Queue Karaoke Track"
+                  Command="{Binding PlacementTarget.Tag.QueueKaraoke, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                  Visibility="{Binding PlacementTarget.Tag.CanQueueKaraoke, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={StaticResource MenuVisibility}}"/>
+
         <!-- 2. Preview (stream) -->
         <MenuItem Header="Preview"
                   Command="{Binding PlacementTarget.Tag.Preview, RelativeSource={RelativeSource AncestorType=ContextMenu}}"

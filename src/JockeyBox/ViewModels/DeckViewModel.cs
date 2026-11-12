@@ -69,6 +69,7 @@ public partial class DeckViewModel : ObservableObject
                           Action persistSettings,
                           Func<string?, double> getDeviceDelay, Action<string?, double> setDeviceDelay)
     {        Title = title;
+        _baseTitle = title;
         DeckTarget = deckTarget;
         _channel = channel;
         _transport = transport;
@@ -87,8 +88,22 @@ public partial class DeckViewModel : ObservableObject
         };
     }
 
-    public string Title { get; }
+    /// <summary>
+    /// Card title. Normally the ctor's name ("DECK A"); a karaoke pair renames the
+    /// deck for as long as the pair holds (see <see cref="SetKaraokeTitle"/>).
+    /// </summary>
+    [ObservableProperty] private string _title = "";
+
+    private readonly string _baseTitle;
+
     public PlaybackDeck DeckTarget { get; }
+
+    /// <summary>Rename this deck for a karaoke pair. Idempotent.</summary>
+    public void SetKaraokeTitle(string karaokeTitle) => Title = karaokeTitle;
+
+    /// <summary>Back to the ctor's name. Idempotent, so a double release is harmless.</summary>
+    public void RestoreTitle() => Title = _baseTitle;
+
     public ObservableCollection<AudioDeviceInfo> Devices { get; } = new();
 
     /// <summary>Generation counter: lets a late waveform render notice it is stale.</summary>

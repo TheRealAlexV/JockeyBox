@@ -19,6 +19,17 @@ namespace JockeyBox.ViewModels;
 /// from the A/B rotation (see <c>MainViewModel.AssignDeckForNewRow</c>) and the
 /// user can flip it per row; auto-advance loads the successor on its own deck.
 /// </summary>
+/// <summary>
+/// What a row is inside a karaoke pair: the instrumental on deck A, the original
+/// on deck B, or an ordinary row with no pair.
+/// </summary>
+public enum KaraokePairRole
+{
+    None,
+    Karaoke,
+    Original,
+}
+
 public partial class PlaybackQueueItem : ObservableObject
 {
     /// <summary>Persisted kind for library rows.</summary>
@@ -46,6 +57,30 @@ public partial class PlaybackQueueItem : ObservableObject
     public bool IsLibrary => Track != null;
     public bool IsRemote => Source != null;
     public string Kind => IsLibrary ? LibraryKind : RemoteKind;
+
+    /// <summary>
+    /// Identity shared by the two rows of one karaoke pair; null on a normal row.
+    /// The rows are queued as a unit and always advance together.
+    /// </summary>
+    public string? PairKey { get; private set; }
+
+    /// <summary>Which half of the pair this row is; <c>None</c> for a normal row.</summary>
+    public KaraokePairRole PairRole { get; private set; } = KaraokePairRole.None;
+
+    public bool IsKaraokePair => PairRole != KaraokePairRole.None;
+
+    internal void SetPair(string pairKey, KaraokePairRole role)
+    {
+        PairKey = pairKey;
+        PairRole = role;
+        OnPropertyChanged(nameof(IsKaraokePair));
+    }
+
+    /// <summary>
+    /// A pair whose mate did not come back (its file is gone) is just a normal
+    /// row again, so it advances on its own deck like anything else.
+    /// </summary>
+    internal void DropPair() => SetPair(null!, KaraokePairRole.None);
 
     /// <summary>Library entry when this is a library row.</summary>
     public TrackEntry? Track { get; private set; }
@@ -142,18 +177,76 @@ public partial class PlaybackQueueItem : ObservableObject
         source,
         deckTarget);
 
-    /// <summary>Rebuild a library row that was persisted before the library scan.</summary>
-    public static PlaybackQueueItem FromRecord(PlaybackQueueRecord record, TrackEntry? track) => new(
-        record.Key,
-        string.IsNullOrWhiteSpace(record.Title) ? record.Key : record.Title,
-        record.Artist,
-        track != null ? Format(track.Duration) : "",
-        track,
-        null,
-        PlaybackDecks.TryParse(record.Deck, out var deck) ? deck : PlaybackDeck.A)
+    /// <summary>
+    /// The two rows of one karaoke pair: the instrumental targeted deck A, the
+    /// original deck B, sharing a fresh <see cref="PairKey"/>. Both bypass the A/B
+    /// rotation (the pair owns both decks) and both keys are suffixed, so the
+    /// Key+Kind dedup in <c>Enqueue</c> cannot fold a pair row into a normal row
+    /// for the same song.
+    /// </summary>
+    public static (PlaybackQueueItem Karaoke, PlaybackQueueItem Original) FromKaraokePair(
+        TrackEntry track)
     {
-        IsPlayed = record.Played,
+        var pairKey = System.Guid.NewGuid().ToString("N");
+        var title = string.IsNullOrWhiteSpace(track.Title) ? track.RelativePath : track.Title;
+        var duration = Format(track.Duration);
+
+        var karaoke = new PlaybackQueueItem(
+            track.RelativeKey + "/karaoke", title, track.Artist, duration,
+            track, null, PlaybackDeck.A);
+        karaoke.SetPair(pairKey, KaraokePairRole.Karaoke);
+
+        var original = new PlaybackQueueItem(
+            track.RelativeKey + "/original", title, track.Artist, duration,
+            track, null, PlaybackDeck.B);
+        original.SetPair(pairKey, KaraokePairRole.Original);
+
+        return (karaoke, original);
+    }
+
+    /// <summary>Rebuild a library row that was persisted before the library scan.</summary>
+    public static PlaybackQueueItem FromRecord(PlaybackQueueRecord record, TrackEntry? track)
+    {
+        var item = new PlaybackQueueItem(
+            record.Key,
+            string.IsNullOrWhiteSpace(record.Title) ? record.Key : record.Title,
+            record.Artist,
+            track != null ? Format(track.Duration) : "",
+            track,
+            null,
+            PlaybackDecks.TryParse(record.Deck, out var deck) ? deck : PlaybackDeck.A)
+        {
+            IsPlayed = record.Played,
+        };
+
+        // A pair row always plays its own half: the karaoke file on A, the
+        // original on B, whatever deck the file happens to name.
+        if (TryParsePairRole(record.Role, out var role) && !string.IsNullOrWhiteSpace(record.Pair))
+        {
+            item.SetPair(record.Pair, role);
+            item.DeckTarget = role == KaraokePairRole.Karaoke ? PlaybackDeck.A : PlaybackDeck.B;
+        }
+
+        return item;
+    }
+
+    /// <summary>Persisted role strings: <c>"karaoke"</c> / <c>"original"</c>.</summary>
+    public static string? PersistPairRole(KaraokePairRole role) => role switch
+    {
+        KaraokePairRole.Karaoke => "karaoke",
+        KaraokePairRole.Original => "original",
+        _ => null,
     };
+
+    private static bool TryParsePairRole(string? value, out KaraokePairRole role)
+    {
+        switch (value)
+        {
+            case "karaoke": role = KaraokePairRole.Karaoke; return true;
+            case "original": role = KaraokePairRole.Original; return true;
+            default: role = KaraokePairRole.None; return false;
+        }
+    }
 
     /// <summary>
     /// Remote identity: the source id when there is one (stable across runs),

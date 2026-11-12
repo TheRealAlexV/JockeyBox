@@ -129,7 +129,6 @@ public sealed class AudioEngine : IDisposable
     private volatile float _deckBVolume = 1f;
     private double _lastMaintainSeconds;
 
-    private volatile bool _karaokeMode;
     private volatile bool _soundboardFollowsMain = true;
 
     private float _legacyMicVolume = 1f;
@@ -185,18 +184,6 @@ public sealed class AudioEngine : IDisposable
 
     /// <summary>A bus by kind (its content is only meaningful on the render thread).</summary>
     public AudioBus Bus(BusKind kind) => _buses[(int)kind];
-
-    /// <summary>
-    /// Karaoke mode. When on, Main carries only the karaoke stem and the
-    /// <see cref="BusKind.KaraokeAid"/> bus carries the original stem for the
-    /// operator's headphones. Both decks switch to their split-render path (two
-    /// stretchers, one clock) on the next block.
-    /// </summary>
-    public bool KaraokeMode
-    {
-        get => _karaokeMode;
-        set => _karaokeMode = value;
-    }
 
     /// <summary>
     /// When true (the default) the soundboard is mixed into Main if it has no
@@ -611,7 +598,7 @@ public sealed class AudioEngine : IDisposable
         //    a transition that starts "on the beat" starts on that block.
         _scheduled.Drain(frame, DeckA, DeckB);
 
-        bool karaoke = _karaokeMode;
+        bool karaoke = false; // the global karaoke mode is gone; decks render one file
         DeckA.FrameCursor = frame;
         DeckB.FrameCursor = frame;
         DeckA.KaraokeSplit = karaoke;

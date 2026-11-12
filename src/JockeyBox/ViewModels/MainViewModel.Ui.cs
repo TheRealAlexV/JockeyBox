@@ -115,6 +115,14 @@ public sealed class TrackMenuCapabilities : ObservableObject
 
     public ICommand? Download { get; init; }
     public ICommand? MakeKaraoke { get; init; }
+
+    /// <summary>
+    /// The karaoke pair actions (instrumental on A, original on B). Set only by a
+    /// surface that has library rows; a remote row cannot express a pair, so those
+    /// surfaces leave these null and the rows stay out of their menu.
+    /// </summary>
+    public ICommand? PlayKaraoke { get; init; }
+    public ICommand? QueueKaraoke { get; init; }
     public ICommand? ShowInExplorer { get; init; }
     public ICommand? Tags { get; init; }
 
@@ -134,6 +142,8 @@ public sealed class TrackMenuCapabilities : ObservableObject
     public bool CanAddToPlaylistDirectly => PlaylistTargets.Count == 0 && AddToPlaylist is not null;
     public bool CanDownload => Download is not null;
     public bool CanMakeKaraoke => MakeKaraoke is not null;
+    public bool CanPlayKaraoke => PlayKaraoke is not null;
+    public bool CanQueueKaraoke => QueueKaraoke is not null;
     public bool CanShowInExplorer => ShowInExplorer is not null;
     public bool CanEditTags => Tags is not null;
     public bool CanFindOnYouTube => FindOnYouTube is not null;
@@ -191,6 +201,8 @@ public partial class MainViewModel
         var caps = new TrackMenuCapabilities
         {
             Play = LoadSelectedTreeTrackCommand,
+            PlayKaraoke = PlayKaraokeSelectedCommand,
+            QueueKaraoke = QueueKaraokeSelectedCommand,
             AddToQueue = AddToQueueCommand,
             MakeKaraoke = new RelayCommand<object?>(item =>
             {

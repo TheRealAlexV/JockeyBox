@@ -294,7 +294,6 @@ public sealed class DualDeckTransport : IDisposable
             current[i].Monitor = devices[i].Monitor;
         }
 
-        Engine.KaraokeMode = settings.KaraokeModeEnabled;
         Engine.SoundboardFollowsMain = settings.SoundboardFollowsMain;
 
         LogMicRoute(current);

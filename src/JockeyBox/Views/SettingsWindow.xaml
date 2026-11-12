@@ -205,18 +205,6 @@
                            Margin="150,0,0,14"
                            Text="Every output can be set to None. The monitoring and karaoke-aid buses are operator cues and are not delayed; the audience buses carry the output delay."/>
 
-                <!-- ================= KARAOKE MODE ================= -->
-                <TextBlock Text="KARAOKE MODE" FontWeight="Bold"
-                           Foreground="{StaticResource AccentABrush}" Margin="0,0,0,10"/>
-
-                <CheckBox x:Name="KaraokeModeCheck"
-                          AutomationProperties.Name="Karaoke mode" AutomationProperties.AutomationId="KaraokeModeCheck" Margin="150,0,0,14"
-                          Foreground="{StaticResource TextBrush}"
-                          ToolTip="Main gets the karaoke stem; the original goes to the Karaoke aid output.">
-                    <TextBlock TextWrapping="Wrap" MaxWidth="560"
-                               Text="Karaoke mode: play the karaoke stem on Main and send the original to the Karaoke aid output"/>
-                </CheckBox>
-
                 <!-- ========== MICROPHONES / RECORDING DEVICES ========== -->
                 <TextBlock Text="MICROPHONES / RECORDING DEVICES" FontWeight="Bold"
                            Foreground="{StaticResource AccentABrush}" Margin="0,0,0,2"/>

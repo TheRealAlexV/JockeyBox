@@ -13,7 +13,7 @@ public class SettingsMergeTests
     {
         MusicDirectory = @"C:\Music",
         OutputDelayMs = 100,
-        KaraokeModeEnabled = false,
+        SoundboardFollowsMain = false,
         DeckAVolume = 1.0f,
     };
 
@@ -33,16 +33,16 @@ public class SettingsMergeTests
     [Fact]
     public void FieldChangedOnDiskButNotInUi_Survives()
     {
-        // The defect: the dialog still shows 100, but karaoke mode was switched on
-        // elsewhere (the engine setup, the transport) while it was open.
+        // The defect: the dialog still shows 100, but the soundboard routing was
+        // switched elsewhere (the transport) while it was open.
         var snapshot = Snapshot();
         var current = snapshot.Clone();
-        current.KaraokeModeEnabled = true;
+        current.SoundboardFollowsMain = true;
         var edited = snapshot.Clone();
 
         var merged = SettingsMerge.Merge(snapshot, current, edited);
 
-        Assert.True(merged.KaraokeModeEnabled);
+        Assert.True(merged.SoundboardFollowsMain);
         Assert.Equal(100, merged.OutputDelayMs);
     }
 
@@ -229,12 +229,12 @@ public class SettingsMergeTests
         var secondDisk = snapshot.Clone();
         secondDisk.OutputDelayMs = 500; // another external change, after save #1
         var edited2 = snapshot.Clone(); // read-back stamps the control's 100 again
-        edited2.KaraokeModeEnabled = true; // operator edits an unrelated field
+        edited2.SoundboardFollowsMain = true; // operator edits an unrelated field
 
         var save2 = SettingsMerge.Merge(snapshot, secondDisk, edited2);
 
         Assert.Equal(500, save2.OutputDelayMs); // a refreshed baseline would write 400 here
-        Assert.True(save2.KaraokeModeEnabled);
+        Assert.True(save2.SoundboardFollowsMain);
     }
 
     [Fact]

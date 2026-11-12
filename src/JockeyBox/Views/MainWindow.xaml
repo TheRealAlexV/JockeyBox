@@ -982,16 +982,6 @@
                          and a mute that closes the voice without closing the
                          device. Fits on the master row, so the 1400x900 stack
                          does not grow a row. -->
-                    <!-- Karaoke mode: Main plays the karaoke stem, the Karaoke aid
-                         bus plays the original vocal stem (operator headphones).
-                         Same flag the Settings dialog shows, so either one flips
-                         the other at the next bind. -->
-                    <ToggleButton Style="{StaticResource MicToggle}" Width="62" Content="KARAOKE"
-                                  Margin="0,0,10,0"
-                                  IsChecked="{Binding KaraokeModeEnabled, Mode=TwoWay}"
-                                  AutomationProperties.Name="Karaoke mode"
-                                  ToolTip="Play the karaoke stem on Main; the original goes to the Karaoke aid output"/>
-
                     <TextBlock Text="{Binding MicStripLabel}" FontSize="9" VerticalAlignment="Center" Margin="0,0,7,0"
                                Foreground="{StaticResource TextDimBrush}"
                                ToolTip="{Binding MicStatusText}"/>

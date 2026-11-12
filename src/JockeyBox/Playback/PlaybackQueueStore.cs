@@ -63,6 +63,12 @@ public sealed class PlaybackQueueRecord
     [JsonPropertyName("artist")] public string Artist { get; set; } = "";
     [JsonPropertyName("played")] public bool Played { get; set; }
     [JsonPropertyName("deck")] public string? Deck { get; set; }
+
+    /// <summary>Pair identity shared by both rows of a karaoke pair; null for a normal row.</summary>
+    [JsonPropertyName("pair")] public string? Pair { get; set; }
+
+    /// <summary>"karaoke" / "original" inside a pair; null for a normal row.</summary>
+    [JsonPropertyName("role")] public string? Role { get; set; }
 }
 
 /// <summary>

@@ -105,9 +105,7 @@ public class AppSettings
     public bool AudioRoutingConfigured { get; set; }
 
     /// <summary>
-    /// Main output: deck audio only (no microphones, no soundboard). When
-    /// <see cref="KaraokeModeEnabled"/> is on this carries the karaoke stem
-    /// instead of the original; null = None.
+    /// Main output: deck audio only (no microphones, no soundboard); null = None.
     /// </summary>
     public string? MainOutputDeviceId { get; set; }
 
@@ -134,9 +132,6 @@ public class AppSettings
     /// exposed to other applications as a microphone through a virtual cable; null = None.
     /// </summary>
     public string? BridgeOutputDeviceId { get; set; }
-
-    /// <summary>Karaoke mode: deck plays the karaoke stem, original goes to Karaoke Aid.</summary>
-    public bool KaraokeModeEnabled { get; set; }
 
     /// <summary>
     /// Recording devices ("microphones"), each independently enabled with its own
