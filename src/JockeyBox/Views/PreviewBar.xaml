@@ -196,28 +196,43 @@
                        VerticalAlignment="Center" TextAlignment="Right"
                        Margin="0,0,6,0"/>
 
-            <Slider Grid.Column="3" x:Name="SeekBar"
-                    Minimum="0" Maximum="{Binding DurationSeconds}"
-                    Value="{Binding PositionSeconds, Mode=OneWay}"
-                    IsEnabled="{Binding IsSeekable}"
-                    VerticalAlignment="Center" Height="18"
-                    IsMoveToPointEnabled="True"
-                    Style="{StaticResource SeekSlider}"
-                    AutomationProperties.Name="Preview position"
-                    AutomationProperties.HelpText="{Binding SeekHint}"
-                    ToolTip="{Binding SeekHint}"
-                    Visibility="{Binding ShowSeekBar, Converter={StaticResource BoolToVisibility}}"/>
+            <!--
+                Middle cell: the status note and the seek bar share it, in two
+                columns. They used to be one cell and mutually exclusive, so any
+                status text - including "Buffering 100%..." over a preview that
+                already had a length and a position - took the whole control away
+                instead of sitting next to it.
+            -->
+            <Grid Grid.Column="3">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
 
-            <!-- Resolving / downloading / failure: the middle cell says what is
-                 happening instead of showing a dead slider. Announced when it
-                 changes, so a refused preview is not a silent one. -->
-            <TextBlock Grid.Column="3" Text="{Binding StatusText}"
-                       AutomationProperties.LiveSetting="Polite"
-                       FontSize="10.5" Foreground="{StaticResource TextBrush}"
-                       VerticalAlignment="Center" Margin="8,0,0,0"
-                       TextTrimming="CharacterEllipsis"
-                       IsHitTestVisible="False"
-                       Visibility="{Binding HasStatus, Converter={StaticResource BoolToVisibility}}"/>
+                <!-- Resolving / buffering / downloading / failure: beside the bar,
+                     not over it, and announced when it changes, so a refused
+                     preview is not a silent one. -->
+                <TextBlock Grid.Column="0" Text="{Binding StatusText}"
+                           AutomationProperties.LiveSetting="Polite"
+                           FontSize="10.5" Foreground="{StaticResource TextBrush}"
+                           VerticalAlignment="Center" Margin="0,0,8,0"
+                           MaxWidth="150"
+                           TextTrimming="CharacterEllipsis"
+                           IsHitTestVisible="False"
+                           Visibility="{Binding HasStatus, Converter={StaticResource BoolToVisibility}}"/>
+
+                <Slider Grid.Column="1" x:Name="SeekBar"
+                        Minimum="0" Maximum="{Binding DurationSeconds}"
+                        Value="{Binding PositionSeconds, Mode=OneWay}"
+                        IsEnabled="{Binding IsSeekable}"
+                        VerticalAlignment="Center" Height="18"
+                        IsMoveToPointEnabled="True"
+                        Style="{StaticResource SeekSlider}"
+                        AutomationProperties.Name="Preview position"
+                        AutomationProperties.HelpText="{Binding SeekHint}"
+                        ToolTip="{Binding SeekHint}"
+                        Visibility="{Binding ShowSeekBar, Converter={StaticResource BoolToVisibility}}"/>
+            </Grid>
 
             <TextBlock Grid.Column="4" Text="{Binding DurationText}"
                        FontFamily="Consolas" FontSize="10.5" Width="42"

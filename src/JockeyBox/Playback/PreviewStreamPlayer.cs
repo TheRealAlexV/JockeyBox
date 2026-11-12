@@ -953,13 +953,26 @@ public sealed class PreviewStreamPlayer : IDisposable
 
         _player.Buffering += (_, e) =>
         {
+            bool cleared = false;
             lock (_gate)
             {
                 if (_media == null) return;
-                _status = $"Buffering {Math.Clamp(e.Cache, 0, 100)}%\u2026";
+
+                // Only before playback actually starts. VLC re-raises Buffering,
+                // usually at 100%, for the rest of the stream, and every raise used
+                // to re-set the status that Playing had just cleared - so a playing
+                // preview showed a frozen "Buffering 100%..." for as long as it
+                // played. Once Playing has fired, the clock is the progress display.
+                if (!_loading) return;
+
+                int cache = Math.Clamp((int)Math.Round(e.Cache), 0, 100);
+                cleared = cache >= 100 && _status != null;
+                _status = cache >= 100 ? null : $"Buffering {cache}%\u2026";
             }
 
             RaiseStateChanged();
+            if (cleared) RaiseStatusCleared();
+            else RaiseStatus();
         };
 
         _player.EncounteredError += (_, _) => Fail("Preview playback failed \u2014 the stream was refused or interrupted");

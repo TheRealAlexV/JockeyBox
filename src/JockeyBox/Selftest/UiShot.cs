@@ -77,6 +77,36 @@ internal static class UiShot
             _ => new MainWindow(),
         };
 
+        // --uishot-audition on the Spotify tab: SpotifyView.xaml binds its strip to
+        // SpotifyViewModel.Preview, so the same stub state goes there. Nothing is
+        // streamed; this is the strip's layout for one state.
+        //   idle      - loaded, no length: the disabled slider.
+        //   buffering - the reported state: 3:19 known, 0:43 in, plus a status line.
+        //   nomedia   - nothing loaded: the tab's hint, and no slider.
+        if (target == "spotifytab" && Harness.Flag(args, "--uishot-audition") is { } spotifyAudition
+            && window.DataContext is MainViewModel spotifyViewModel)
+        {
+            PreviewBarViewModel strip = spotifyViewModel.Spotify.Preview;
+            switch (spotifyAudition)
+            {
+                case "nomedia":
+                    strip.IsAvailable = false;
+                    break;
+                case "idle":
+                    strip.IsAvailable = true;
+                    strip.DurationSeconds = 0;
+                    strip.PositionSeconds = 0;
+                    break;
+                default:
+                    strip.IsAvailable = true;
+                    strip.DurationSeconds = 199;
+                    strip.PositionSeconds = 43;
+                    strip.IsPlaying = true;
+                    if (spotifyAudition == "buffering") strip.StatusText = "Buffering 100%\u2026";
+                    break;
+            }
+        }
+
         // A tab capture has to open on its tab. Selecting it before Show is how
         // the app looks the moment the tab is clicked, and needs no posted input:
         // this window is shown offscreen and never activated, so a synthesized
@@ -829,6 +859,18 @@ internal static class UiShot
                 vm.Strip.IsPlaying = false;
                 vm.Strip.DurationSeconds = 0;
                 vm.Strip.PositionSeconds = 0;
+            }
+            else if (audition == "buffering")
+            {
+                // --uishot-audition buffering: the reported state. A known length
+                // (3:19), a moving position (0:43) AND a status line, which is the
+                // combination that hid the slider.
+                vm.PreviewClock = "0:43 / 3:19";
+                vm.PlayGlyph = "\u23F8";
+                vm.Strip.DurationSeconds = 199;
+                vm.Strip.PositionSeconds = 43;
+                vm.Strip.IsPlaying = true;
+                vm.Strip.StatusText = "Buffering 100%\u2026";
             }
             else
             {

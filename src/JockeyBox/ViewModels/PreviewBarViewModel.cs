@@ -178,11 +178,16 @@ public sealed partial class PreviewBarViewModel : ObservableObject
     public bool HasStatus => !string.IsNullOrWhiteSpace(StatusText);
 
     /// <summary>
-    /// The slider itself. There is nothing to put on a track until media is
-    /// loaded, and a status line takes the same cell - so the hint and the bar
-    /// are mutually exclusive instead of drawing over one another.
+    /// The slider itself. Gated on the media and nothing else: there is nothing
+    /// to put on a track until something is loaded, and that is the only state
+    /// that has no bar. A length is not the gate - while it is unknown the track
+    /// sits at Maximum 0 and the template's Maximum trigger drops the fill, so
+    /// the strip shows an empty groove and a running clock instead of a
+    /// full-width "played" claim. Status text must not hide the bar either:
+    /// "Buffering 100%..." arrives while the length and the position are already
+    /// known, and the strip gives the note and the bar a column each.
     /// </summary>
-    public bool ShowSeekBar => IsAvailable && !HasStatus;
+    public bool ShowSeekBar => IsAvailable;
 
     public bool HasModeBadge => !string.IsNullOrWhiteSpace(ModeText);
 
