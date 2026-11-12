@@ -16,12 +16,11 @@ namespace JockeyBox.Separation;
 /// </summary>
 public class SeparationService : IDisposable
 {
-    private record Job(string Key, string MusicPath, string OutputPath)
+    private record Job(string Key, string MusicPath, string OutputPath, KaraokeStemMode Mode)
     {
         public TrackEntry Entry { get; set; } = null!;
         public SeparationState State { get; set; } = SeparationState.Queued;
         public int Progress { get; set; }
-        public string ModelOverride { get; init; } = "";
 
         /// <summary>Per-job cancel, linked to the service-wide shutdown token.</summary>
         public CancellationTokenSource Cts { get; init; } = new();
@@ -31,7 +30,7 @@ public class SeparationService : IDisposable
         public string Detail { get; set; } = "";
     }
 
-    private readonly SeparationEngine _engine = new();
+    private readonly SeparationEngine _engine;
     private readonly AppSettings _settings;
     private readonly Dispatcher _dispatcher;
     private readonly Channel<Job> _queue = Channel.CreateUnbounded<Job>();
@@ -49,6 +48,7 @@ public class SeparationService : IDisposable
     public SeparationService(AppSettings settings, Dispatcher dispatcher)
     {
         _settings = settings;
+        _engine = new SeparationEngine(settings);
         _dispatcher = dispatcher;
         _worker = Task.Run(WorkerLoopAsync);
     }
@@ -62,33 +62,34 @@ public class SeparationService : IDisposable
         }
     }
 
-    /// <summary>Queue vocal removal for a track. No-op if already queued/running.
-    /// <paramref name="modelOverride"/> uses a specific model instead of the default.</summary>
-    public bool Enqueue(TrackEntry track, string? modelOverride = null)
+    /// <summary>Queue a karaoke render for a track. No-op if already queued/running.
+    /// <paramref name="mode"/> decides both the model and the output file.</summary>
+    public bool Enqueue(TrackEntry track, KaraokeStemMode mode)
     {
         if (track.MusicPath == null) return false;
 
-        // The instrumental is written beside its original ("Song.karaoke.flac"),
-        // so no second root is involved; KaraokeOutputPath keeps the legacy
-        // mirror mapping as the fallback when the music folder is unknown.
+        // The render is written beside its original ("Song.karaoke.mp3", or
+        // "Song.vocals.mp3" for a vocals take), so no second root is involved;
+        // KaraokeOutputPath keeps the legacy mirror mapping as the fallback when
+        // the music folder is unknown.
         var outputPath = DownloadPaths.KaraokeOutputPath(
-            _settings, track.MusicPath, _settings.SeparationOutputFormat, track.RelativeKey);
+            _settings, track.MusicPath, mode, track.RelativeKey);
         if (outputPath.Length == 0) return false;
 
+        var jobKey = JobKey(track.RelativeKey, mode);
         Job job;
         lock (_lock)
         {
-            if (_jobs.TryGetValue(track.RelativeKey, out var existing)
+            if (_jobs.TryGetValue(jobKey, out var existing)
                 && existing.State is SeparationState.Queued or SeparationState.Running)
                 return false;
 
-            job = new Job(track.RelativeKey, track.MusicPath, outputPath)
+            job = new Job(jobKey, track.MusicPath, outputPath, mode)
             {
                 Entry = track,
-                ModelOverride = modelOverride ?? "",
                 Cts = CancellationTokenSource.CreateLinkedTokenSource(_shutdown.Token),
             };
-            _jobs[track.RelativeKey] = job;
+            _jobs[jobKey] = job;
         }
 
         // Report into the shared activity feed; the cancel hook lets the status
@@ -100,12 +101,24 @@ public class SeparationService : IDisposable
                 ? Path.GetFileNameWithoutExtension(job.MusicPath)
                 : track.Title,
             canCancel: true,
-            cancel: () => Cancel(track.RelativeKey));
+            cancel: () => Cancel(job.Key));
 
         track.Separation = SeparationState.Queued;
         track.SeparationProgress = 0;
         return _queue.Writer.TryWrite(job);
     }
+
+    /// <summary>
+    /// Legacy entry point: callers used to pass a model filename. The mode owns
+    /// the model now, so the filename is mapped to the mode it stands for.
+    /// </summary>
+    public bool Enqueue(TrackEntry track, string? modelOverride)
+        => Enqueue(track, SeparationModels.FromFilename(modelOverride));
+
+    /// <summary>Jobs are per (track, mode): one track may hold an instrumental
+    /// job and a vocals job at the same time.</summary>
+    private static string JobKey(string relativeKey, KaraokeStemMode mode)
+        => relativeKey + "\u0001" + mode;
 
     /// <summary>
     /// After a library rescan replaced the TrackEntry instances, re-attach
@@ -117,10 +130,15 @@ public class SeparationService : IDisposable
         {
             foreach (var track in tracks)
             {
-                if (!_jobs.TryGetValue(track.RelativeKey, out var job)) continue;
-                job.Entry = track;
-                track.Separation = job.State;
-                track.SeparationProgress = job.Progress;
+                // Jobs are keyed per (track, mode); a track may hold an
+                // instrumental job and a vocals job at the same time.
+                var jobs = _jobs.Values.Where(j => j.Entry.MusicPath == track.MusicPath).ToList();
+                foreach (var job in jobs)
+                {
+                    job.Entry = track;
+                    track.Separation = job.State;
+                    track.SeparationProgress = job.Progress;
+                }
             }
         }
     }
@@ -168,21 +186,25 @@ public class SeparationService : IDisposable
 
         try
         {
-            var model = job.ModelOverride.Length > 0 ? job.ModelOverride : _settings.SeparationModel;
+            var facts = SourceAudioFacts.Read(job.MusicPath);
             var request = new SeparationEngine.SeparationRequest(
-                job.MusicPath, job.OutputPath,
-                model, _settings.SeparationOutputFormat);
+                job.MusicPath, job.OutputPath, job.Mode,
+                facts.SampleRate, facts.Channels, facts.BitrateKbps);
 
             var output = await _engine.SeparateAsync(request, progress, ct);
 
             await _dispatcher.InvokeAsync(() =>
             {
                 lock (_lock) _jobs.Remove(job.Key);
-                job.Entry.KaraokePath = output;
+                // Only the instrumental modes fill the deck-A slot. A vocals
+                // take is a separate file, not this track's karaoke partner.
+                if (job.Mode != KaraokeStemMode.VocalsOnly) job.Entry.KaraokePath = output;
                 job.Entry.Separation = SeparationState.None;
                 job.Entry.SeparationProgress = 0;
                 Completed?.Invoke(job.Entry, output);
-                StatusChanged?.Invoke($"Karaoke created: {Path.GetFileName(output)}"
+                StatusChanged?.Invoke(
+                    $"{(job.Mode == KaraokeStemMode.VocalsOnly ? "Vocals" : "Karaoke")} created: "
+                    + Path.GetFileName(output)
                     + (PendingCount > 0 ? $" \u00b7 {PendingCount} in queue" : ""));
                 ActivityFeed.Shared.Finish(job.Activity, DownloadState.Done, "done");
             });

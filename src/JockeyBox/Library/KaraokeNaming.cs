@@ -1,4 +1,5 @@
 using System.IO;
+using JockeyBox.Separation;
 
 namespace JockeyBox.Library;
 
@@ -17,6 +18,50 @@ public static class KaraokeNaming
 {
     /// <summary>Marker inserted before the extension: "Song" + Marker + ".mp3".</summary>
     public const string Marker = ".karaoke";
+
+    /// <summary>
+    /// Marker for a reverse-karaoke render: "Song" + VocalsMarker + ".mp3". It is
+    /// deliberately not the karaoke marker, so the vocals take of a song is its
+    /// own row and never overwrites (or pairs as) the instrumental.
+    /// </summary>
+    public const string VocalsMarker = ".vocals";
+
+    /// <summary>
+    /// Every karaoke render is MP3, whatever the source container was: the
+    /// separation step emits WAV and the encode step writes the final file.
+    /// </summary>
+    public const string RenderExtension = ".mp3";
+
+    /// <summary>
+    /// The one owner of (stem mode, source path) → rendered file path. An
+    /// instrumental and its backing-vocal variant share "Song.karaoke.mp3" (a
+    /// track has one instrumental); the vocals take is "Song.vocals.mp3" beside
+    /// it. Returns "" when the source has no folder or no base name.
+    /// </summary>
+    public static string RenderPathFor(KaraokeStemMode mode, string? sourcePath)
+    {
+        if (string.IsNullOrWhiteSpace(sourcePath)) return "";
+
+        var stem = BaseFileName(sourcePath);
+        if (stem.Length == 0) return "";
+
+        var folder = Path.GetDirectoryName(sourcePath);
+        var name = RenderName(mode, stem);
+        return string.IsNullOrEmpty(folder) ? name : Path.Combine(folder, name);
+    }
+
+    /// <summary>
+    /// File name of a render: the base name plus the mode's marker and ".mp3".
+    /// A relative key ("Artist\Album\Song") uses this too, so the legacy mirror
+    /// and the beside-the-source path cannot disagree.
+    /// </summary>
+    public static string RenderName(KaraokeStemMode mode, string? baseName)
+    {
+        if (string.IsNullOrEmpty(baseName)) return "";
+        return baseName
+            + (mode == KaraokeStemMode.VocalsOnly ? VocalsMarker : Marker)
+            + RenderExtension;
+    }
 
     /// <summary>
     /// True when the file name already carries the marker ("Song.karaoke.flac").

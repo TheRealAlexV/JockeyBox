@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.IO;
 using JockeyBox.Library;
+using JockeyBox.Separation;
 using JockeyBox.Settings;
 using JockeyBox.Sources;
 using JockeyBox.Tools;
@@ -191,13 +192,12 @@ public static class DownloadPaths
     }
 
     /// <summary>
-    /// Where a newly generated karaoke file for <paramref name="musicPath"/>
-    /// belongs: "Song.karaoke.&lt;ext&gt;" in the music file's own folder, so the
-    /// library stays one tree and the pair is found without a second root.
-    ///
-    /// The output format decides the extension, not the music file: a generated
-    /// instrumental may be lossless (.flac) beside a downloaded .mp3. A blank
-    /// format falls back to FLAC, matching the separation settings' default.
+    /// Where a newly generated karaoke render for <paramref name="musicPath"/>
+    /// belongs. The mode and the source path decide it, in one place
+    /// (<see cref="KaraokeNaming.RenderPathFor"/>): Instrumental and
+    /// InstrumentalKeepBacking give "Song.karaoke.mp3" in the music file's own
+    /// folder, VocalsOnly gives "Song.vocals.mp3" beside it, so a vocals take can
+    /// never overwrite the instrumental.
     ///
     /// Returns "" only when no folder can be decided - no music path and no
     /// karaoke root to fall back to - which callers report as a setup problem.
@@ -205,22 +205,17 @@ public static class DownloadPaths
     /// legacy karaoke root are known, the old mirror mapping is used.
     /// </summary>
     public static string KaraokeOutputPath(AppSettings settings, string? musicPath,
-                                           string? extension, string? relativeKey = null)
+                                           KaraokeStemMode mode, string? relativeKey = null)
     {
-        var format = (extension ?? "").Trim().TrimStart('.');
-        if (format.Length == 0) format = "flac";
-
-        var folder = FolderOf(musicPath);
-        var stem = KaraokeNaming.BaseFileName(musicPath);
-        if (folder.Length > 0 && stem.Length > 0)
-            return Path.Combine(folder, stem + KaraokeNaming.Marker + "." + format.ToLowerInvariant());
+        var exact = KaraokeNaming.RenderPathFor(mode, musicPath);
+        if (exact.Length > 0) return exact;
 
         // Unknown music folder: keep the legacy mirror into the karaoke root.
         var karaokeRoot = settings?.KaraokeDirectory?.Trim() ?? "";
         var key = (relativeKey ?? "").Trim()
             .TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         if (karaokeRoot.Length > 0 && key.Length > 0)
-            return Path.Combine(karaokeRoot, key + "." + format.ToLowerInvariant());
+            return Path.Combine(karaokeRoot, KaraokeNaming.RenderName(mode, key));
 
         return "";
     }

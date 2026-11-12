@@ -1,5 +1,22 @@
 namespace JockeyBox.Separation;
 
+/// <summary>
+/// What a karaoke render asks the separator to produce. The mode owns both the
+/// model file and the stem that model is told to emit, so callers never pick a
+/// model independently of the stem it writes.
+/// </summary>
+public enum KaraokeStemMode
+{
+    /// <summary>All vocals removed. The plain karaoke instrumental.</summary>
+    Instrumental,
+
+    /// <summary>Lead vocal removed, backing vocals/harmonies kept.</summary>
+    InstrumentalKeepBacking,
+
+    /// <summary>Vocals alone (reverse karaoke); written as "&lt;Song&gt;.vocals.mp3".</summary>
+    VocalsOnly,
+}
+
 /// <summary>Shared model presets used by both the Settings dropdown and the context-menu submenu.</summary>
 public static class SeparationModels
 {
@@ -16,4 +33,31 @@ public static class SeparationModels
         ("2_HP-UVR.pth",
             "VR architecture alternative. Different approach (phase spectrogram + harmonic masks). Good fallback if MDX models sound thin."),
     };
+
+    /// <summary>
+    /// The single owner of the mode → (model filename, --single_stem) mapping.
+    /// All three models are ONNX and auto-download on first use.
+    /// </summary>
+    public static (string Filename, string SingleStem) For(KaraokeStemMode mode) => mode switch
+    {
+        KaraokeStemMode.InstrumentalKeepBacking => ("UVR_MDXNET_KARA_2.onnx", "Instrumental"),
+        KaraokeStemMode.VocalsOnly => ("Kim_Vocal_2.onnx", "Vocals"),
+        _ => ("UVR-MDX-NET-Inst_HQ_3.onnx", "Instrumental"),
+    };
+
+    /// <summary>
+    /// The mode a legacy model-filename choice stands for. Old settings and the
+    /// context-menu submenu still pass a filename; this keeps that input working
+    /// without letting a filename pick a stem on its own.
+    /// </summary>
+    public static KaraokeStemMode FromFilename(string? filename)
+    {
+        var name = (filename ?? "").Trim();
+        if (name.Equals("UVR_MDXNET_KARA_2.onnx", StringComparison.OrdinalIgnoreCase))
+            return KaraokeStemMode.InstrumentalKeepBacking;
+        if (name.Contains("Vocal", StringComparison.OrdinalIgnoreCase)
+            && !name.Contains("UVR-MDX-NET", StringComparison.OrdinalIgnoreCase))
+            return KaraokeStemMode.VocalsOnly;
+        return KaraokeStemMode.Instrumental;
+    }
 }

@@ -3,6 +3,7 @@ using System.IO;
 using System.Net.Http;
 using System.Text;
 using System.Text.RegularExpressions;
+using JockeyBox.Settings;
 using JockeyBox.Tools;
 
 namespace JockeyBox.Separation;
@@ -18,6 +19,14 @@ namespace JockeyBox.Separation;
 /// </summary>
 public partial class SeparationEngine
 {
+    private readonly AppSettings? _settings;
+
+    /// <param name="settings">
+    /// Supply the app settings so the encode step can resolve ffmpeg through the
+    /// same resolver the download path uses. Omitted, a default instance is used.
+    /// </param>
+    public SeparationEngine(AppSettings? settings = null) => _settings = settings;
+
     private static string AppDataDir => Path.Combine(AppPaths.Home);
 
     public static string VenvDir => Path.Combine(AppDataDir, "uvr-venv");
@@ -230,9 +239,59 @@ public partial class SeparationEngine
 
     public record SeparationRequest(
         string InputPath,
-        string OutputPath,       // final instrumental target (extension decides nothing; format param does)
-        string ModelFilename,
-        string OutputFormat);    // FLAC / MP3 / WAV
+        string OutputPath,        // final MP3 target (the separator never writes it)
+        KaraokeStemMode Mode,
+        int SourceSampleRate,     // Hz - passed to --sample_rate so nothing is resampled
+        int SourceChannels,       // 1/2 - passed to -ac so nothing is downmixed
+        int SourceBitrateKbps);   // measured average, rounded - passed to -b:a
+
+    /// <summary>
+    /// The separator's argv. WAV always, at the source rate, with normalisation
+    /// off (the 0.9 default attenuates every render to 90% peak) and the stem
+    /// the mode names. The final MP3 comes from <see cref="BuildEncodeArgs"/>.
+    /// </summary>
+    internal static List<string> BuildSeparationArgs(SeparationRequest request, string outputDir)
+    {
+        var (model, stem) = SeparationModels.For(request.Mode);
+        return new List<string>
+        {
+            request.InputPath,
+            "--model_filename", model,
+            "--output_dir", outputDir,
+            "--model_file_dir", ModelsDir,
+            "--output_format", "WAV",
+            "--sample_rate", request.SourceSampleRate.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            "--normalization", "1.0",
+            "--single_stem", stem,
+            "--log_level", "info",
+        };
+    }
+
+    /// <summary>
+    /// The encode argv: one libmp3lame pass from the separator's WAV to the
+    /// requested MP3, at the source's bitrate, sample rate and channel count.
+    /// <c>-write_xing 1</c> writes the LAME gapless delay/padding tags, so a
+    /// decoder's duration matches the source exactly.
+    ///
+    /// Nothing here may change length or timing: no -shortest, -ss, -t, -to,
+    /// -af, atrim, atempo, asetrate, aresample, -filter_complex or loudnorm.
+    /// </summary>
+    internal static List<string> BuildEncodeArgs(SeparationRequest request, string stemPath)
+    {
+        return new List<string>
+        {
+            "-y",
+            "-nostdin",
+            "-i", stemPath,
+            "-map_metadata", "-1",
+            "-codec:a", "libmp3lame",
+            "-b:a", $"{request.SourceBitrateKbps}k",
+            "-ar", request.SourceSampleRate.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            "-ac", request.SourceChannels.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            "-write_xing", "1",
+            request.OutputPath,
+        };
+    }
 
     /// <summary>
     /// Run one separation. Reports progress 0-100 (model download + inference)
@@ -251,6 +310,8 @@ public partial class SeparationEngine
             "sep-" + Guid.NewGuid().ToString("N")[..8]);
         Directory.CreateDirectory(tempDir);
 
+        var keepTemp = false;
+
         try
         {
             var psi = new ProcessStartInfo
@@ -263,12 +324,8 @@ public partial class SeparationEngine
                 StandardOutputEncoding = Encoding.UTF8,
                 StandardErrorEncoding = Encoding.UTF8,
             };
-            psi.ArgumentList.Add(request.InputPath);
-            psi.ArgumentList.Add("--model_filename"); psi.ArgumentList.Add(request.ModelFilename);
-            psi.ArgumentList.Add("--output_dir"); psi.ArgumentList.Add(tempDir);
-            psi.ArgumentList.Add("--model_file_dir"); psi.ArgumentList.Add(ModelsDir);
-            psi.ArgumentList.Add("--output_format"); psi.ArgumentList.Add(request.OutputFormat);
-            psi.ArgumentList.Add("--log_level"); psi.ArgumentList.Add("info");
+            foreach (var arg in BuildSeparationArgs(request, tempDir))
+                psi.ArgumentList.Add(arg);
             psi.EnvironmentVariables["PYTHONIOENCODING"] = "utf-8";
             psi.EnvironmentVariables["PYTHONUTF8"] = "1";
 
@@ -318,18 +375,82 @@ public partial class SeparationEngine
                     $"audio-separator exited with code {process.ExitCode}:\n{detail}");
             }
 
-            var instrumental = PickInstrumental(tempDir)
-                ?? throw new InvalidOperationException("Separation produced no instrumental stem.");
+            var stem = PickStem(tempDir, request.Mode)
+                ?? throw new InvalidOperationException(
+                    $"Separation produced no {request.Mode} stem.");
+
+            var ffmpeg = ToolBootstrap.ResolveFfmpeg(_settings ?? new AppSettings())
+                ?? throw new InvalidOperationException(
+                    "ffmpeg is required to encode the karaoke MP3 but was not found.");
 
             Directory.CreateDirectory(Path.GetDirectoryName(request.OutputPath)!);
-            File.Move(instrumental, request.OutputPath, overwrite: true);
+
+            var (encodeExit, encodeOutput) = await RunCaptureAsync(
+                ffmpeg, BuildEncodeArgs(request, stem).ToArray(), ct);
+
+            if (encodeExit != 0)
+            {
+                // Leave the stem in place: the temp folder survives so the
+                // operator can encode it by hand, and the path is in the error.
+                keepTemp = true;
+                throw new InvalidOperationException(
+                    $"ffmpeg failed to encode '{Path.GetFileName(request.OutputPath)}' " +
+                    $"(exit code {encodeExit}); the separated WAV was kept at {stem}.\n" +
+                    Compact(encodeOutput));
+            }
+
+            TryDelete(stem);
             progress.Report((100, "done"));
             return request.OutputPath;
         }
         finally
         {
-            try { Directory.Delete(tempDir, recursive: true); } catch { }
+            if (!keepTemp) TryDeleteDir(tempDir);
         }
+    }
+
+    /// <summary>
+    /// Identify the stem the mode asked for. Instrumental modes want the stem
+    /// that is not vocals ("(Instrumental)", "(No Vocals)", or simply the only
+    /// non-vocal file); VocalsOnly wants the vocal stem.
+    /// </summary>
+    private static string? PickStem(string dir, KaraokeStemMode mode)
+    {
+        var files = Directory.GetFiles(dir);
+
+        if (mode == KaraokeStemMode.VocalsOnly)
+            return files.FirstOrDefault(f =>
+                       Path.GetFileName(f).Contains("vocal", StringComparison.OrdinalIgnoreCase)
+                       && !Path.GetFileName(f).Contains("no vocal", StringComparison.OrdinalIgnoreCase)
+                       && !Path.GetFileName(f).Contains("no_vocal", StringComparison.OrdinalIgnoreCase)
+                       && !Path.GetFileName(f).Contains("instrumental", StringComparison.OrdinalIgnoreCase))
+                ?? files.FirstOrDefault();
+
+        return files.FirstOrDefault(f =>
+                   Path.GetFileName(f).Contains("instrumental", StringComparison.OrdinalIgnoreCase))
+            ?? files.FirstOrDefault(f =>
+                   Path.GetFileName(f).Contains("no vocals", StringComparison.OrdinalIgnoreCase)
+                   || Path.GetFileName(f).Contains("no_vocals", StringComparison.OrdinalIgnoreCase))
+            ?? files.FirstOrDefault(f =>
+                   !Path.GetFileName(f).Contains("vocal", StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static void TryDelete(string path)
+    {
+        try { File.Delete(path); } catch { }
+    }
+
+    /// <summary>Collapse a multi-line tool dump to one readable error line.</summary>
+    private static string Compact(string s)
+    {
+        var flat = string.Join(" \u00b7 ",
+            s.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+        return flat.Length > 240 ? flat[..240] : flat;
+    }
+
+    private static void TryDeleteDir(string path)
+    {
+        try { Directory.Delete(path, recursive: true); } catch { }
     }
 
     /// <summary>
