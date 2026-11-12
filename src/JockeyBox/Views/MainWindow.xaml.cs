@@ -10,6 +10,7 @@ using CommunityToolkit.Mvvm.Input;
 using JockeyBox.Activity;
 using JockeyBox.Library;
 using JockeyBox.Playback;
+using JockeyBox.Separation;
 using JockeyBox.ViewModels;
 
 namespace JockeyBox.Views;
@@ -289,8 +290,8 @@ public partial class MainWindow : Window
         if (answer != MessageBoxResult.Yes) return;
 
         var setup = new SetupWindow(_vm.SettingsRef) { Owner = this };
-        if (setup.ShowDialog() == true && _vm.MakeKaraokeCommand.CanExecute(track))
-            _vm.MakeKaraokeCommand.Execute(track);
+        if (setup.ShowDialog() == true)
+            _vm.MakeKaraoke(track, KaraokeStemMode.Instrumental);
     }
 
     /// <summary>

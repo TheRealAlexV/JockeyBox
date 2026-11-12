@@ -79,11 +79,30 @@
                   Command="{Binding PlacementTarget.Tag.Download, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
                   Visibility="{Binding PlacementTarget.Tag.CanDownload, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={StaticResource MenuVisibility}}"/>
 
-        <!-- 6. Make Karaoke Version: one label everywhere -->
+        <!-- 6a. Make Karaoke Version, as a submenu of the three stem modes. A
+             library row can express all three; the remote tabs cannot, so they
+             set one command and fall through to 6b instead. -->
+        <MenuItem Header="Make Karaoke Version"
+                  AutomationProperties.Name="Make Karaoke Version"
+                  Visibility="{Binding PlacementTarget.Tag.CanChooseKaraokeMode, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={StaticResource MenuVisibility}}">
+            <!-- Each mode reads the row the surface selected, so no
+                 CommandParameter is needed here (see TrackMenuCapabilities). -->
+            <MenuItem Header="Instrumental (all vocals out)"
+                      Command="{Binding PlacementTarget.Tag.MakeKaraoke, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                      Visibility="{Binding PlacementTarget.Tag.CanMakeKaraoke, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={StaticResource MenuVisibility}}"/>
+            <MenuItem Header="Instrumental (keep backing vocals)"
+                      Command="{Binding PlacementTarget.Tag.MakeKaraokeKeepBacking, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                      Visibility="{Binding PlacementTarget.Tag.CanMakeKaraokeKeepBacking, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={StaticResource MenuVisibility}}"/>
+            <MenuItem Header="Vocals only"
+                      Command="{Binding PlacementTarget.Tag.MakeKaraokeVocalsOnly, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                      Visibility="{Binding PlacementTarget.Tag.CanMakeKaraokeVocalsOnly, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={StaticResource MenuVisibility}}"/>
+        </MenuItem>
+
+        <!-- 6b. Make Karaoke Version, as one gesture, for surfaces with no mode choice -->
         <MenuItem Header="Make Karaoke Version"
                   AutomationProperties.Name="Make Karaoke Version"
                   Command="{Binding PlacementTarget.Tag.MakeKaraoke, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
-                  Visibility="{Binding PlacementTarget.Tag.CanMakeKaraoke, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={StaticResource MenuVisibility}}"/>
+                  Visibility="{Binding PlacementTarget.Tag.CanMakeKaraokeDirectly, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={StaticResource MenuVisibility}}"/>
 
         <!-- 7. Show in Explorer: one verb everywhere -->
         <MenuItem Header="Show in Explorer"

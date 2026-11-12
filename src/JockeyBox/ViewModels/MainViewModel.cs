@@ -161,6 +161,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
             System.Windows.Application.Current.Dispatcher);
         _separation.StatusChanged += message => StatusText = message;
 
+        // A finished render writes a file the library has never scanned: the
+        // instrumental refreshes an existing row's KaraokePath, the vocals take
+        // is a row of its own. BumpLibraryGeneration only invalidates cached
+        // membership, it does not scan, so pair it with the same debounced
+        // rescan a finished download uses - one per render, not one per row.
+        _separation.Completed += (_, _) =>
+        {
+            BumpLibraryGeneration("karaoke render completed");
+            ScheduleRescan();
+        };
+
         // Lyrics header: the offset slider writes through to the metadata store
         // on every drag step (the store debounces its own save); the settings
         // debounce below is only for the global default.
@@ -3414,7 +3425,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         {
             if (track.MusicPath == null || !wanted.Contains(track.MusicPath)) continue;
             if (!track.NeedsKaraoke || !SeparationEngine.IsInstalled) continue;
-            if (_separation.Enqueue(track, null)) queued++;
+            if (_separation.Enqueue(track, KaraokeStemMode.Instrumental)) queued++;
         }
 
         if (queued > 0)
@@ -3423,23 +3434,31 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     // ---- karaoke generation (vocal removal) --------------------------------
 
-    /// <summary>
-    /// Right-click "Make Karaoke Track" with a specific model from the submenu.
-    /// Called directly from the view's code-behind (not via ICommand).
-    /// </summary>
-    public void MakeKaraokeWithModel(TrackEntry track, string model)
-    {
-        EnqueueKaraoke(track, model);
-    }
+    // Each render mode is its own command, and each reads the surface's
+    // selection. The shared TrackMenu sends no CommandParameter, and a binding
+    // that quietly yields null is exactly how the old RelayCommand<object?>
+    // wrapper here came to look enabled and do nothing. Selection is the
+    // contract Play already follows: the right-click handler selects the row
+    // before the menu opens, so a click always has a target.
+
+    /// <summary>Render <paramref name="track"/> with an explicit stem mode.</summary>
+    public void MakeKaraoke(TrackEntry track, KaraokeStemMode mode) => EnqueueKaraoke(track, mode);
+
+    // The tree row wins, then the flat-list row: the same resolution "Add to
+    // Queue" uses, because a library click arrives as a tree selection and
+    // SelectedTrack alone is null there.
+    private TrackEntry? KaraokeTarget => SelectedTreeNode?.Track ?? SelectedTrack;
 
     [RelayCommand]
-    private void MakeKaraoke(TrackEntry? track)
-    {
-        track ??= SelectedTrack;
-        EnqueueKaraoke(track, modelOverride: null);
-    }
+    private void MakeKaraokeInstrumental() => EnqueueKaraoke(KaraokeTarget, KaraokeStemMode.Instrumental);
 
-    private void EnqueueKaraoke(TrackEntry? track, string? modelOverride)
+    [RelayCommand]
+    private void MakeKaraokeKeepBacking() => EnqueueKaraoke(KaraokeTarget, KaraokeStemMode.InstrumentalKeepBacking);
+
+    [RelayCommand]
+    private void MakeKaraokeVocalsOnly() => EnqueueKaraoke(KaraokeTarget, KaraokeStemMode.VocalsOnly);
+
+    private void EnqueueKaraoke(TrackEntry? track, KaraokeStemMode mode)
     {
         if (track?.MusicPath == null || !track.NeedsKaraoke) return;
 
@@ -3456,12 +3475,16 @@ public partial class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
-        if (_separation.Enqueue(track, modelOverride))
+        if (_separation.Enqueue(track, mode))
         {
             var title = string.IsNullOrWhiteSpace(track.Title) ? track.RelativePath : track.Title;
-            var modelNote = modelOverride is { Length: > 0 }
-                ? $" (via {System.IO.Path.GetFileNameWithoutExtension(modelOverride)})" : "";
-            StatusText = $"Queued karaoke generation: {title}{modelNote}";
+            var modeNote = mode switch
+            {
+                KaraokeStemMode.InstrumentalKeepBacking => " (backing vocals kept)",
+                KaraokeStemMode.VocalsOnly => " (vocals only)",
+                _ => "",
+            };
+            StatusText = $"Queued karaoke generation: {title}{modeNote}";
         }
     }
 

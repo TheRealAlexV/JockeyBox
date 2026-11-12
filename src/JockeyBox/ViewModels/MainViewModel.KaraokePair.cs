@@ -100,6 +100,14 @@ public partial class MainViewModel
     {
         var path = track?.KaraokePath;
         if (string.IsNullOrWhiteSpace(path)) return null;
+
+        // The service stamps KaraokePath with whatever it last rendered, the
+        // vocals take included. A vocals file is never the karaoke stem; only
+        // reject that name, because a karaoke-root copy has no marker at all.
+        if (Path.GetFileNameWithoutExtension(path)
+                .EndsWith(KaraokeNaming.VocalsMarker, StringComparison.OrdinalIgnoreCase))
+            return null;
+
         try { return File.Exists(path) ? path : null; }
         catch { return null; }
     }

@@ -114,7 +114,15 @@ public sealed class TrackMenuCapabilities : ObservableObject
     public ICommand? AddToPlaylist { get; init; }
 
     public ICommand? Download { get; init; }
+
+    /// <summary>
+    /// The karaoke render, as three modes. A library row can express all three,
+    /// so it gets the submenu; a surface that can only ask for the plain
+    /// instrumental sets <see cref="MakeKaraoke"/> alone and gets one item.
+    /// </summary>
     public ICommand? MakeKaraoke { get; init; }
+    public ICommand? MakeKaraokeKeepBacking { get; init; }
+    public ICommand? MakeKaraokeVocalsOnly { get; init; }
 
     /// <summary>
     /// The karaoke pair actions (instrumental on A, original on B). Set only by a
@@ -142,6 +150,15 @@ public sealed class TrackMenuCapabilities : ObservableObject
     public bool CanAddToPlaylistDirectly => PlaylistTargets.Count == 0 && AddToPlaylist is not null;
     public bool CanDownload => Download is not null;
     public bool CanMakeKaraoke => MakeKaraoke is not null;
+    public bool CanMakeKaraokeKeepBacking => MakeKaraokeKeepBacking is not null;
+    public bool CanMakeKaraokeVocalsOnly => MakeKaraokeVocalsOnly is not null;
+
+    /// <summary>"Make Karaoke Version" as a submenu of the three stem modes.</summary>
+    public bool CanChooseKaraokeMode =>
+        MakeKaraoke is not null && MakeKaraokeKeepBacking is not null && MakeKaraokeVocalsOnly is not null;
+
+    /// <summary>"Make Karaoke Version" as one gesture, for surfaces with no mode choice.</summary>
+    public bool CanMakeKaraokeDirectly => MakeKaraoke is not null && MakeKaraokeKeepBacking is null;
     public bool CanPlayKaraoke => PlayKaraoke is not null;
     public bool CanQueueKaraoke => QueueKaraoke is not null;
     public bool CanShowInExplorer => ShowInExplorer is not null;
@@ -204,11 +221,9 @@ public partial class MainViewModel
             PlayKaraoke = PlayKaraokeSelectedCommand,
             QueueKaraoke = QueueKaraokeSelectedCommand,
             AddToQueue = AddToQueueCommand,
-            MakeKaraoke = new RelayCommand<object?>(item =>
-            {
-                if (UnwrapTrack(item) is { } track && MakeKaraokeCommand.CanExecute(track))
-                    MakeKaraokeCommand.Execute(track);
-            }),
+            MakeKaraoke = MakeKaraokeInstrumentalCommand,
+            MakeKaraokeKeepBacking = MakeKaraokeKeepBackingCommand,
+            MakeKaraokeVocalsOnly = MakeKaraokeVocalsOnlyCommand,
             ShowInExplorer = RevealInExplorerCommand,
         };
 
@@ -264,11 +279,4 @@ public partial class MainViewModel
         var command = back ? PlayPreviousCommand : (ICommand)PlayNextCommand;
         if (command.CanExecute(null)) command.Execute(null);
     }
-
-    private static TrackEntry? UnwrapTrack(object? item) => item switch
-    {
-        BrowserNode node => node.Track,
-        TrackEntry entry => entry,
-        _ => null,
-    };
 }

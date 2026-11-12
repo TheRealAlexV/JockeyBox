@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.IO;
 using JockeyBox.Library;
+using JockeyBox.Separation;
 using JockeyBox.Sources;
 
 namespace JockeyBox.ViewModels;
@@ -104,7 +105,7 @@ public partial class MainViewModel
             return;
         }
 
-        MakeKaraoke(entry);
+        EnqueueKaraoke(entry, KaraokeStemMode.Instrumental);
     }
 
     /// <summary>Show a remote row's local file in Explorer (no-op when it has none).</summary>
