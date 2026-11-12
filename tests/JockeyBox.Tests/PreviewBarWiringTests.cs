@@ -41,7 +41,15 @@ public sealed class PreviewBarWiringTests
             Press(slider);                                        // opens the bracket
             slider.RaiseEvent(new DragStartedEventArgs(0, 0) { RoutedEvent = Thumb.DragStartedEvent });
             slider.Value = 123.0;
+            Assert.Empty(transport.SeekCalls);                    // moving the thumb is not a seek
             slider.RaiseEvent(new DragCompletedEventArgs(0, 0, false) { RoutedEvent = Thumb.DragCompletedEvent });
+
+            // A real drag also sends the preview mouse-up after DragCompleted.
+            // That pair must not commit a second time.
+            slider.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left)
+            {
+                RoutedEvent = UIElement.PreviewMouseLeftButtonUpEvent,
+            });
 
             Assert.Equal(new[] { 123.0 }, transport.SeekCalls);
             Assert.Equal(new[] { true }, transport.PlayingCalls);
@@ -63,6 +71,42 @@ public sealed class PreviewBarWiringTests
             });
 
             Assert.Equal(new[] { 200.0 }, transport.SeekCalls);
+            Assert.Equal(new[] { true }, transport.PlayingCalls);
+        });
+    }
+
+    /// <summary>
+    /// The operator's actual gesture: a click on the track, not the thumb.
+    ///
+    /// <para>This is deliberately not <see cref="Press"/>. <c>IsMoveToPointEnabled</c>
+    /// stays on, which is what production runs, so the Slider's own class handler
+    /// runs first and marks the press handled - exactly the ordering that swallowed
+    /// the strip's instance handler and made a click do nothing. The assert just
+    /// after the press is the guard against a vacuous pass: if WPF ever stops
+    /// handling that press, this test stops proving anything and says so.</para>
+    /// </summary>
+    [Fact]
+    public void A_click_on_the_track_commits_one_seek_even_though_the_slider_handles_the_press()
+    {
+        RunOnUi(() =>
+        {
+            var (_, slider, transport) = BuildSeekable();
+
+            var press = new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left)
+            {
+                RoutedEvent = UIElement.PreviewMouseLeftButtonDownEvent,
+            };
+            slider.RaiseEvent(press);
+            Assert.True(press.Handled,
+                "move-to-point must mark the press handled, or this test cannot prove the ordering it exists for");
+
+            slider.Value = 100.0;   // what move-to-point moved the thumb to
+            slider.RaiseEvent(new MouseButtonEventArgs(Mouse.PrimaryDevice, 0, MouseButton.Left)
+            {
+                RoutedEvent = UIElement.PreviewMouseLeftButtonUpEvent,
+            });
+
+            Assert.Equal(new[] { 100.0 }, transport.SeekCalls);
             Assert.Equal(new[] { true }, transport.PlayingCalls);
         });
     }

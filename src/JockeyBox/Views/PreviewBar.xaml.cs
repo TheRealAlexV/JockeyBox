@@ -30,7 +30,16 @@ public partial class PreviewBar : UserControl
 
         // Press anywhere on the track: IsMoveToPointEnabled jumps the thumb on
         // mouse-down, so the value is already the one the user asked for.
-        SeekBar.PreviewMouseLeftButtonDown += (_, _) => Vm?.BeginSeek();
+        //
+        // handledEventsToo is load-bearing. WPF runs class handlers before
+        // instance handlers on the same element, and Slider's own handler for
+        // this event *is* move-to-point: it marks the press handled on every
+        // press that is not on the thumb. A plain "+=" therefore never ran on a
+        // track click, so the bracket never opened and the click did nothing -
+        // only dragging the thumb worked. Listening to handled events too puts
+        // us back in the loop without turning move-to-point off.
+        SeekBar.AddHandler(UIElement.PreviewMouseLeftButtonDownEvent,
+            new MouseButtonEventHandler((_, _) => Vm?.BeginSeek()), handledEventsToo: true);
 
         // A plain click on the track never starts a Thumb drag, so commit here.
         // A real drag commits in DragCompleted with the final value instead

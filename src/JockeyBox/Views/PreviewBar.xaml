@@ -57,6 +57,80 @@
                 </DataTrigger>
             </Style.Triggers>
         </Style>
+        <!--
+            Seek bar slot. The shared theme Slider paints its track in the panel
+            colour, so on these strips there was no groove and no progress: a cyan
+            dot on the panel, with no way to see where the bar began, ended, or how
+            far along it was. Two tones fix that and nothing else moves: the same
+            18px height, the same 14px thumb, the same slot in the row.
+
+            Groove #6B7480 is 3.4:1 on the panel - visible, and flat enough to read
+            as a recess under its 1px dark top edge rather than as a second bar.
+            The played portion is a deeper accent than the thumb, so the eye gets
+            position from the fill and the live point from the bright dot.
+        -->
+        <SolidColorBrush x:Key="SeekGrooveBrush" Color="#6B7480"/>
+        <SolidColorBrush x:Key="SeekPlayedBrush" Color="#00A8D8"/>
+
+        <Style x:Key="SeekPlayedRepeat" TargetType="RepeatButton">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RepeatButton">
+                        <Border Height="4" CornerRadius="2" Margin="1,0,0,0"
+                                VerticalAlignment="Center"
+                                Background="{StaticResource SeekPlayedBrush}"/>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="SeekSlider" TargetType="Slider" BasedOn="{StaticResource StripSlider}">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Slider">
+                        <Grid VerticalAlignment="Center">
+                            <Border Height="6" CornerRadius="3"
+                                    Background="{StaticResource SeekGrooveBrush}"
+                                    BorderBrush="#0C0F13" BorderThickness="0,1,0,0"/>
+                            <Track x:Name="PART_Track">
+                                <Track.DecreaseRepeatButton>
+                                    <RepeatButton x:Name="PlayedFill"
+                                                  Style="{StaticResource SeekPlayedRepeat}"
+                                                  Command="Slider.DecreaseLarge"/>
+                                </Track.DecreaseRepeatButton>
+                                <Track.IncreaseRepeatButton>
+                                    <RepeatButton Style="{StaticResource SliderRepeat}"
+                                                  Command="Slider.IncreaseLarge"/>
+                                </Track.IncreaseRepeatButton>
+                                <Track.Thumb>
+                                    <Thumb>
+                                        <Thumb.Template>
+                                            <ControlTemplate TargetType="Thumb">
+                                                <Ellipse Width="14" Height="14"
+                                                         Fill="{StaticResource AccentABrush}"/>
+                                            </ControlTemplate>
+                                        </Thumb.Template>
+                                    </Thumb>
+                                </Track.Thumb>
+                            </Track>
+                        </Grid>
+
+                        <ControlTemplate.Triggers>
+                            <!--
+                                No length yet, so the slider sits with min equal to
+                                max, which parks the thumb at the right end and would
+                                paint a full-width fill claiming the whole track is
+                                played. Hide the fill and let the empty groove say
+                                that nothing is known yet.
+                            -->
+                            <Trigger Property="Maximum" Value="0">
+                                <Setter TargetName="PlayedFill" Property="Opacity" Value="0"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </UserControl.Resources>
 
     <!--
@@ -128,11 +202,11 @@
                     IsEnabled="{Binding IsSeekable}"
                     VerticalAlignment="Center" Height="18"
                     IsMoveToPointEnabled="True"
-                    Style="{StaticResource StripSlider}"
+                    Style="{StaticResource SeekSlider}"
                     AutomationProperties.Name="Preview position"
                     AutomationProperties.HelpText="{Binding SeekHint}"
                     ToolTip="{Binding SeekHint}"
-                    Visibility="{Binding HasStatus, Converter={StaticResource InverseBoolToVisibility}}"/>
+                    Visibility="{Binding ShowSeekBar, Converter={StaticResource BoolToVisibility}}"/>
 
             <!-- Resolving / downloading / failure: the middle cell says what is
                  happening instead of showing a dead slider. Announced when it

@@ -177,6 +177,13 @@ public sealed partial class PreviewBarViewModel : ObservableObject
     /// <summary>True when the middle of the strip shows a note instead of the slider.</summary>
     public bool HasStatus => !string.IsNullOrWhiteSpace(StatusText);
 
+    /// <summary>
+    /// The slider itself. There is nothing to put on a track until media is
+    /// loaded, and a status line takes the same cell - so the hint and the bar
+    /// are mutually exclusive instead of drawing over one another.
+    /// </summary>
+    public bool ShowSeekBar => IsAvailable && !HasStatus;
+
     public bool HasModeBadge => !string.IsNullOrWhiteSpace(ModeText);
 
     public string ModeHint => "Fallback: the direct stream was refused, so this preview is a temp-file download";
@@ -221,7 +228,11 @@ public sealed partial class PreviewBarViewModel : ObservableObject
         OnPropertyChanged(nameof(MuteHint));
     }
 
-    partial void OnStatusTextChanged(string? value) => OnPropertyChanged(nameof(HasStatus));
+    partial void OnStatusTextChanged(string? value)
+    {
+        OnPropertyChanged(nameof(HasStatus));
+        OnPropertyChanged(nameof(ShowSeekBar));
+    }
 
     partial void OnModeTextChanged(string? value) => OnPropertyChanged(nameof(HasModeBadge));
 
@@ -246,6 +257,7 @@ public sealed partial class PreviewBarViewModel : ObservableObject
         OnPropertyChanged(nameof(IsStreaming));
         OnPropertyChanged(nameof(SeekHint));
         OnPropertyChanged(nameof(DurationText));
+        OnPropertyChanged(nameof(ShowSeekBar));
     }
 
     /// <summary>Slider pressed: freeze the thumb against incoming transport ticks.</summary>
