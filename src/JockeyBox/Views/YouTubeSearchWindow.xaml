@@ -1,6 +1,7 @@
 <Window x:Class="JockeyBox.Views.YouTubeSearchWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:views="clr-namespace:JockeyBox.Views"
         Title="Find on YouTube" Width="780" Height="486" MinWidth="620" MinHeight="330"
         WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
         Background="{StaticResource WindowBrush}" Foreground="{StaticResource TextBrush}"
@@ -234,33 +235,26 @@
             </Border>
         </Grid>
 
-        <!-- Audition strip: only while this window has a stream running -->
+        <!-- Audition strip: the shared PreviewBar, so a drag here seeks exactly
+             like a drag on a tab strip - same control, same transport, one seek
+             path. The frame stays this window's, hence ShowFrame="False". -->
         <Border Grid.Row="4" Margin="0,6,0,0" Padding="6,3"
                 Background="{StaticResource PanelAltBrush}"
                 BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="4"
                 Visibility="{Binding HasPreview, Converter={StaticResource BoolToVisibility}}">
             <Grid Height="22">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
 
-                <Button Grid.Column="0" Content="{Binding PlayGlyph}" Style="{StaticResource RowAction}"
-                        Width="24" FontSize="10" Padding="0" Margin="0,0,6,0"
-                        Command="{Binding TogglePreviewCommand}"
-                        AutomationProperties.Name="Play or pause the preview"
-                        ToolTip="Play or pause the preview"/>
+                <views:PreviewBar Grid.Column="0" ShowFrame="False" Margin="0"
+                                  DataContext="{Binding Strip}"/>
 
-                <TextBlock Grid.Column="1" Text="{Binding PreviewTitle}" Style="{StaticResource MetaText}"
-                           Foreground="{StaticResource TextBrush}" ToolTip="{Binding PreviewTitle}"/>
-
-                <TextBlock Grid.Column="2" Text="{Binding PreviewClock}" Style="{StaticResource MetaText}"
-                           FontFamily="Consolas" Margin="8,0" ToolTip="Streamed position"/>
-
-                <Button Grid.Column="3" Content="Stop" Style="{StaticResource RowAction}" Width="44"
+                <Button Grid.Column="1" Content="Stop" Style="{StaticResource RowAction}" Width="44"
+                        Margin="8,0,0,0"
                         Command="{Binding StopPreviewCommand}"
+                        AutomationProperties.Name="Stop the preview"
                         ToolTip="Stop the preview"/>
             </Grid>
         </Border>

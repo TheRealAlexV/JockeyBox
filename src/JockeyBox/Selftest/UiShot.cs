@@ -71,7 +71,7 @@ internal static class UiShot
         Window window = target switch
         {
             "settings" => new SettingsWindow(Settings.AppSettings.Load()),
-            "youtubesearch" => new YouTubeSearchWindow(StubYouTubeSearch(Harness.Flag(args, "--uishot-audition") != null)),
+            "youtubesearch" => new YouTubeSearchWindow(StubYouTubeSearch(Harness.Flag(args, "--uishot-audition"))),
             "youtubetab" => new MainWindow(),
             "spotifytab" => new MainWindow(),
             _ => new MainWindow(),
@@ -784,7 +784,7 @@ internal static class UiShot
     /// starting audio in a headless capture, so it is absent from the picture
     /// rather than faked.</para>
     /// </summary>
-    private static YouTubeSearchViewModel StubYouTubeSearch(bool auditioning)
+    private static YouTubeSearchViewModel StubYouTubeSearch(string? audition)
     {
         var vm = new YouTubeSearchViewModel(
             Settings.AppSettings.Load(),
@@ -802,12 +802,42 @@ internal static class UiShot
         // is streamed and no audio starts - the transport is untouched, so this
         // proves the strip lays out, not that a real preview works. Off by default
         // so the ordinary capture never shows a state the app was not in.
-        if (auditioning)
+        //
+        // The strip renders from vm.Strip (a PreviewBarViewModel), not from the
+        // window VM, so the fake state goes there. A length and a position about a
+        // third of the way in are what make IsSeekable true and the thumb sit off
+        // the start; without them the picture is an idle 0:00 bar and proves
+        // nothing about the seek UI. PreviewTitle still feeds Strip.Title through
+        // OnPreviewTitleChanged, so the header follows the row being auditioned.
+        // on purpose is what makes the delta visible: idle captures dim the whole
+        // panel, so a dimmed slider inside one proves nothing.
+        if (audition != null)
         {
             vm.PreviewTitle = StubSearchRows[0].Title;
-            vm.PreviewClock = "0:42 / 4:09";
-            vm.PlayGlyph = "\u23F8";
             vm.HasPreview = true;
+            vm.Strip.IsAvailable = true;
+
+            if (audition == "idle")
+            {
+                // --uishot-audition idle: available with no known length, so
+                // IsSeekable is false and the slider renders its disabled state
+                // (Opacity 0.45 from the StripSlider trigger) while its parent
+                // panel is NOT dimmed. That is the only arrangement in which the
+                // designer's "disabled sliders dim to 45%" can be measured.
+                vm.PreviewClock = "0:42 / --:--";
+                vm.PlayGlyph = "\u25B6";
+                vm.Strip.IsPlaying = false;
+                vm.Strip.DurationSeconds = 0;
+                vm.Strip.PositionSeconds = 0;
+            }
+            else
+            {
+                vm.PreviewClock = "0:42 / 4:09";
+                vm.PlayGlyph = "\u23F8";
+                vm.Strip.DurationSeconds = StubSearchRows[0].DurationSeconds;
+                vm.Strip.PositionSeconds = StubSearchRows[0].DurationSeconds / 3.0;
+                vm.Strip.IsPlaying = true;
+            }
         }
 
         return vm;

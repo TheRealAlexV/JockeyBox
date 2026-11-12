@@ -30,6 +30,18 @@ internal static class PreviewCheck
     /// <summary>How far the position must move between the two samples.</summary>
     private const double MinDelta = 0.75;
 
+    /// <summary>
+    /// How far a seeked position may land from its target. Loose on purpose: an
+    /// HTTP stream seeks to the nearest keyframe, so the target is not a frame.
+    /// </summary>
+    private const double SeekToleranceSeconds = 4.0;
+
+    /// <summary>A seek that leaves the position this close to where it was did nothing.</summary>
+    private const double SeekNoMoveSeconds = 0.5;
+
+    /// <summary>Where the seek-back probe aims, clamped to the track length.</summary>
+    private const double SeekBackOffsetSeconds = 10.0;
+
     /// <summary>Whole-run deadline, enforced by the caller's watchdog.</summary>
     internal const int TimeoutMs = 240_000;
 
@@ -168,7 +180,98 @@ internal static class PreviewCheck
                           $"duration={F(transport.DurationSeconds)}s mode={transport.Mode} " +
                           $"volume={F(transport.Volume)} muted={transport.IsMuted}");
         Say($"{label}: {probe}");
-        return delta >= MinDelta;
+        if (delta < MinDelta) return false;
+
+        return SeekPhase(transport);
+    }
+
+    /// <summary>
+    /// Seeks the live stream to its midpoint, then back to a small offset. The
+    /// play/position probe above cannot fail on a broken seek bar: a stream that
+    /// ignores every seek still advances. This phase fails when the position
+    /// does not follow the seek, and when a seek stops playback.
+    /// </summary>
+    private static bool SeekPhase(StreamPreviewTransport transport)
+    {
+        double duration = transport.DurationSeconds;
+        if (duration <= 0)
+        {
+            Say($"seek : FAIL \u2014 source reported no length (duration={F(duration)}s), " +
+                              "so there is no position to seek to");
+            return false;
+        }
+
+        double forwardTarget = duration / 2;
+        double beforeSeek = transport.PositionSeconds;
+        transport.Seek(forwardTarget);
+        Pump(SampleGapMs);
+        double afterForward = transport.PositionSeconds;
+        bool forwardLive = transport.IsPlaying;
+        Say($"seek : target={F(forwardTarget)}s pos={F(afterForward)}s " +
+                          $"state={(forwardLive ? "Playing" : "Stopped")}");
+
+        if (!forwardLive)
+        {
+            Say($"seek : FAIL \u2014 playback stopped after seeking to {F(forwardTarget)}s");
+            return false;
+        }
+
+        if (Math.Abs(afterForward - beforeSeek) <= SeekNoMoveSeconds)
+        {
+            Say($"seek : FAIL \u2014 position stayed at {F(afterForward)}s " +
+                              $"(was {F(beforeSeek)}s), so the seek did nothing");
+            return false;
+        }
+
+        if (Math.Abs(afterForward - forwardTarget) > SeekToleranceSeconds)
+        {
+            Say($"seek : FAIL \u2014 position {F(afterForward)}s is more than " +
+                              $"\u00b1{F(SeekToleranceSeconds)}s from target {F(forwardTarget)}s " +
+                              "(an HTTP stream lands on the nearest keyframe, not the exact " +
+                              "frame, so the tolerance is loose on purpose)");
+            return false;
+        }
+
+        double backTarget = Math.Min(SeekBackOffsetSeconds, duration);
+        transport.Seek(backTarget);
+        Pump(SampleGapMs);
+        double afterBack = transport.PositionSeconds;
+        bool backLive = transport.IsPlaying;
+        Say($"seekb: target={F(backTarget)}s pos={F(afterBack)}s " +
+                          $"state={(backLive ? "Playing" : "Stopped")}");
+
+        if (!backLive)
+        {
+            Say($"seekb: FAIL \u2014 playback stopped after seeking back to {F(backTarget)}s");
+            return false;
+        }
+
+        if (Math.Abs(afterBack - backTarget) > SeekToleranceSeconds)
+        {
+            Say($"seekb: FAIL \u2014 position {F(afterBack)}s is more than " +
+                              $"\u00b1{F(SeekToleranceSeconds)}s from target {F(backTarget)}s " +
+                              "(keyframe-granular seek, tolerance is loose on purpose)");
+            return false;
+        }
+
+        // Only a track longer than ~20s puts the 10s target below its midpoint.
+        // On a shorter source "lower" is impossible rather than wrong, so it is
+        // reported as skipped instead of failed.
+        if (backTarget >= forwardTarget)
+        {
+            Say($"seekb: skipped \u2014 duration {F(duration)}s is too short to seek back " +
+                              $"below the {F(forwardTarget)}s midpoint");
+            return true;
+        }
+
+        if (afterBack >= afterForward)
+        {
+            Say($"seekb: FAIL \u2014 position {F(afterBack)}s did not move back below the " +
+                              $"forward-seek position {F(afterForward)}s");
+            return false;
+        }
+
+        return true;
     }
 
     /// <summary>

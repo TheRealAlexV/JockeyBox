@@ -140,6 +140,14 @@ public sealed partial class PreviewBarViewModel : ObservableObject
     [ObservableProperty]
     private string? _modeText;
 
+    /// <summary>
+    /// Name of what the strip is playing, when the host has one to give. The tabs
+    /// leave it null, because the list right above them already says which row
+    /// the preview belongs to; the search window names the upload here.
+    /// </summary>
+    [ObservableProperty]
+    private string? _title;
+
     /// <summary>Guards the volume feedback loop between the slider and the transport.</summary>
     private bool _syncingVolume;
 

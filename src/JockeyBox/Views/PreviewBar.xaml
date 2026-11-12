@@ -6,6 +6,57 @@
 
     <UserControl.Resources>
         <views:InverseBoolToVisibilityConverter x:Key="InverseBoolToVisibility"/>
+
+        <!--
+            Focus ring for the two sliders. The theme's default focus visual is a
+            near-black dotted rectangle, which is invisible on this dark panel;
+            accent at 1px outside the track, so it costs no layout.
+        -->
+        <Style x:Key="StripSlider" TargetType="Slider" BasedOn="{StaticResource {x:Type Slider}}">
+            <Setter Property="FocusVisualStyle">
+                <Setter.Value>
+                    <Style>
+                        <Setter Property="Control.Template">
+                            <Setter.Value>
+                                <ControlTemplate>
+                                    <Border Margin="-3" BorderThickness="1" CornerRadius="3"
+                                            BorderBrush="{StaticResource AccentABrush}"/>
+                                </ControlTemplate>
+                            </Setter.Value>
+                        </Setter>
+                    </Style>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <!-- Not seekable: dimmed, so "off" reads as weight and not only as
+                     colour. The tooltip and the automation name say it in words. -->
+                <Trigger Property="IsEnabled" Value="False">
+                    <Setter Property="Opacity" Value="0.45"/>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
+
+        <!--
+            The upload the strip is showing. Left empty by the tabs, where the list
+            directly above already names it - the empty triggers then collapse the
+            column to zero width, so tab layout is untouched.
+        -->
+        <Style x:Key="StripTitle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="10.5"/>
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+            <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
+            <Setter Property="MaxWidth" Value="200"/>
+            <Setter Property="Margin" Value="0,0,8,0"/>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding Title}" Value="{x:Null}">
+                    <Setter Property="Visibility" Value="Collapsed"/>
+                </DataTrigger>
+                <DataTrigger Binding="{Binding Title}" Value="">
+                    <Setter Property="Visibility" Value="Collapsed"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
     </UserControl.Resources>
 
     <!--
@@ -13,11 +64,35 @@
         seekable slider and the total length, driven by the main transport through
         IPreviewTransport. Sits directly under the list it belongs to.
     -->
-    <Border Background="{StaticResource PanelBrush}"
-            BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
-            CornerRadius="4" Padding="4,2" Margin="0,4,0,0">
+    <Border x:Name="Frame">
+        <Border.Style>
+            <Style TargetType="Border">
+                <Setter Property="Background" Value="{StaticResource PanelBrush}"/>
+                <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
+                <Setter Property="BorderThickness" Value="1"/>
+                <Setter Property="CornerRadius" Value="4"/>
+                <Setter Property="Padding" Value="4,2"/>
+                <Setter Property="Margin" Value="0,4,0,0"/>
+                <Style.Triggers>
+                    <!--
+                        ShowFrame="False": the host already draws the frame (the
+                        Find on YouTube window), so this strip supplies only what
+                        is inside it and does not double the border.
+                    -->
+                    <DataTrigger Value="False"
+                                 Binding="{Binding ShowFrame, RelativeSource={RelativeSource AncestorType=views:PreviewBar}}">
+                        <Setter Property="Background" Value="Transparent"/>
+                        <Setter Property="BorderThickness" Value="0"/>
+                        <Setter Property="CornerRadius" Value="0"/>
+                        <Setter Property="Padding" Value="0"/>
+                        <Setter Property="Margin" Value="0"/>
+                    </DataTrigger>
+                </Style.Triggers>
+            </Style>
+        </Border.Style>
         <Grid Height="22">
             <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="Auto"/>
                 <ColumnDefinition Width="*"/>
@@ -36,43 +111,53 @@
                     Command="{Binding PlayPauseCommand}"
                     ToolTip="{Binding PlayPauseHint}"/>
 
-            <TextBlock Grid.Column="1" Text="{Binding PositionText}"
+            <!-- Which upload is playing. Only the search window has something to
+                 name; the tabs leave Title empty and this column takes no width. -->
+            <TextBlock Grid.Column="1" Text="{Binding Title}" Style="{StaticResource StripTitle}"
+                       ToolTip="{Binding Title}"/>
+
+            <TextBlock Grid.Column="2" Text="{Binding PositionText}"
                        FontFamily="Consolas" FontSize="10.5" Width="38"
                        Foreground="{StaticResource TextDimBrush}"
                        VerticalAlignment="Center" TextAlignment="Right"
                        Margin="0,0,6,0"/>
 
-            <Slider Grid.Column="2" x:Name="SeekBar"
+            <Slider Grid.Column="3" x:Name="SeekBar"
                     Minimum="0" Maximum="{Binding DurationSeconds}"
                     Value="{Binding PositionSeconds, Mode=OneWay}"
                     IsEnabled="{Binding IsSeekable}"
                     VerticalAlignment="Center" Height="18"
                     IsMoveToPointEnabled="True"
+                    Style="{StaticResource StripSlider}"
+                    AutomationProperties.Name="Preview position"
+                    AutomationProperties.HelpText="{Binding SeekHint}"
                     ToolTip="{Binding SeekHint}"
                     Visibility="{Binding HasStatus, Converter={StaticResource InverseBoolToVisibility}}"/>
 
             <!-- Resolving / downloading / failure: the middle cell says what is
-                 happening instead of showing a dead slider. -->
-            <TextBlock Grid.Column="2" Text="{Binding StatusText}"
+                 happening instead of showing a dead slider. Announced when it
+                 changes, so a refused preview is not a silent one. -->
+            <TextBlock Grid.Column="3" Text="{Binding StatusText}"
+                       AutomationProperties.LiveSetting="Polite"
                        FontSize="10.5" Foreground="{StaticResource TextBrush}"
                        VerticalAlignment="Center" Margin="8,0,0,0"
                        TextTrimming="CharacterEllipsis"
                        IsHitTestVisible="False"
                        Visibility="{Binding HasStatus, Converter={StaticResource BoolToVisibility}}"/>
 
-            <TextBlock Grid.Column="3" Text="{Binding DurationText}"
+            <TextBlock Grid.Column="4" Text="{Binding DurationText}"
                        FontFamily="Consolas" FontSize="10.5" Width="42"
                        Foreground="{StaticResource TextDimBrush}"
                        VerticalAlignment="Center" TextAlignment="Right"
                        Margin="6,0,0,0"/>
 
-            <TextBlock Grid.Column="4" Text="{Binding ModeText}"
+            <TextBlock Grid.Column="5" Text="{Binding ModeText}"
                        FontSize="9" Foreground="{StaticResource TextDimBrush}"
                        VerticalAlignment="Center" Margin="4,0,0,0"
                        ToolTip="{Binding ModeHint}"
                        Visibility="{Binding HasModeBadge, Converter={StaticResource BoolToVisibility}}"/>
 
-            <Button Grid.Column="5" Content="{Binding MuteGlyph}"
+            <Button Grid.Column="6" Content="{Binding MuteGlyph}"
                     Width="20" Height="20" FontSize="9" Padding="0"
                     Margin="2,0,2,0" VerticalAlignment="Center"
                     Background="Transparent" BorderThickness="0"
@@ -81,15 +166,17 @@
                     Command="{Binding ToggleMuteCommand}"
                     ToolTip="{Binding MuteHint}"/>
 
-            <Slider Grid.Column="6" x:Name="VolumeBar"
+            <Slider Grid.Column="7" x:Name="VolumeBar"
                     Minimum="0" Maximum="100"
                     Value="{Binding Volume, Mode=TwoWay}"
                     IsEnabled="{Binding IsAvailable}"
                     VerticalAlignment="Center" Height="16" Width="56"
                     Focusable="True"
+                    Style="{StaticResource StripSlider}"
+                    AutomationProperties.Name="Preview volume"
                     ToolTip="{Binding VolumeHint}"/>
 
-            <TextBlock Grid.Column="2" Text="Preview the track here, then download the version you want."
+            <TextBlock Grid.Column="3" Text="Preview the track here, then download the version you want."
                        FontSize="10.5" Foreground="{StaticResource TextDimBrush}"
                        VerticalAlignment="Center" Margin="8,0,0,0"
                        IsHitTestVisible="False" TextTrimming="CharacterEllipsis"

@@ -1,6 +1,7 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using JockeyBox.ViewModels;
 
 namespace JockeyBox.Views;
@@ -14,6 +15,14 @@ public partial class PreviewBar : UserControl
 {
     /// <summary>True between Thumb.DragStarted and DragCompleted; that pair owns the commit.</summary>
     private bool _dragging;
+
+    /// <summary>
+    /// Draw the panel frame around the strip. Off when the host already has one
+    /// (the Find on YouTube window), so the row carries a single border.
+    /// </summary>
+    public static readonly DependencyProperty ShowFrameProperty =
+        DependencyProperty.Register(nameof(ShowFrame), typeof(bool), typeof(PreviewBar),
+            new PropertyMetadata(true));
 
     public PreviewBar()
     {
@@ -40,7 +49,44 @@ public partial class PreviewBar : UserControl
                 _dragging = false;
                 Vm?.EndSeek(SeekBar.Value);
             }));
+
+        // A keyboard has no drag phase, so each key is its own press-and-release.
+        SeekBar.PreviewKeyDown += OnSeekKeyDown;
+    }
+
+    public bool ShowFrame
+    {
+        get => (bool)GetValue(ShowFrameProperty);
+        set => SetValue(ShowFrameProperty, value);
     }
 
     private PreviewBarViewModel? Vm => DataContext as PreviewBarViewModel;
+
+    /// <summary>
+    /// Arrows, page keys and Home/End seek, committing through the same
+    /// Begin/End bracket the mouse uses - without it the slider only moved its
+    /// thumb and the deck never followed, which made the strip unusable from
+    /// the keyboard.
+    /// </summary>
+    private void OnSeekKeyDown(object sender, KeyEventArgs e)
+    {
+        if (Vm is not { IsSeekable: true } vm) return;
+
+        var target = e.Key switch
+        {
+            Key.Left => vm.PositionSeconds - 1,
+            Key.Right => vm.PositionSeconds + 1,
+            Key.PageDown => vm.PositionSeconds - 10,
+            Key.PageUp => vm.PositionSeconds + 10,
+            Key.Home => 0,
+            Key.End => vm.DurationSeconds,
+            _ => double.NaN
+        };
+
+        if (double.IsNaN(target)) return;
+
+        e.Handled = true;
+        vm.BeginSeek();
+        vm.EndSeek(target);
+    }
 }

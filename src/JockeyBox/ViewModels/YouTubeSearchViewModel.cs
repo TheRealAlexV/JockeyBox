@@ -53,6 +53,10 @@ public partial class YouTubeSearchViewModel : ObservableObject
         _query = query;
         TargetLabel = targetLabel ?? "";
 
+        // The strip is the shared control the tabs use, on this window's own
+        // transport: one seek path for the whole app, no second slider here.
+        Strip = new PreviewBarViewModel(stream);
+
         _stream.StateChanged += OnTransportChanged;
 
         // The player says why a preview was refused (no yt-dlp, extractor change,
@@ -64,6 +68,13 @@ public partial class YouTubeSearchViewModel : ObservableObject
     }
 
     public ObservableCollection<YtEntry> Results { get; } = new();
+
+    /// <summary>
+    /// What the audition strip binds to: the shared preview strip, driven by the
+    /// same <see cref="StreamPreviewTransport"/> the tabs preview through. A
+    /// seek here and a seek on a tab strip are the same code.
+    /// </summary>
+    public PreviewBarViewModel Strip { get; }
 
     /// <summary>What the search is for, e.g. "Daft Punk - Around the World".</summary>
     public string TargetLabel { get; }
@@ -104,6 +115,9 @@ public partial class YouTubeSearchViewModel : ObservableObject
     [ObservableProperty] private bool _hasPreview;
 
     public bool HasStatus => !string.IsNullOrWhiteSpace(StatusText);
+
+    /// <summary>The strip's header follows the title the window is auditioning.</summary>
+    partial void OnPreviewTitleChanged(string value) => Strip.Title = value;
 
     partial void OnQueryChanged(string value)
     {
