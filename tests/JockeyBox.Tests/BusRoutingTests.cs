@@ -160,11 +160,10 @@ public sealed class BusRoutingTests
             var tap = new TestAudio.BusTap();
             TestAudio.RenderBlocks(engine, tap, blocks: 12);
 
-            // The monitor send taps the deck after its crossfader gain, so at a
-            // hard A crossfade only deck A reaches the cue: 0.20 * 0.5. Deck B's
-            // own gain (1.0) cannot make an un-faded deck audible, and that is
-            // deliberate - a second read of deck B would advance its clock twice.
-            Assert.Equal(0.10f, tap.Peak(BusKind.Monitor), 3);
+            // The monitor tap is pre-fader: deck B sits on the far side of the
+            // crossfader and is still audible to the operator at its own gain:
+            //   0.20 * 0.5 + 0.10 * 1.0 = 0.20
+            Assert.Equal(0.20f, tap.Peak(BusKind.Monitor), 3);
 
             engine.MonitorEnabled = false;
             var tap2 = new TestAudio.BusTap();

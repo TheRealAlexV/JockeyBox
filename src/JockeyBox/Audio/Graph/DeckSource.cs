@@ -10,6 +10,14 @@ public interface IDeckGainSource
 {
     /// <summary>Gain for the given engine frame. Called once per frame while the deck plays.</summary>
     float GainAt(long engineFrame);
+
+    /// <summary>
+    /// The same gain without the crossfader: deck volume × duck. The engine renders
+    /// each deck once through <c>BaseGainAt</c> and applies the crossfade itself when
+    /// it fans that block out, so the monitor tap can hear a deck that the
+    /// crossfader has faded out without reading (and therefore clocking) it twice.
+    /// </summary>
+    float BaseGainAt(long engineFrame) => GainAt(engineFrame);
 }
 
 /// <summary>
@@ -356,6 +364,15 @@ public sealed class DeckSource : ISampleProvider, IDisposable
     /// <summary>Deck fader (0..1.2) — the mixer's own volume, separate from the crossfader.</summary>
     public void SetVolume(float volume) => _volume = Math.Clamp(volume, 0f, 1.2f);
 
+    /// <summary>
+    /// When true this deck's render excludes the crossfader (deck volume and duck
+    /// still apply). The engine sets it on both decks and applies the crossfade at
+    /// fan-out, so one read of the deck feeds both its program bus and a monitor
+    /// tap that ignores the crossfader position. Off by default: the gain source
+    /// does everything, which is the 2.1 behaviour.
+    /// </summary>
+    public bool PreFader { get; set; }
+
     /// <summary>Karaoke sub-stem gain (0 = backing only, 1 = original vocal).</summary>
     public void SetKaraokeGain(float gain) => _karaokeGain = Math.Clamp(gain, 0f, 1f);
 
@@ -672,7 +689,9 @@ public sealed class DeckSource : ISampleProvider, IDisposable
             if (_vocalsSmooth < vocalsTarget) _vocalsSmooth = Math.Min(vocalsTarget, _vocalsSmooth + vocalsStep);
             else if (_vocalsSmooth > vocalsTarget) _vocalsSmooth = Math.Max(vocalsTarget, _vocalsSmooth - vocalsStep);
 
-            float gain = _gainSource?.GainAt(FrameCursor + f) ?? _volume;
+            float gain = _gainSource == null
+                ? _volume
+                : (PreFader ? _gainSource.BaseGainAt(FrameCursor + f) : _gainSource.GainAt(FrameCursor + f));
             int baseIdx = offset + f * _channels;
             for (int c = 0; c < _channels; c++) buffer[baseIdx + c] *= gain;
         }

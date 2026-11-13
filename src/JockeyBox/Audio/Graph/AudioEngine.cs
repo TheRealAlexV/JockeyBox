@@ -172,6 +172,11 @@ public sealed class AudioEngine : IDisposable
         DeckA.GainSource = new CrossfaderGain(this, isDeckA: true);
         DeckB.GainSource = new CrossfaderGain(this, isDeckA: false);
 
+        // Each deck is read once per block, pre-crossfader; the crossfade is applied
+        // at fan-out so the monitor tap can hear a deck the fader has turned down.
+        DeckA.PreFader = true;
+        DeckB.PreFader = true;
+
         _buses = new AudioBus[BusOrder.Length];
         foreach (var kind in BusOrder) _buses[(int)kind] = new AudioBus(kind, Rate, Channels, BlockFrames);
     }
@@ -710,9 +715,19 @@ public sealed class AudioEngine : IDisposable
 
         float master = _masterVolume;
 
-        // 4. Deck mix: sum, limit, master. This is the same signal 2.0 called
-        //    "program", and it is the base of both Main and Bridge.
-        for (int i = 0; i < _deckMix.Length; i++) _deckMix[i] = _deckABuffer[i] + _deckBBuffer[i];
+        // 4. Program fan-out. Each deck was rendered ONCE, pre-crossfader (deck
+        //    volume and duck are in the block, the crossfader is not). The crossfade
+        //    is applied here, per frame, so the same block feeds the program bus and
+        //    a monitor tap that ignores the fader - and no deck is clocked twice.
+        var deckABus = _buses[(int)BusKind.DeckA];
+        var deckBBus = _buses[(int)BusKind.DeckB];
+        var deckAOut = deckABus.Input;
+        var deckBOut = deckBBus.Input;
+        ApplyCrossfade(_deckABuffer, deckAOut, frame, isDeckA: true);
+        ApplyCrossfade(_deckBBuffer, deckBOut, frame, isDeckA: false);
+
+        // The trace's deck mix is the program sum: both decks post-crossfade.
+        for (int i = 0; i < _deckMix.Length; i++) _deckMix[i] = deckAOut[i] + deckBOut[i];
         // Two 0.707 centre decks would reach 1.414, so limit before the master fader.
         _traceDeckPre = Samples.Peak(_deckMix, 0, _deckMix.Length);
         _traceDeckA = Samples.Peak(_deckABuffer, 0, _deckABuffer.Length);
@@ -725,25 +740,22 @@ public sealed class AudioEngine : IDisposable
         for (int i = 0; i < _soundboardScaled.Length; i++)
             _soundboardScaled[i] = _soundboardBlock[i] * master;
 
-        // 5. Deck A output: deck A alone, plus the soundboard when it has no device
-        //    of its own. No microphones, ever. Deck B is its own bus; when both
-        //    name one physical device the DeviceOutput sums them into one session.
-        var deckABus = _buses[(int)BusKind.DeckA];
-        var deckBBus = _buses[(int)BusKind.DeckB];
+        // 5. Deck A output: deck A, plus the soundboard when it has no device of its
+        //    own. No microphones, ever. Deck B is its own bus; when both name one
+        //    physical device the DeviceOutput sums them into one session.
         var soundboardBus = _buses[(int)BusKind.Soundboard];
         bool soundboardOnDeckA = _soundboardFollowsMain && !soundboardBus.IsOpen;
-        var deckAOut = deckABus.Input;
-        for (int i = 0; i < deckAOut.Length; i++)
-            deckAOut[i] = _deckABuffer[i] + (soundboardOnDeckA ? _soundboardScaled[i] : 0f);
-        // One limiter over the combined bus: the soundboard can push the sum over
-        // the knee, exactly like a second deck would.
-        if (soundboardOnDeckA) Samples.SoftLimit(deckAOut, 0, deckAOut.Length);
+        if (soundboardOnDeckA)
+        {
+            for (int i = 0; i < deckAOut.Length; i++) deckAOut[i] += _soundboardScaled[i];
+            // One limiter over the combined bus: the soundboard can push the sum
+            // over the knee, exactly like a second deck would.
+            Samples.SoftLimit(deckAOut, 0, deckAOut.Length);
+        }
 
         // 6. Deck B output: deck B's render. This bus used to be the KaraokeAid cue
         //    and was cleared every block, because the global karaoke mode that fed
         //    it is gone. It is now deck B's real output and carries deck B.
-        var deckBOut = deckBBus.Input;
-        Array.Copy(_deckBBuffer, deckBOut, deckBOut.Length);
         Samples.SoftLimit(deckBOut, 0, deckBOut.Length);
 
         if (master != 1f)
@@ -817,7 +829,7 @@ public sealed class AudioEngine : IDisposable
         sb.Append("audio trace: ")
           .Append($"A={DeckA.State}@{DeckA.PositionSeconds:0.00} ")
           .Append($"B={DeckB.State}@{DeckB.PositionSeconds:0.00} ")
-          .Append($"deckA={_traceDeckA:0.0000} deckB={_traceDeckB:0.0000} ")
+          .Append($"deckApre={_traceDeckA:0.0000} deckBpre={_traceDeckB:0.0000} ")
           .Append($"deckMix pre={_traceDeckPre:0.0000} post={_traceDeckPost:0.0000} ")
           .Append($"master={_masterVolume:0.00} fader={Fader.FaderAt(frame):0.00} ");
 
@@ -837,6 +849,23 @@ public sealed class AudioEngine : IDisposable
         }
 
         Log.Info(sb.ToString());
+    }
+
+    /// <summary>
+    /// Copy one deck block to its program bus with the crossfader's per-frame gain
+    /// applied. Deck volume and duck are already in the source block (the deck is
+    /// rendered pre-crossfader), which is what lets the monitor tap read the same
+    /// block without the fader.
+    /// </summary>
+    private void ApplyCrossfade(float[] source, float[] target, long firstFrame, bool isDeckA)
+    {
+        for (int f = 0; f < BlockFrames; f++)
+        {
+            double fader = Fader.FaderAt(firstFrame + f);
+            float gain = (float)(isDeckA ? Crossfade.GainA(fader) : Crossfade.GainB(fader));
+            int baseIdx = f * Channels;
+            for (int c = 0; c < Channels; c++) target[baseIdx + c] = source[baseIdx + c] * gain;
+        }
     }
 
     /// <summary>
@@ -920,8 +949,14 @@ public sealed class AudioEngine : IDisposable
         {
             double fader = _engine.Fader.FaderAt(engineFrame);
             double cross = _isA ? Crossfade.GainA(fader) : Crossfade.GainB(fader);
+            return (float)(cross * BaseGainAt(engineFrame));
+        }
+
+        /// <summary>Deck volume × duck: everything the program gain has except the crossfader.</summary>
+        public float BaseGainAt(long engineFrame)
+        {
             double volume = _isA ? _engine._deckAVolume : _engine._deckBVolume;
-            return (float)(cross * volume * _engine._duck);
+            return (float)(volume * _engine._duck);
         }
     }
 }

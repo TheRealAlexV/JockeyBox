@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using JockeyBox.Audio;
 using JockeyBox.Audio.Graph;
@@ -10,20 +11,19 @@ using JockeyBox.Tools;
 namespace JockeyBox.Selftest;
 
 /// <summary>
-/// <c>--audiotrace [ms] [--track path]</c>: open the real endpoints from the
-/// configured route, play a real file through the real render thread, and let the
-/// engine's per-second audio trace write what actually reached each device.
+/// <c>--audiotrace [ms]</c>: open the real endpoints from the configured route
+/// (or an explicit override), play real files through the real render thread, and
+/// let the engine's per-second audio trace say what actually reached each device.
 ///
 /// <para><b>Why it is a mode.</b> The operator reported silence while the clock
-/// advanced. Every other check in this folder listens to the graph in isolation
-/// (<c>--selftest</c> is offline) or never plays at all, so nothing proved a
-/// non-zero sample had reached a WASAPI session. This mode opens those sessions
-/// exactly as the app does, for a bounded number of seconds, in a sandbox home,
-/// and exits with the numbers in the log.</para>
+/// advanced. Nothing in the process proved a non-zero sample reached a WASAPI
+/// session, so the graph could not be exonerated and the device could not be
+/// accused. This mode opens those sessions exactly as the app does, for a bounded
+/// number of seconds, in a sandbox home, and exits with the numbers in the log.</para>
 ///
-/// <para>Exit code 0 means the run completed. It deliberately does not encode
-/// "audio was audible": what the numbers say is the report's job, and a device
-/// that receives a healthy signal yet makes no sound is a finding, not a crash.</para>
+/// <para><c>--probe</c> additionally dumps every render endpoint with its own
+/// volume and mute, and every session on it with that session's volume and mute -
+/// which is where a Windows per-app mute for JockeyBox.exe would show up.</para>
 /// </summary>
 internal static class AudioTrace
 {
@@ -47,18 +47,36 @@ internal static class AudioTrace
             Console.Error.WriteLine($"audiotrace: track not found: {track}");
             return 2;
         }
-
-        var settings = AppSettings.Load();
-        var route = DualDeckTransport.BuildRouteFromAppSettings(settings);
         string? karaoke = ValueOf(args, "--karaoke");
         if (karaoke != null && !File.Exists(karaoke))
         {
             Console.Error.WriteLine($"audiotrace: karaoke stem not found: {karaoke}");
             return 2;
         }
+        string? trackB = ValueOf(args, "--trackB");
+        if (trackB != null && !File.Exists(trackB))
+        {
+            Console.Error.WriteLine($"audiotrace: deck B track not found: {trackB}");
+            return 2;
+        }
+
+        var settings = AppSettings.Load();
+        var route = DualDeckTransport.BuildRouteFromAppSettings(settings);
+
+        // Per-run overrides: the point is to drive one candidate endpoint at a time
+        // without touching the operator's stored routing.
+        route = route with
+        {
+            DeckADeviceId = ValueOf(args, "--deckA-device") ?? route.DeckADeviceId,
+            DeckBDeviceId = ValueOf(args, "--deckB-device") ?? route.DeckBDeviceId,
+            MonitorDeviceId = ValueOf(args, "--monitor-device") ?? route.MonitorDeviceId,
+        };
+
+        double fader = 0.5;
+        if (double.TryParse(ValueOf(args, "--fader"), out double f)) fader = Math.Clamp(f, 0, 1);
 
         Console.WriteLine($"audiotrace: home {AppPaths.Home}");
-        Console.WriteLine($"audiotrace: track {track}");
+        Console.WriteLine($"audiotrace: track {track}" + (trackB != null ? $" / B {trackB}" : ""));
         Console.WriteLine($"audiotrace: route {route}");
 
         using var echo = new LogEcho(Console.Out);
@@ -69,7 +87,10 @@ internal static class AudioTrace
             engine.MasterVolume = settings.MasterVolume;
             engine.DeckA.SetVolume(settings.DeckAVolume);
             engine.DeckB.SetVolume(settings.DeckBVolume);
-            engine.Fader.Snap(0.5, 0);
+            engine.MonitorEnabled = Has(args, "--mon");
+            if (float.TryParse(ValueOf(args, "--monA"), out float monA)) engine.MonitorAGain = monA;
+            if (float.TryParse(ValueOf(args, "--monB"), out float monB)) engine.MonitorBGain = monB;
+            engine.Fader.Snap(fader, 0);
 
             var open = engine.SetRouteAsync(route);
             if (!open.Wait(TimeSpan.FromSeconds(20)))
@@ -84,18 +105,38 @@ internal static class AudioTrace
             }
 
             engine.Start();
-            engine.DeckA.LoadAsync(track, karaokePath: karaoke, playWhenReady: true).GetAwaiter().GetResult();
-            Console.WriteLine($"audiotrace: deck A {engine.DeckA.State} {engine.DeckA.DurationSeconds:0.0}s");
+            engine.DeckA.LoadAsync(track, karaokePath: karaoke, playWhenReady: true)
+                .GetAwaiter().GetResult();
+            if (trackB != null)
+                engine.DeckB.LoadAsync(trackB, playWhenReady: true).GetAwaiter().GetResult();
+
+            Console.WriteLine($"audiotrace: deck A {engine.DeckA.State} B {engine.DeckB.State} " +
+                              $"fader={fader:0.00} mon={engine.MonitorEnabled}");
 
             var deadline = DateTime.UtcNow.AddMilliseconds(ms);
+            bool probed = false;
             while (DateTime.UtcNow < deadline)
             {
                 Thread.Sleep(200);
+                if (!probed && Has(args, "--probe") &&
+                    DateTime.UtcNow > deadline.AddMilliseconds(-(ms - 2500)))
+                {
+                    probed = true;
+                    try
+                    {
+                        foreach (string line in AudioProbe.Describe()) Console.WriteLine(line);
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"probe: unreadable ({ex.GetType().Name} 0x{ex.HResult:X8}: {ex.Message})");
+                    }
+                }
                 if (engine.DeckA.State == DeckSource.DeckState.Failed) break;
             }
 
             Console.WriteLine($"audiotrace: deck A ended at {engine.DeckA.State} " +
-                              $"pos {engine.DeckA.PositionSeconds:0.00}s");
+                              $"pos {engine.DeckA.PositionSeconds:0.00}s " +
+                              $"B {engine.DeckB.State} {engine.DeckB.PositionSeconds:0.00}s");
         }
         catch (Exception ex)
         {
@@ -110,6 +151,8 @@ internal static class AudioTrace
 
         return exit;
     }
+
+    private static bool Has(string[] args, string flag) => IndexOf(args, flag) >= 0;
 
     private static int IndexOf(string[]? args, string flag)
     {
