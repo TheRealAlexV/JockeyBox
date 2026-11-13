@@ -33,7 +33,8 @@ public partial class App : Application
         Tools.SingleInstance.Headless =
             SelftestRequested(e.Args) || LibraryDump.Requested(e.Args) ||
             UiShot.Requested(e.Args) || PerfProbe.Requested(e.Args) ||
-            PreviewCheck.Requested(e.Args) || LingerCheck.Requested(e.Args);
+            PreviewCheck.Requested(e.Args) || LingerCheck.Requested(e.Args) ||
+            LyricsProbe.Requested(e.Args);
 
         if (!Tools.SingleInstance.TryAcquire(Tools.AppPaths.Home, out string owner, out int ownerPid))
         {
@@ -183,6 +184,23 @@ public partial class App : Application
                 Console.Error.WriteLine("uishot failed: " + ex);
             }
             Shutdown(shotExit);
+            return;
+        }
+
+        // --lyrics-probe "Artist|Title": one real lookup through every provider,
+        // printed as per-provider outcomes (see Selftest/LyricsProbe.cs).
+        if (LyricsProbe.Requested(e.Args))
+        {
+            int probeExit = 1;
+            try
+            {
+                probeExit = LyricsProbe.Run(e.Args);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine("lyrics-probe failed: " + ex);
+            }
+            Shutdown(probeExit);
             return;
         }
 

@@ -36,7 +36,13 @@ public class LrcmuxProvider : ILyricsProvider
     public async Task<LyricsDocument?> GetLyricsAsync(TrackEntry track, CancellationToken ct)
     {
         // The API is keyed by artist+title; without an artist the query is noise.
-        if (string.IsNullOrWhiteSpace(track.Title) || string.IsNullOrWhiteSpace(track.Artist)) return null;
+        if (string.IsNullOrWhiteSpace(track.Title) || string.IsNullOrWhiteSpace(track.Artist))
+        {
+            // The endpoint is keyed by artist+title; a missing artist is a miss by
+            // construction, not a network failure.
+            LyricsTrace.Note(Id, "needs artist + title");
+            return null;
+        }
 
         var logKey = ProviderLog.Key(Id, track.Artist, track.Title);
 
@@ -48,12 +54,13 @@ public class LrcmuxProvider : ILyricsProvider
                 + "&level=word&format=json";
 
             var json = await GetWithRetryAsync(url, logKey, ct);
-            if (json is null) return null;
+            if (json is null) return null; // status already noted by the retry helper
 
             var doc = LrcmuxParser.Parse(json, Name, Id);
             if (doc is null)
             {
                 ProviderLog.WarnOnce(logKey, $"lrcmux: unusable JSON payload for '{track.Artist} - {track.Title}'");
+                LyricsTrace.Note(Id, "unusable payload");
                 return null;
             }
 
@@ -67,6 +74,7 @@ public class LrcmuxProvider : ILyricsProvider
         catch (Exception ex)
         {
             ProviderLog.WarnOnce(logKey, $"lrcmux: lookup failed for '{track.Artist} - {track.Title}': {ex.Message}");
+            LyricsTrace.Note(Id, "error: " + ex.Message);
             return null;
         }
     }
@@ -79,7 +87,11 @@ public class LrcmuxProvider : ILyricsProvider
     {
         for (int attempt = 0; attempt < 2; attempt++)
         {
-            if (!await Budget.WaitAsync(ct)) return null;
+            if (!await Budget.WaitAsync(ct))
+            {
+                LyricsTrace.Note(Id, "local rate budget exhausted");
+                return null;
+            }
 
             using var response = await _http.GetAsync(url, HttpCompletionOption.ResponseContentRead, ct);
 
@@ -88,6 +100,7 @@ public class LrcmuxProvider : ILyricsProvider
                 if (attempt == 1)
                 {
                     ProviderLog.WarnOnce(logKey, "lrcmux: still rate limited after one retry; skipping this track");
+                    LyricsTrace.Note(Id, "429 rate limited");
                     return null;
                 }
 
@@ -100,6 +113,7 @@ public class LrcmuxProvider : ILyricsProvider
             {
                 ProviderLog.WarnOnce(logKey,
                     $"lrcmux: HTTP {(int)response.StatusCode} for '{url}'");
+                LyricsTrace.Note(Id, $"HTTP {(int)response.StatusCode}");
                 return null;
             }
 

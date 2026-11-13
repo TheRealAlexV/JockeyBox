@@ -37,7 +37,12 @@ public class UnisonProvider : ILyricsProvider
     public async Task<LyricsDocument?> GetLyricsAsync(TrackEntry track, CancellationToken ct)
     {
         var videoId = VideoIdLookup.ForTrack(track);
-        if (string.IsNullOrWhiteSpace(videoId)) return null; // no YouTube identity: nothing to ask
+        if (string.IsNullOrWhiteSpace(videoId))
+        {
+            // No YouTube identity in the download ledger: nothing to ask.
+            LyricsTrace.Note(Id, "no YouTube id in ledger");
+            return null;
+        }
 
         var logKey = ProviderLog.Key(Id, track.Artist, track.Title);
 
@@ -47,12 +52,17 @@ public class UnisonProvider : ILyricsProvider
 
             using var response = await _http.GetAsync(url, HttpCompletionOption.ResponseContentRead, ct);
 
-            if (response.StatusCode is HttpStatusCode.NotFound) return null; // no lyrics for this id
+            if (response.StatusCode is HttpStatusCode.NotFound)
+            {
+                LyricsTrace.Note(Id, "404 for video id");
+                return null;
+            }
 
             if (!response.IsSuccessStatusCode)
             {
                 ProviderLog.WarnOnce(logKey,
                     $"unison: HTTP {(int)response.StatusCode} for video {videoId}");
+                LyricsTrace.Note(Id, $"HTTP {(int)response.StatusCode}");
                 return null;
             }
 
@@ -74,7 +84,11 @@ public class UnisonProvider : ILyricsProvider
                     ? lyricsElement.GetString()
                     : null;
 
-            if (string.IsNullOrWhiteSpace(lyrics)) return null;
+            if (string.IsNullOrWhiteSpace(lyrics))
+            {
+                LyricsTrace.Note(Id, "empty lyrics payload");
+                return null;
+            }
 
             var doc = ParsePayload(lyrics!, format);
             if (doc is null)

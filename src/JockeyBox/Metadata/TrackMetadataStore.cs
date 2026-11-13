@@ -86,6 +86,16 @@ public sealed class TrackMetadata
     public string LyricsSourceId { get; set; } = "";
 
     /// <summary>
+    /// Pinned search title, or <b>null</b> to use the file tag. Set together with
+    /// <see cref="LyricsArtist"/> when the operator binds lyrics for a cover: every
+    /// provider is keyed on artist+title, so the file's tags are the wrong query.
+    /// </summary>
+    public string? LyricsTitle { get; set; }
+
+    /// <summary>Pinned search artist, or <b>null</b> to use the file tag. See <see cref="LyricsTitle"/>.</summary>
+    public string? LyricsArtist { get; set; }
+
+    /// <summary>
     /// Optional per-track follow mode ("Line"/"Word"); null = use the global
     /// setting. Stored as the enum name so a future mode does not corrupt the file.
     /// </summary>
@@ -108,6 +118,8 @@ public sealed class TrackMetadata
         Artist = Artist,
         LyricsOffsetMs = LyricsOffsetMs,
         LyricsSourceId = LyricsSourceId,
+        LyricsTitle = LyricsTitle,
+        LyricsArtist = LyricsArtist,
         LyricsFollowMode = LyricsFollowMode,
         Sections = new List<LyricOffsetSection>(Sections),
         UpdatedUtc = UpdatedUtc,
@@ -433,6 +445,36 @@ public sealed class TrackMetadataStore : IDisposable
             var record = EnsureLocked(normalized);
             if (string.Equals(record.LyricsSourceId, value, StringComparison.Ordinal)) return;
             record.LyricsSourceId = value;
+            record.UpdatedUtc = DateTime.UtcNow;
+            _dirty = true;
+        }
+
+        ScheduleSave();
+        RaiseChanged(normalized, TrackMetadataChange.Property);
+    }
+
+    /// <summary>
+    /// Save the pinned search query. Blank/null on both clears it back to the file
+    /// tags, which is also what the panel's "use file tags" control does.
+    /// </summary>
+    public void SetLyricsQuery(string? key, string? title, string? artist)
+    {
+        var normalized = NormalizeKey(key);
+        if (normalized.Length == 0) return;
+
+        var newTitle = string.IsNullOrWhiteSpace(title) ? null : title.Trim();
+        var newArtist = string.IsNullOrWhiteSpace(artist) ? null : artist.Trim();
+        lock (_gate)
+        {
+            var record = EnsureLocked(normalized);
+            if (string.Equals(record.LyricsTitle, newTitle, StringComparison.Ordinal)
+                && string.Equals(record.LyricsArtist, newArtist, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            record.LyricsTitle = newTitle;
+            record.LyricsArtist = newArtist;
             record.UpdatedUtc = DateTime.UtcNow;
             _dirty = true;
         }
@@ -970,6 +1012,8 @@ public sealed class TrackMetadataStore : IDisposable
                     Artist = raw.Artist?.Trim() ?? "",
                     LyricsOffsetMs = raw.LyricsOffsetMs is { } rawOffset ? ClampOffset(rawOffset) : null,
                     LyricsSourceId = string.IsNullOrWhiteSpace(raw.LyricsSourceId) ? "" : raw.LyricsSourceId.Trim(),
+                    LyricsTitle = string.IsNullOrWhiteSpace(raw.LyricsTitle) ? null : raw.LyricsTitle.Trim(),
+                    LyricsArtist = string.IsNullOrWhiteSpace(raw.LyricsArtist) ? null : raw.LyricsArtist.Trim(),
                     LyricsFollowMode = string.IsNullOrWhiteSpace(raw.LyricsFollowMode) ? null : raw.LyricsFollowMode.Trim(),
                     Sections = new List<LyricOffsetSection>(),
                     UpdatedUtc = raw.UpdatedUtc,

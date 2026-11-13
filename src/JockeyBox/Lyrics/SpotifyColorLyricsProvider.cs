@@ -33,22 +33,39 @@ public class SpotifyColorLyricsProvider : ILyricsProvider
     public async Task<LyricsDocument?> GetLyricsAsync(TrackEntry track, CancellationToken ct)
     {
         if (!_oauth.IsLoggedIn || string.IsNullOrWhiteSpace(track.Title))
+        {
+            LyricsTrace.Note(Id, _oauth.IsLoggedIn ? "no title" : "Spotify not signed in");
             return null;
+        }
 
         try
         {
             var token = await _oauth.GetAccessTokenAsync(ct);
-            if (token == null) return null;
+            if (token == null)
+            {
+                LyricsTrace.Note(Id, "no access token");
+                return null;
+            }
 
             // Step 1: search for the track
             var trackId = await SearchTrackIdAsync(token, track, ct);
-            if (trackId == null) return null;
+            if (trackId == null)
+            {
+                LyricsTrace.Note(Id, "no search match");
+                return null;
+            }
 
             // Step 2: fetch color lyrics
-            return await FetchColorLyricsAsync(token, trackId, ct);
+            var doc = await FetchColorLyricsAsync(token, trackId, ct);
+            if (doc == null) LyricsTrace.Note(Id, "404 colour-lyrics for the matched id");
+            return doc;
         }
         catch (OperationCanceledException) { throw; }
-        catch { return null; }
+        catch (Exception ex)
+        {
+            LyricsTrace.Note(Id, "error: " + ex.Message);
+            return null;
+        }
     }
 
     private async Task<string?> SearchTrackIdAsync(string token, TrackEntry track, CancellationToken ct)

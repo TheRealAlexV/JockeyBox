@@ -50,8 +50,6 @@ public partial class MainWindow : Window
         _vm.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName == nameof(MainViewModel.IsPlaying)) UpdatePlayGlyph();
-            // Turning word-follow on/off changes which line needs measuring.
-            if (e.PropertyName == nameof(MainViewModel.IsWordFollow)) ScheduleBallMeasure();
         };
         _vm.DeckA.PropertyChanged += OnDeckPropertyChanged;
         _vm.DeckB.PropertyChanged += OnDeckPropertyChanged;
@@ -64,28 +62,9 @@ public partial class MainWindow : Window
         SeekBar.AddHandler(Thumb.DragCompletedEvent,
             new DragCompletedEventHandler((_, _) => _vm.EndSeek(SeekBar.Value)));
 
-        // Keep the highlighted lyric centered in the panel.
-        _vm.CurrentLyricChanged += ScrollLyricIntoCenter;
-
-        // The bouncing ball's geometry is a view concern: only the view can read
-        // where glyphs actually landed. Re-measure whenever the list scrolls or
-        // resizes, and whenever the VM reports a new active word.
-        _vm.CurrentWordChanged += ScheduleBallMeasure;
-        _vm.LyricLines.CollectionChanged += (_, _) => { _vm.ClearLyricWordGeometry(); ScheduleBallMeasure(); };
-        LyricsList.AddHandler(ScrollViewer.ScrollChangedEvent,
-            new ScrollChangedEventHandler((_, _) => ScheduleBallMeasure()), handledEventsToo: true);
-        LyricsBallCanvas.SizeChanged += (_, _) => ScheduleBallMeasure();
-
-        // Same rule as the browser tree: WPF does not select on right-click, and
-        // the timing menu acts on the selection. Keep a multi-row selection when
-        // the right-click lands on one of its rows.
-        LyricsList.PreviewMouseRightButtonDown += (_, e) =>
-        {
-            var item = FindAncestor<ListBoxItem>(e.OriginalSource as DependencyObject);
-            if (item == null || item.IsSelected) return;
-            LyricsList.SelectedItems.Clear();
-            item.IsSelected = true;
-        };
+        // Lyrics panel: the control owns its own scroll/ball wiring so the pop-out
+        // window gets the same behaviour without a second copy here.
+        LyricsHost.PopOutRequested += (_, _) => OpenLyricsWindow();
 
         // Karaoke generation flows that need dialogs.
         _vm.SettingsRequested += () => OpenSettings();
@@ -123,7 +102,50 @@ public partial class MainWindow : Window
         // consumed here before any window/command binding can act on it.
         PreviewKeyDown += OnSoundboardHotkeyCapture;
 
+        Closed += (_, _) => CloseLyricsWindow();
         Closed += (_, _) => CloseViewModel();
+    }
+
+    /// <summary>The single pop-out lyrics window, if one is open.</summary>
+    private LyricsWindow? _lyricsWindow;
+
+    /// <summary>
+    /// Open (or bring forward) the pop-out lyrics window. One instance for the
+    /// session: the panel holds no per-track state, so re-opening only re-activates
+    /// the window that already exists.
+    /// </summary>
+    private void OpenLyricsWindow()
+    {
+        if (_lyricsWindow != null)
+        {
+            if (_lyricsWindow.WindowState == WindowState.Minimized)
+                _lyricsWindow.WindowState = WindowState.Normal;
+            _lyricsWindow.Activate();
+            return;
+        }
+
+        var window = new LyricsWindow(_vm, _vm.SettingsRef) { Owner = this };
+        // A second window must not survive its owner: closing the main window
+        // closes this one first, and the reference goes with it.
+        window.Closed += (_, _) => _lyricsWindow = null;
+        _lyricsWindow = window;
+        window.Show();
+    }
+
+    /// <summary>Close the pop-out with the main window, without letting a failure stop the close.</summary>
+    private void CloseLyricsWindow()
+    {
+        var window = _lyricsWindow;
+        _lyricsWindow = null;
+        if (window == null) return;
+        try
+        {
+            window.Close();
+        }
+        catch
+        {
+            // The window is going away with the process anyway.
+        }
     }
 
     /// <summary>
@@ -294,166 +316,6 @@ public partial class MainWindow : Window
             _vm.MakeKaraoke(track, KaraokeStemMode.Instrumental);
     }
 
-    /// <summary>
-    /// "Set timing for selected lines": the ListBox owns the selection, so the
-    /// view maps the selected line view models back to their line indexes and
-    /// hands them to the view model. No lyrics, no synced times - the view model
-    /// reports why instead of guessing.
-    /// </summary>
-    private void OnSetLyricTimingForSelection(object sender, RoutedEventArgs e)
-    {
-        var indexes = new List<int>(LyricsList.SelectedItems.Count);
-        foreach (var item in LyricsList.SelectedItems)
-        {
-            var index = LyricsList.Items.IndexOf(item);
-            if (index >= 0) indexes.Add(index);
-        }
-
-        _vm.SetTimingForSelectedLines(indexes);
-    }
-
-    /// <summary>Smoothly scroll the lyrics list so the current line sits centered.</summary>
-    private void ScrollLyricIntoCenter(LyricLineViewModel line)
-    {
-        var container = LyricsList.ItemContainerGenerator.ContainerFromItem(line) as FrameworkElement;
-        var scrollViewer = FindScrollViewer(LyricsList);
-        if (container == null || scrollViewer == null)
-        {
-            LyricsList.ScrollIntoView(line); // fallback
-            ScheduleBallMeasure();
-            return;
-        }
-
-        var transform = container.TransformToAncestor(scrollViewer);
-        var topInViewport = transform.Transform(new Point(0, 0)).Y;
-        var target = scrollViewer.VerticalOffset + topInViewport
-                     - scrollViewer.ViewportHeight / 2 + container.ActualHeight / 2;
-        scrollViewer.ScrollToVerticalOffset(Math.Max(0, target));
-        ScheduleBallMeasure();
-    }
-
-    // ---- bouncing ball geometry -------------------------------------------
-    //
-    // Measuring text is genuinely a view concern: only the visual tree knows
-    // where a word's glyphs landed after wrapping and scaling, and the
-    // ScrollViewer owns the vertical offset. The view model keeps the policy
-    // (which word, what motion); this half only reports boxes.
-
-    private bool _ballMeasureQueued;
-
-    /// <summary>
-    /// Queue one measurement pass. Loaded priority runs after the layout/render
-    /// pass that a scroll, resize or bold-word change just scheduled, so the
-    /// transforms read are the final ones. Coalesces bursts (30 Hz ticks,
-    /// scroll storms) into a single pass.
-    /// </summary>
-    private void ScheduleBallMeasure()
-    {
-        if (_ballMeasureQueued) return;
-        _ballMeasureQueued = true;
-        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(MeasureBallGeometry));
-    }
-
-    /// <summary>
-    /// Report the current line's word boxes to the view model, in the ball
-    /// canvas's coordinate space. Anything missing (container not realised,
-    /// mid-rebuild, words still collapsed) hides the ball instead of guessing.
-    /// </summary>
-    private void MeasureBallGeometry()
-    {
-        _ballMeasureQueued = false;
-
-        var line = _vm.CurrentLyricLine;
-        if (!_vm.IsWordFollow || line is null || !line.HasWords)
-        {
-            _vm.ClearLyricWordGeometry();
-            return;
-        }
-
-        if (LyricsList.ItemContainerGenerator.ContainerFromItem(line) is not FrameworkElement lineContainer)
-        {
-            _vm.ClearLyricWordGeometry(); // line not realised (list rebuilt)
-            return;
-        }
-
-        var wordsControl = FindDescendant<ItemsControl>(lineContainer);
-        if (wordsControl is null || wordsControl.Items.Count != line.Words.Count)
-        {
-            _vm.ClearLyricWordGeometry();
-            return;
-        }
-
-        var centres = new double[line.Words.Count];
-        double top = double.NaN;
-        for (int i = 0; i < centres.Length; i++)
-        {
-            if (wordsControl.ItemContainerGenerator.ContainerFromIndex(i) is not FrameworkElement wordBox
-                || !TryGetRectInBallCanvas(wordBox, out var rect))
-            {
-                _vm.ClearLyricWordGeometry();
-                return;
-            }
-
-            centres[i] = rect.Left + rect.Width / 2;
-            if (i == 0) top = rect.Top;
-        }
-
-        if (double.IsNaN(top))
-        {
-            _vm.ClearLyricWordGeometry();
-            return;
-        }
-
-        _vm.SetLyricWordGeometry(line, top, centres);
-    }
-
-    /// <summary>
-    /// A word's box in the ball canvas's coordinates. The canvas overlays the
-    /// list rather than containing it, so both are mapped into their common
-    /// parent and the canvas origin is subtracted.
-    /// </summary>
-    private bool TryGetRectInBallCanvas(FrameworkElement element, out Rect rect)
-    {
-        rect = Rect.Empty;
-        if (element.ActualWidth <= 0 || element.ActualHeight <= 0) return false;
-        if (LyricsBallCanvas.Parent is not Visual root) return false;
-
-        try
-        {
-            var origin = element.TransformToAncestor(root).Transform(new Point(0, 0));
-            var canvasOrigin = LyricsBallCanvas.TransformToAncestor(root).Transform(new Point(0, 0));
-            rect = new Rect(origin.X - canvasOrigin.X, origin.Y - canvasOrigin.Y,
-                            element.ActualWidth, element.ActualHeight);
-            return true;
-        }
-        catch (InvalidOperationException)
-        {
-            // Detached / reparented while the pass was queued.
-            return false;
-        }
-    }
-
-    private static T? FindDescendant<T>(DependencyObject root) where T : DependencyObject
-    {
-        if (root is T match) return match;
-        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
-        {
-            var found = FindDescendant<T>(VisualTreeHelper.GetChild(root, i));
-            if (found != null) return found;
-        }
-        return null;
-    }
-
-    private static ScrollViewer? FindScrollViewer(DependencyObject root)
-    {
-        if (root is ScrollViewer sv) return sv;
-        for (int i = 0; i < VisualTreeHelper.GetChildrenCount(root); i++)
-        {
-            var result = FindScrollViewer(VisualTreeHelper.GetChild(root, i));
-            if (result != null) return result;
-        }
-        return null;
-    }
 
     // ---- per-deck waveform rendering ---------------------------------------
 

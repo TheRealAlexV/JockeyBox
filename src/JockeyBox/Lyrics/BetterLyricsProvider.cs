@@ -40,11 +40,19 @@ public class BetterLyricsProvider : ILyricsProvider
 
     public async Task<LyricsDocument?> GetLyricsAsync(TrackEntry track, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(track.Title)) return null;
+        if (string.IsNullOrWhiteSpace(track.Title))
+        {
+            LyricsTrace.Note(Id, "no title");
+            return null;
+        }
 
         lock (Gate)
         {
-            if (DateTime.UtcNow < _unavailableUntil) return null;
+            if (DateTime.UtcNow < _unavailableUntil)
+            {
+                LyricsTrace.Note(Id, "in back-off (no API key)");
+                return null;
+            }
         }
 
         var logKey = ProviderLog.Key(Id, track.Artist, track.Title);
@@ -59,7 +67,11 @@ public class BetterLyricsProvider : ILyricsProvider
                     ? $"&d={(int)Math.Round(track.Duration.TotalSeconds)}"
                     : "");
 
-            if (!await Budget.WaitAsync(ct)) return null;
+            if (!await Budget.WaitAsync(ct))
+            {
+                LyricsTrace.Note(Id, "local rate budget exhausted");
+                return null;
+            }
 
             using var response = await _http.GetAsync(url, HttpCompletionOption.ResponseContentRead, ct);
 
@@ -82,27 +94,38 @@ public class BetterLyricsProvider : ILyricsProvider
                     Id + "|" + response.StatusCode,
                     $"betterlyrics: unavailable (HTTP {(int)response.StatusCode}) - pausing lookups for "
                     + $"{backoff.TotalMinutes:0.#} min; cached titles still resolve");
+                LyricsTrace.Note(Id, $"HTTP {(int)response.StatusCode} (no API key)");
                 return null;
             }
 
-            if (response.StatusCode is HttpStatusCode.NotFound) return null;
+            if (response.StatusCode is HttpStatusCode.NotFound)
+            {
+                LyricsTrace.Note(Id, "404");
+                return null;
+            }
 
             if (!response.IsSuccessStatusCode)
             {
                 ProviderLog.WarnOnce(logKey,
                     $"betterlyrics: HTTP {(int)response.StatusCode} for '{track.Artist} - {track.Title}'");
+                LyricsTrace.Note(Id, $"HTTP {(int)response.StatusCode}");
                 return null;
             }
 
             var json = await response.Content.ReadAsStringAsync(ct);
             var ttml = ExtractTtml(json);
-            if (ttml is null) return null;
+            if (ttml is null)
+            {
+                LyricsTrace.Note(Id, "no TTML in response");
+                return null;
+            }
 
             var doc = TtmlParser.Parse(ttml, Name, Id);
             if (doc is null)
             {
                 ProviderLog.WarnOnce(logKey,
                     $"betterlyrics: could not parse TTML for '{track.Artist} - {track.Title}'");
+                LyricsTrace.Note(Id, "unparseable TTML");
                 return null;
             }
 
@@ -117,6 +140,7 @@ public class BetterLyricsProvider : ILyricsProvider
         {
             ProviderLog.WarnOnce(logKey,
                 $"betterlyrics: lookup failed for '{track.Artist} - {track.Title}': {ex.Message}");
+            LyricsTrace.Note(Id, "error: " + ex.Message);
             return null;
         }
     }

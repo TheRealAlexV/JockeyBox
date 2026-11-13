@@ -334,6 +334,29 @@ public class AppSettings
         (LyricsOffsetByTrack ??= new())[trackKey] = ms;
     }
 
+    /// <summary>
+    /// Keep the pop-out lyrics window above other windows. Off by default: an
+    /// always-on-top surface that the operator did not ask for is a nuisance.
+    /// </summary>
+    public bool LyricsWindowTopmost { get; set; }
+
+    // ---- pop-out lyrics window geometry ----------------------------------
+    // Null/NaN means "never placed": the window falls back to CenterOwner at its
+    // design size instead of restoring a stale position, e.g. on a monitor that
+    // is no longer attached.
+
+    /// <summary>Saved window left edge in screen pixels, or null.</summary>
+    public double? LyricsWindowLeft { get; set; }
+
+    /// <summary>Saved window top edge in screen pixels, or null.</summary>
+    public double? LyricsWindowTop { get; set; }
+
+    /// <summary>Saved window width in pixels, or null.</summary>
+    public double? LyricsWindowWidth { get; set; }
+
+    /// <summary>Saved window height in pixels, or null.</summary>
+    public double? LyricsWindowHeight { get; set; }
+
     /// <summary>Preferred provider id for a track, or null when none is stored.</summary>
     public string? GetLyricsSource(string? trackKey)
     {

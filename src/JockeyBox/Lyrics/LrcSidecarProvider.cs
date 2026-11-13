@@ -15,9 +15,11 @@ public class LrcSidecarProvider : ILyricsProvider
 
     public Task<LyricsDocument?> GetLyricsAsync(TrackEntry track, CancellationToken ct)
     {
+        bool hadCandidate = false;
         foreach (var audioPath in new[] { track.MusicPath, track.KaraokePath })
         {
             if (audioPath == null) continue;
+            hadCandidate = true;
             var lrcPath = Path.ChangeExtension(audioPath, ".lrc");
             if (!File.Exists(lrcPath)) continue;
 
@@ -34,6 +36,8 @@ public class LrcSidecarProvider : ILyricsProvider
                 // unreadable sidecar - fall through to other providers
             }
         }
+
+        LyricsTrace.Note(Id, hadCandidate ? "no .lrc beside the audio file" : "no audio path");
         return Task.FromResult<LyricsDocument?>(null);
     }
 }

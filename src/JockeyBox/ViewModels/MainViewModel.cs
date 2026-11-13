@@ -92,6 +92,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private bool _syncingLyricsSource;
     private int _lyricsCandidatesGeneration;
 
+    /// <summary>
+    /// Query the current candidate list was built with (null = file tags). Applied
+    /// to the track when a candidate is picked, so a cover keeps searching the
+    /// original's tags after a restart.
+    /// </summary>
+    private LyricsService.LyricsQuery? _activeLyricsQuery;
+
     // ---- per-track lyric metadata ----------------------------------------
     // One store for the process, opened next to the settings and before the
     // first track can load. It owns the per-track offset, the pinned source
@@ -439,6 +446,18 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     [ObservableProperty] private bool _isLyricsSourcePickerOpen;
     [ObservableProperty] private string _lyricsSourceHint = "";
+
+    /// <summary>Editable search title in the source picker (prefilled from the file tags).</summary>
+    [ObservableProperty] private string _lyricsQueryTitle = "";
+
+    /// <summary>Editable search artist in the source picker (prefilled from the file tags).</summary>
+    [ObservableProperty] private string _lyricsQueryArtist = "";
+
+    /// <summary>
+    /// True when the loaded track has a pinned query (title/artist differ from the
+    /// file tags), so the panel can offer "use file tags" instead of hiding it.
+    /// </summary>
+    [ObservableProperty] private bool _hasLyricsQueryOverride;
 
     // ---- lyrics follow mode + bouncing ball ------------------------------
 
@@ -3490,6 +3509,24 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     // ---- lyrics ------------------------------------------------------------
 
+    /// <summary>
+    /// The pinned search query for a track, or null when the file tags are the
+    /// query. Kept in one place so the fetch path and the picker prefill can never
+    /// disagree about what "the override" is.
+    /// </summary>
+    private LyricsService.LyricsQuery? LyricsQueryFor(TrackEntry? track)
+    {
+        var key = track?.RelativeKey;
+        if (key == null) return null;
+
+        var record = _trackMeta.Get(key);
+        if (record == null) return null;
+        if (string.IsNullOrWhiteSpace(record.LyricsTitle) && string.IsNullOrWhiteSpace(record.LyricsArtist))
+            return null;
+
+        return new LyricsService.LyricsQuery(record.LyricsTitle, record.LyricsArtist);
+    }
+
     private async Task FetchLyricsAsync(TrackEntry track, string? preferredSourceId = null)
     {
         _lyricsCts?.Cancel();
@@ -3504,10 +3541,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         try
         {
-            var doc = await _lyricsService.GetLyricsAsync(track, ct, preferredSourceId);
+            var lookup = await _lyricsService.GetLyricsAsync(track, ct, preferredSourceId, LyricsQueryFor(track));
             if (ct.IsCancellationRequested) return;
 
-            ApplyLyricsDocument(doc);
+            ApplyLyricsDocument(lookup.Document, lookup.MissStatus);
         }
         catch (OperationCanceledException) { }
         catch (Exception ex)
@@ -3520,7 +3557,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     /// Rebuild the rendered lines from a document. Unsynced documents still
     /// render, just without a highlight (the tick skips them).
     /// </summary>
-    private void ApplyLyricsDocument(LyricsDocument? doc)
+    private void ApplyLyricsDocument(LyricsDocument? doc, string? missStatus = null)
     {
         LyricLines.Clear();
         _currentLyricIndex = -1;
@@ -3534,7 +3571,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         if (doc == null)
         {
-            LyricsStatus = "No lyrics found for this track.";
+            // Name the query that was actually searched: the usual reason for a
+            // miss is that the file tags belong to a cover, so the text has to say
+            // which title/artist went out.
+            LyricsStatus = missStatus ?? "No lyrics found for this track.";
             return;
         }
 
@@ -3945,6 +3985,61 @@ public partial class MainViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
+    /// Seed the picker's editable query from the track's pinned override when it
+    /// has one, otherwise from the file tags. Called every time the popup opens so
+    /// it never shows a stale search.
+    /// </summary>
+    private void PrefillLyricsQuery(TrackEntry track)
+    {
+        _activeLyricsQuery = LyricsQueryFor(track);
+        LyricsQueryTitle = _activeLyricsQuery?.Title ?? track.Title;
+        LyricsQueryArtist = _activeLyricsQuery?.Artist ?? track.Artist;
+        HasLyricsQueryOverride = _activeLyricsQuery != null;
+    }
+
+    /// <summary>
+    /// Search with the title/artist currently in the picker, not the file tags.
+    /// Providers are keyed on artist+title, which is exactly why a cover misses;
+    /// this is the manual correction path for that.
+    /// </summary>
+    [RelayCommand]
+    private async Task SearchLyricsQueryAsync()
+    {
+        if (LoadedTrack is not { } loaded) return;
+
+        var title = LyricsQueryTitle.Trim();
+        var artist = LyricsQueryArtist.Trim();
+
+        // Same identity as the track, only the query changes: providers take a
+        // TrackEntry, so a synthetic one avoids an interface change.
+        var query = new TrackEntry
+        {
+            RelativeKey = loaded.RelativeKey,
+            RelativePath = loaded.RelativePath,
+            Title = title,
+            Artist = artist,
+            Duration = TimeSpan.Zero,
+        };
+
+        _activeLyricsQuery = new LyricsService.LyricsQuery(title, artist);
+        await RunCandidateSearchAsync(query, _activeLyricsQuery);
+    }
+
+    /// <summary>Drop the pinned query and re-fetch with the file tags.</summary>
+    [RelayCommand]
+    private async Task ClearLyricsQueryAsync()
+    {
+        if (LoadedTrack is not { } track) return;
+
+        _trackMeta.SetLyricsQuery(track.RelativeKey, null, null);
+        _activeLyricsQuery = null;
+        HasLyricsQueryOverride = false;
+        LyricsQueryTitle = track.Title;
+        LyricsQueryArtist = track.Artist;
+        await FetchLyricsAsync(track);
+    }
+
+    /// <summary>
     /// Fetch every provider for the loaded track and offer them in the header
     /// popup (source, line count, synced/unsynced). Picking one pins it for
     /// this track only.
@@ -3961,6 +4056,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
+        PrefillLyricsQuery(track);
+        IsLyricsSourcePickerOpen = true;
+        await RunCandidateSearchAsync(track, _activeLyricsQuery);
+    }
+
+    /// <summary>
+    /// Fill <see cref="LyricsCandidates"/> from one query. Shared by the tag-based
+    /// and the pinned-query search so both report identically.
+    /// </summary>
+    private async Task RunCandidateSearchAsync(TrackEntry track, LyricsService.LyricsQuery? query)
+    {
         var generation = ++_lyricsCandidatesGeneration;
         _lyricsCandidatesCts?.Cancel();
         _lyricsCandidatesCts = new CancellationTokenSource();
@@ -3968,13 +4074,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         LyricsCandidates.Clear();
         LyricsSourceHint = "Searching sources\u2026";
-        IsLyricsSourcePickerOpen = true;
 
         try
         {
-            var docs = await _lyricsService.GetCandidatesAsync(track, ct);
+            var docs = await _lyricsService.GetCandidatesAsync(track, ct, query);
             if (ct.IsCancellationRequested || generation != _lyricsCandidatesGeneration) return;
-            if (!ReferenceEquals(LoadedTrack, track)) return;
 
             foreach (var doc in docs)
             {
@@ -3987,7 +4091,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
             LyricsSourceHint = LyricsCandidates.Count switch
             {
-                0 => "No source returned lyrics for this track.",
+                0 => $"No source returned lyrics for \"{LyricsQueryTitle}\" by {LyricsQueryArtist}.",
                 1 => "One source had lyrics - pick it to pin it.",
                 _ => $"{LyricsCandidates.Count} sources found - pick one for this track.",
             };
@@ -4011,6 +4115,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _trackMeta.SetLyricsSource(track.RelativeKey, candidate.SourceId);
             SetLyricsSourceSelection(LyricsSourceNameForId(candidate.SourceId));
         }
+
+        // The query is part of the binding: pinning the provider alone would
+        // re-run the same wrong artist+title on the next load.
+        _trackMeta.SetLyricsQuery(track.RelativeKey, _activeLyricsQuery?.Title, _activeLyricsQuery?.Artist);
+        HasLyricsQueryOverride = _activeLyricsQuery != null;
 
         ApplyLyricsDocument(candidate.Document);
 

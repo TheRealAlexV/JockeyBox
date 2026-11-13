@@ -26,14 +26,51 @@ namespace JockeyBox.Lyrics;
 /// </summary>
 public class LyricsService
 {
+    /// <summary>
+    /// A user-pinned query for one track (null keeps the file tag). Providers are
+    /// keyed on artist+title, so a cover credited to another artist can only be
+    /// resolved by searching the tags of the song the operator actually means.
+    /// </summary>
+    public sealed record LyricsQuery(string? Title, string? Artist);
+
+    /// <summary>
+    /// Result of one lookup. <see cref="Status"/> is null on a hit (the caller keeps
+    /// its existing success wording) and describes what was searched on a miss.
+    /// </summary>
+    public sealed record LyricsLookup(LyricsDocument? Document, string? MissStatus);
+
     /// <summary>Provider id of the local .lrc sidecar (never cached - users edit it live).</summary>
     public const string SidecarSourceId = "lrc";
+
+    private static List<ILyricsProvider> BuildDefaultProviders(HttpClient http, AppSettings settings) => new()
+    {
+        new LrcSidecarProvider(),
+        new LrcmuxProvider(http),
+        new BetterLyricsProvider(http),
+        new UnisonProvider(http),
+        new SpotifyColorLyricsProvider(http, settings),
+        new SpotifyLyricsApiProvider(http, settings),
+        new LrclibProvider(http),
+    };
 
     private readonly List<ILyricsProvider> _providers;
     private readonly AppSettings _settings;
     private readonly string _cacheDir;
 
     public LyricsService(AppSettings settings)
+        : this(settings, cacheDir: null, providers: null)
+    {
+    }
+
+    /// <summary>
+    /// Test/embedding seam: an explicit provider list and cache directory. Passing
+    /// null for either keeps the production default (the seven-provider chain in
+    /// <see cref="BuildDefaultProviders"/>, cache under %APPDATA%).
+    /// </summary>
+    internal LyricsService(
+        AppSettings settings,
+        string? cacheDir = null,
+        IReadOnlyList<ILyricsProvider>? providers = null)
     {
         _settings = settings;
         var http = new HttpClient
@@ -44,21 +81,12 @@ public class LyricsService
         };
         http.DefaultRequestHeaders.UserAgent.ParseAdd("JockeyBox/1.0 (karaoke player)");
 
-        _providers = new List<ILyricsProvider>
-        {
-            new LrcSidecarProvider(),
-            new LrcmuxProvider(http),
-            new BetterLyricsProvider(http),
-            new UnisonProvider(http),
-            new SpotifyColorLyricsProvider(http, settings),
-            new SpotifyLyricsApiProvider(http, settings),
-            new LrclibProvider(http),
-        };
+        _providers = providers?.ToList() ?? BuildDefaultProviders(http, settings);
 
         SourceNames = _providers.Select(p => p.Name).ToArray();
         SourceIds = _providers.Select(p => p.Id).ToArray();
 
-        _cacheDir = Path.Combine(AppPaths.Home, "lyrics");
+        _cacheDir = cacheDir ?? Path.Combine(AppPaths.Home, "lyrics");
         Directory.CreateDirectory(_cacheDir);
     }
 
@@ -69,7 +97,8 @@ public class LyricsService
     public IReadOnlyList<string> SourceIds { get; }
 
     /// <summary>
-    /// Resolve lyrics for a track; null if no provider had anything.
+    /// Resolve lyrics for a track; <c>Document</c> is null if no provider had
+    /// anything, and <c>MissStatus</c> then names the query and the providers tried.
     /// </summary>
     /// <param name="preferredSourceId">
     /// Optional provider id (see <see cref="SourceIds"/>) to try on its own first.
@@ -79,25 +108,139 @@ public class LyricsService
     /// chain runs and the fallback is visible as
     /// <c>document.SourceId != preferredSourceId</c>.
     /// </param>
-    public async Task<LyricsDocument?> GetLyricsAsync(
+    /// <param name="query">
+    /// User-pinned title/artist (see <see cref="LyricsQuery"/>). When set, every
+    /// provider is asked with those strings instead of the file tags and the cache
+    /// is keyed on them too: the whole point is that the file-tag cache entry is
+    /// the wrong answer, so it must not win.
+    /// </param>
+    public async Task<LyricsLookup> GetLyricsAsync(
         TrackEntry track,
         CancellationToken ct,
-        string? preferredSourceId = null)
+        string? preferredSourceId = null,
+        LyricsQuery? query = null)
     {
+        using var trace = LyricsTrace.Begin();
+
+        var effective = ApplyQuery(track, query);
+
         // An explicit source choice must be honoured before anything cached.
         var preferred = FindProvider(preferredSourceId);
         if (preferred != null)
         {
-            var chosen = await SafeGetAsync(preferred, track, ct);
+            var chosen = await SafeGetAsync(preferred, effective, ct);
             if (chosen != null)
             {
-                if (preferred.Id != SidecarSourceId) WriteCache(track, chosen);
-                return chosen;
+                if (preferred.Id != SidecarSourceId) WriteCache(effective, chosen);
+                return new LyricsLookup(chosen, null);
             }
             // Preferred source had nothing: fall through to the normal chain.
         }
 
-        return await ResolveDefaultChainAsync(track, ct);
+        var doc = await ResolveDefaultChainAsync(effective, ct);
+        if (doc != null) return new LyricsLookup(doc, null);
+
+        var miss = DescribeMiss(track, query, trace.Notes);
+        ProviderLog.WarnOnce(
+            "miss|" + MissKey(track, query),
+            $"lyrics miss: title=\"{effective.Title}\" artist=\"{effective.Artist}\" "
+            + $"album=\"{track.Album}\" duration={(int)track.Duration.TotalSeconds}s "
+            + $"source={preferredSourceId ?? "auto"} -> {DescribeNotes(trace.Notes)}");
+        return new LyricsLookup(null, miss);
+    }
+
+    /// <summary>
+    /// The track with any pinned query applied. Duration is dropped: the file's
+    /// length belongs to the cover, not to the song being searched, and every
+    /// provider that filters on duration would reject the right answer for it.
+    /// The audio paths go too, so the local .lrc sidecar cannot shadow the search.
+    /// </summary>
+    private static TrackEntry ApplyQuery(TrackEntry track, LyricsQuery? query)
+    {
+        if (query == null) return track;
+
+        var title = string.IsNullOrWhiteSpace(query.Title) ? track.Title : query.Title!.Trim();
+        var artist = string.IsNullOrWhiteSpace(query.Artist) ? track.Artist : query.Artist!.Trim();
+        if (title == track.Title && artist == track.Artist) return track;
+
+        return new TrackEntry
+        {
+            RelativeKey = track.RelativeKey,
+            RelativePath = track.RelativePath,
+            Title = title,
+            Artist = artist,
+            Album = "",
+        };
+    }
+
+    /// <summary>Short name shown in the status line, e.g. "lrcmux", "Spotify", "LRCLIB".</summary>
+    internal static string DisplayName(string providerId) => providerId switch
+    {
+        "lrc" => "local .lrc",
+        "lrcmux" => "lrcmux",
+        "betterlyrics" => "Better Lyrics",
+        "unison" => "Unison",
+        "spotify-color" => "Spotify",
+        "spotify-api" => "Spotify API",
+        "lrclib" => "LRCLIB",
+        _ => providerId,
+    };
+
+    private static string DescribeNotes(IReadOnlyList<(string Provider, string Outcome)> notes)
+    {
+        if (notes.Count == 0) return "no provider answered";
+        return string.Join(", ", notes.Select(n => $"{DisplayName(n.Provider)}: {n.Outcome}"));
+    }
+
+    /// <summary>"Providers that were actually asked", for the status line.</summary>
+    private static string DescribeTried(IReadOnlyList<(string Provider, string Outcome)> notes)
+    {
+        var names = notes.Count > 0
+            ? notes.Select(n => DisplayName(n.Provider)).ToArray()
+            : new[] { "lrcmux", "Better Lyrics", "Unison", "Spotify", "LRCLIB" };
+        return string.Join(", ", names);
+    }
+
+    private static string DescribeMiss(
+        TrackEntry track, LyricsQuery? query, IReadOnlyList<(string Provider, string Outcome)> notes)
+    {
+        var title = string.IsNullOrWhiteSpace(query?.Title) ? track.Title : query!.Title!.Trim();
+        var artist = string.IsNullOrWhiteSpace(query?.Artist) ? track.Artist : query!.Artist!.Trim();
+
+        var who = string.IsNullOrWhiteSpace(artist) ? $"\"{title}\"" : $"\"{title}\" by {artist}";
+        return $"No lyrics for {who} (also tried: {DescribeTried(notes)})";
+    }
+
+    private static string MissKey(TrackEntry track, LyricsQuery? query) =>
+        $"{query?.Artist ?? track.Artist}|{query?.Title ?? track.Title}|{track.RelativeKey}";
+
+    /// <summary>
+    /// Ask every provider once and report what each said, without the cache and
+    /// without the priority chain stopping at the first hit. This is the live
+    /// network evidence for "which source has Sweater Weather": the candidate
+    /// list hides the misses, and the miss log only exists when everything fails.
+    /// </summary>
+    internal async Task<IReadOnlyList<(string Provider, string Outcome)>> ProbeAsync(
+        TrackEntry track, CancellationToken ct)
+    {
+        var results = new List<(string Provider, string Outcome)>();
+        foreach (var provider in _providers)
+        {
+            ct.ThrowIfCancellationRequested();
+            using var trace = LyricsTrace.Begin();
+            var doc = await SafeGetAsync(provider, track, ct);
+
+            string outcome;
+            if (doc != null)
+                outcome = $"found ({doc.Lines.Count} lines, {(doc.Synced ? "synced" : "unsynced")})";
+            else if (trace.Notes.Count > 0)
+                outcome = trace.Notes[0].Outcome;
+            else
+                outcome = "returned nothing";
+
+            results.Add((provider.Name, outcome));
+        }
+        return results;
     }
 
     /// <summary>
@@ -106,18 +249,22 @@ public class LyricsService
     /// results are live network calls, so call it on demand rather than on every
     /// track change.
     /// </summary>
-    public async Task<IReadOnlyList<LyricsDocument>> GetCandidatesAsync(TrackEntry track, CancellationToken ct)
+    public async Task<IReadOnlyList<LyricsDocument>> GetCandidatesAsync(
+        TrackEntry track,
+        CancellationToken ct,
+        LyricsQuery? query = null)
     {
+        var effective = ApplyQuery(track, query);
         var results = new List<LyricsDocument>();
         foreach (var provider in _providers)
         {
             ct.ThrowIfCancellationRequested();
-            var doc = await SafeGetAsync(provider, track, ct);
+            var doc = await SafeGetAsync(provider, effective, ct);
             if (doc == null) continue;
 
             results.Add(doc);
             // Sidecar files are live/editable, so they are never cached.
-            if (provider.Id != SidecarSourceId) WriteCache(track, doc);
+            if (provider.Id != SidecarSourceId) WriteCache(effective, doc);
         }
         return results;
     }

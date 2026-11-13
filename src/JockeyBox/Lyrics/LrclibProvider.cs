@@ -21,7 +21,11 @@ public class LrclibProvider : ILyricsProvider
 
     public async Task<LyricsDocument?> GetLyricsAsync(TrackEntry track, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(track.Title)) return null;
+        if (string.IsNullOrWhiteSpace(track.Title))
+        {
+            LyricsTrace.Note(Id, "no title");
+            return null;
+        }
 
         try
         {
@@ -34,16 +38,20 @@ public class LrclibProvider : ILyricsProvider
 
             var doc = await FetchAsync(exactUrl, singleObject: true, ct);
             if (doc != null) return doc;
+            LyricsTrace.Note(Id, "404 exact signature");
 
             // Fuzzy search as a second chance.
             var searchUrl = "https://lrclib.net/api/search"
                 + $"?track_name={Uri.EscapeDataString(track.Title)}"
                 + (string.IsNullOrWhiteSpace(track.Artist) ? "" : $"&artist_name={Uri.EscapeDataString(track.Artist)}");
-            return await FetchAsync(searchUrl, singleObject: false, ct);
+            var found = await FetchAsync(searchUrl, singleObject: false, ct);
+            if (found == null) LyricsTrace.Note(Id, "empty search result");
+            return found;
         }
         catch (OperationCanceledException) { throw; }
-        catch
+        catch (Exception ex)
         {
+            LyricsTrace.Note(Id, "error: " + ex.Message);
             return null;
         }
     }

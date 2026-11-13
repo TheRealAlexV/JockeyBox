@@ -46,18 +46,31 @@ public class SpotifyLyricsApiProvider : ILyricsProvider
 
     public async Task<LyricsDocument?> GetLyricsAsync(TrackEntry track, CancellationToken ct)
     {
-        if (!IsConfigured || string.IsNullOrWhiteSpace(track.Title)) return null;
+        if (!IsConfigured || string.IsNullOrWhiteSpace(track.Title))
+        {
+            LyricsTrace.Note(Id, IsConfigured ? "no title" : "endpoint/credentials not configured");
+            return null;
+        }
 
         try
         {
             var trackId = await SearchTrackIdAsync(track, ct);
-            if (trackId == null) return null;
-            return await FetchLyricsAsync(trackId, ct);
+            if (trackId == null)
+            {
+                LyricsTrace.Note(Id, "no search match");
+                return null;
+            }
+
+            var doc = await FetchLyricsAsync(trackId, ct);
+            if (doc == null) LyricsTrace.Note(Id, "404/empty for the matched id");
+            return doc;
         }
         catch (OperationCanceledException) { throw; }
-        catch
+        catch (Exception ex)
         {
-            return null; // network/instance issues - fall through to next provider
+            // network/instance issues - fall through to next provider
+            LyricsTrace.Note(Id, "error: " + ex.Message);
+            return null;
         }
     }
 

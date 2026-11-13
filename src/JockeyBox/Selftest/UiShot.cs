@@ -73,6 +73,10 @@ internal static class UiShot
             "settings" => new SettingsWindow(Settings.AppSettings.Load()),
             "youtubesearch" => new YouTubeSearchWindow(StubYouTubeSearch(Harness.Flag(args, "--uishot-audition"))),
             "youtubetab" => new MainWindow(),
+            // The pop-out lyrics window with its own view model: the main window
+            // opens it lazily, and a capture must not depend on clicking through
+            // the main surface first.
+            "lyricswindow" => new LyricsWindow(new MainViewModel(), Settings.AppSettings.Load()),
             "spotifytab" => new MainWindow(),
             _ => new MainWindow(),
         };
@@ -299,6 +303,66 @@ internal static class UiShot
 
         settleWatch.Stop();
         long settleMs = settleWatch.ElapsedMilliseconds;
+
+        // --uishot-track <title>: load a real library track so the lyrics panel
+        // has a document in it. Without this every lyrics capture shows the empty
+        // state ("Load a track to fetch lyrics") and proves nothing about how the
+        // lines actually render.
+        if (Harness.Flag(args, "--uishot-track") is { } wantedTrack
+            && window.DataContext is MainViewModel trackVm)
+        {
+            var hit = trackVm.Tracks.FirstOrDefault(t =>
+                t.Title.Contains(wantedTrack.Trim(), StringComparison.OrdinalIgnoreCase));
+            if (hit is null)
+            {
+                Console.Error.WriteLine($"uishot: no library track titled '{wantedTrack}'");
+                Console.Error.Flush();
+                window.Close();
+                return 2;
+            }
+
+            trackVm.SelectedTrack = hit;
+            trackVm.LoadSelectedTrackCommand.Execute(null);
+            bool gotLines = UiPump.PumpUntil(() => trackVm.LyricLines.Count > 0, 30000);
+            Console.Out.WriteLine(
+                $"uishot: track \"{hit.Artist} - {hit.Title}\" lines={trackVm.LyricLines.Count} "
+                + $"ok={gotLines} status={trackVm.LyricsStatus}");
+            Console.Out.Flush();
+        }
+
+        // --uishot-popout-check: drive the real pop-out button and prove the three
+        // window rules - one instance however often it is asked for, and no
+        // survivor once the main window closes. A capture cannot show this: the
+        // pop-out is a second HWND and only one window is ever in the bitmap.
+        if (Harness.Flag(args, "--uishot-popout-check") != null && window is MainWindow popoutMain)
+        {
+            if (popoutMain.LyricsHost.FindName("LyricsPopOutButton") is not Button popoutButton)
+            {
+                Console.Error.WriteLine("uishot: pop-out button not found in the lyrics panel");
+                Console.Error.Flush();
+                window.Close();
+                return 2;
+            }
+
+            popoutButton.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            UiPump.Pump(200);
+            int first = Application.Current.Windows.OfType<LyricsWindow>().Count();
+
+            // Second ask must focus the existing window, not open another.
+            popoutButton.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            UiPump.Pump(200);
+            int second = Application.Current.Windows.OfType<LyricsWindow>().Count();
+
+            window.Close();
+            UiPump.Pump(300);
+            int afterMainClosed = Application.Current.Windows.OfType<LyricsWindow>().Count();
+
+            Console.Out.WriteLine(
+                $"uishot: popout first={first} second={second} after-main-close={afterMainClosed}");
+            Console.Out.Flush();
+
+            return first == 1 && second == 1 && afterMainClosed == 0 ? 0 : 5;
+        }
 
         window.UpdateLayout();
         UiPump.Pump(200);
