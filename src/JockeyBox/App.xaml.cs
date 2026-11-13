@@ -46,7 +46,7 @@ public partial class App : Application
             SelftestRequested(e.Args) || LibraryDump.Requested(e.Args) ||
             UiShot.Requested(e.Args) || PerfProbe.Requested(e.Args) ||
             PreviewCheck.Requested(e.Args) || LingerCheck.Requested(e.Args) ||
-            LyricsProbe.Requested(e.Args);
+            LyricsProbe.Requested(e.Args) || AudioTrace.Requested(e.Args);
 
         if (!Tools.SingleInstance.TryAcquire(Tools.AppPaths.Home, out string owner, out int ownerPid))
         {
@@ -119,6 +119,14 @@ public partial class App : Application
         if (LingerCheck.Requested(e.Args))
         {
             LingerCheck.Arm(e.Args);
+            return;
+        }
+
+        if (AudioTrace.Requested(e.Args))
+        {
+            int traceExit = AudioTrace.Run(e.Args);
+            Console.Out.Flush();
+            Shutdown(traceExit);
             return;
         }
 

@@ -105,7 +105,9 @@ public class AppSettings
     public bool AudioRoutingConfigured { get; set; }
 
     /// <summary>
-    /// Main output: deck audio only (no microphones, no soundboard); null = None.
+    /// Deck A Output's device: deck A only (no microphones, no deck B); null = None.
+    /// The JSON key keeps its 2.1 name so an upgraded install does not lose its
+    /// routing; in the UI and the engine this is "Deck A Output".
     /// </summary>
     public string? MainOutputDeviceId { get; set; }
 
@@ -113,25 +115,34 @@ public class AppSettings
     public string? ProgramOutputDeviceId { get; set; }
 
     /// <summary>
-    /// Karaoke Aid: the original (vocal) stem while Karaoke mode is on, meant for
-    /// the operator's headphones. Never carries deck karaoke audio; null = None.
+    /// Deck B Output's device: deck B only; null = None. Keeps its 2.1 JSON key
+    /// (<c>KaraokeAidOutputDeviceId</c>) for the same migration reason as Deck A:
+    /// this bus used to be the karaoke cue and is now deck B's real output.
     /// </summary>
     public string? KaraokeAidOutputDeviceId { get; set; }
 
     /// <summary>Recording Device output: every unmuted microphone; null = None.</summary>
     public string? RecordingOutputDeviceId { get; set; }
 
-    /// <summary>Soundboard output; null = None (falls back to Main if SoundboardFollowsMain).</summary>
+    /// <summary>Soundboard output; null = None (falls back to Deck A if SoundboardFollowsMain).</summary>
     public string? SoundboardOutputDeviceId { get; set; }
 
-    /// <summary>When the soundboard has no device of its own, play it on Main.</summary>
+    /// <summary>When the soundboard has no device of its own, play it on Deck A.</summary>
     public bool SoundboardFollowsMain { get; set; } = true;
 
     /// <summary>
-    /// Master Mix Recording Device Bridge: Main + unmuted microphones + soundboard,
-    /// exposed to other applications as a microphone through a virtual cable; null = None.
+    /// MON: when on, the Monitor bus carries deck A × <see cref="MonitorAGain"/>
+    /// plus deck B × <see cref="MonitorBGain"/> as well as the monitored
+    /// microphones. Off by default: an install with no cue headphones must not
+    /// send deck audio to the monitor endpoint.
     /// </summary>
-    public string? BridgeOutputDeviceId { get; set; }
+    public bool MonitorEnabled { get; set; }
+
+    /// <summary>Deck A's send into the Monitor bus (0..1.2).</summary>
+    public float MonitorAGain { get; set; } = 0.7f;
+
+    /// <summary>Deck B's send into the Monitor bus (0..1.2).</summary>
+    public float MonitorBGain { get; set; } = 0.7f;
 
     /// <summary>
     /// Recording devices ("microphones"), each independently enabled with its own

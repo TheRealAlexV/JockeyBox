@@ -207,6 +207,12 @@ public static class SelftestRunner
         // Set the delay before any audio: the tap change is crossfaded over 50 ms,
         // so let that settle on silence rather than measuring through it.
         rig.Engine.OutputDelayMs = 250;
+
+        // MON on: the monitor bus carries deck audio only while MON is enabled
+        // (the deck sends are the operator's cue, gated by their own switch), and
+        // this case measures that the cue stays pre-delay.
+        rig.Engine.MonitorEnabled = true;
+        rig.Engine.MonitorAGain = 1f;
         rig.Run(0.2);
         int warmUp = SelftestSignals.CountNonZero(rig.Buffer, 0, rig.Buffer.Length);
         Require(warmUp == 0, $"delay warm-up is not silent ({warmUp} non-zero samples)");

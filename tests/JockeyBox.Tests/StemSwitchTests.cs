@@ -150,11 +150,12 @@ public sealed class StemSwitchTests
             deck.SetStemMode(StemKind.Karaoke, 0);
             Assert.Equal(0.25f, RenderPeak(deck), 3);
 
-            // And the pre-modes mix is unchanged: primary plus karaoke at its own gain,
-            // with the vocals take still silent — adding it here would change what
-            // every existing deck plays today.
+            // Mix sums primary plus karaoke at its own gain (vocals stay silent),
+            // then normalises by the gains present so two takes sum to unity
+            // instead of 1.5: (0.5 + 0.25) / (1 + 1) = 0.375. The 1:1 balance
+            // between the takes is unchanged; only the absolute level is.
             deck.SetStemMode(StemKind.Mix, 0);
-            Assert.Equal(0.75f, RenderPeak(deck), 2);
+            Assert.Equal(0.375f, RenderPeak(deck), 3);
         }
         finally
         {

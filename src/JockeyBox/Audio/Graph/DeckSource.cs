@@ -10,6 +10,14 @@ public interface IDeckGainSource
 {
     /// <summary>Gain for the given engine frame. Called once per frame while the deck plays.</summary>
     float GainAt(long engineFrame);
+
+    /// <summary>
+    /// The same gain without the crossfader: deck volume × duck. The engine renders
+    /// each deck once through <c>BaseGainAt</c> and applies the crossfade itself when
+    /// it fans that block out, so the monitor tap can hear a deck that the
+    /// crossfader has faded out without reading (and therefore clocking) it twice.
+    /// </summary>
+    float BaseGainAt(long engineFrame) => GainAt(engineFrame);
 }
 
 /// <summary>
@@ -356,6 +364,15 @@ public sealed class DeckSource : ISampleProvider, IDisposable
     /// <summary>Deck fader (0..1.2) — the mixer's own volume, separate from the crossfader.</summary>
     public void SetVolume(float volume) => _volume = Math.Clamp(volume, 0f, 1.2f);
 
+    /// <summary>
+    /// When true this deck's render excludes the crossfader (deck volume and duck
+    /// still apply). The engine sets it on both decks and applies the crossfade at
+    /// fan-out, so one read of the deck feeds both its program bus and a monitor
+    /// tap that ignores the crossfader position. Off by default: the gain source
+    /// does everything, which is the 2.1 behaviour.
+    /// </summary>
+    public bool PreFader { get; set; }
+
     /// <summary>Karaoke sub-stem gain (0 = backing only, 1 = original vocal).</summary>
     public void SetKaraokeGain(float gain) => _karaokeGain = Math.Clamp(gain, 0f, 1f);
 
@@ -409,7 +426,11 @@ public sealed class DeckSource : ISampleProvider, IDisposable
         StemKind.Original => (1, 0, 0),
         StemKind.Karaoke => (0, 1, 0),
         StemKind.Vocals => (0, 0, 1),
-        _ => (1, 1, 0), // Mix: what a deck did before modes existed.
+        // Mix: both takes, the 1:0.5 balance the operator has always heard. The
+        // sum is normalised in SumProvider (not here) because only the summer
+        // knows whether the karaoke take is actually present: scaling the primary
+        // weight would quieten every plain single-file track in the library.
+        _ => (1, 1, 0),
     };
 
     private void RampStemWeights(StemKind kind, long frames)
@@ -668,7 +689,9 @@ public sealed class DeckSource : ISampleProvider, IDisposable
             if (_vocalsSmooth < vocalsTarget) _vocalsSmooth = Math.Min(vocalsTarget, _vocalsSmooth + vocalsStep);
             else if (_vocalsSmooth > vocalsTarget) _vocalsSmooth = Math.Max(vocalsTarget, _vocalsSmooth - vocalsStep);
 
-            float gain = _gainSource?.GainAt(FrameCursor + f) ?? _volume;
+            float gain = _gainSource == null
+                ? _volume
+                : (PreFader ? _gainSource.BaseGainAt(FrameCursor + f) : _gainSource.GainAt(FrameCursor + f));
             int baseIdx = offset + f * _channels;
             for (int c = 0; c < _channels; c++) buffer[baseIdx + c] *= gain;
         }
@@ -801,6 +824,18 @@ public sealed class DeckSource : ISampleProvider, IDisposable
                 Samples.ReadFull(vocals, _deck._vocalsScratch, 0, count);
                 Samples.AddScaled(buffer, _deck._vocalsScratch, offset, count, vocalsGain);
             }
+
+            // Unity-gain sum. Mix mode adds the original (weight 1) and the karaoke
+            // take (weight 1 × the 0.5 karaoke gain), so two equally loud takes
+            // reached 1.5 and hit SoftLimit's 0.707 knee on every loud passage -
+            // clipping-loud and never the intent. Normalising by the sum of the
+            // gains that are actually present keeps the 1:0.5 balance exactly as
+            // the operator hears it, and leaves a single-take file (the whole
+            // library) at unity instead of 0.67.
+            float mixTotal = _deck._blockPrimary;
+            if (karaoke != null) mixTotal += karaokeGain;
+            if (vocals != null) mixTotal += vocalsGain;
+            if (mixTotal > 1f) ScaleInPlace(buffer, offset, count, 1f / mixTotal);
 
             return count;
         }

@@ -6,9 +6,9 @@ using Xunit;
 namespace JockeyBox.Tests;
 
 /// <summary>
-/// The 2.1 bus model, asserted end to end on the offline render loop: one block,
-/// six buses, no device. Each test reads the same <see cref="BusKind"/> taps the
-/// live engine feeds to <c>EndpointSink</c>.
+/// The 2.2 bus model, asserted end to end on the offline render loop: one block,
+/// five buses, no device. Each test reads the same <see cref="BusKind"/> taps the
+/// live engine feeds to <see cref="DeviceOutput"/>.
 /// </summary>
 public sealed class BusRoutingTests
 {
@@ -22,7 +22,7 @@ public sealed class BusRoutingTests
     }
 
     [Fact]
-    public void Main_carries_no_microphone_signal()
+    public void Deck_A_carries_no_microphone_signal()
     {
         using var engine = new AudioEngine();
         engine.Mics.SetStrips(new[] { Mic("dev1", 0.30f) });
@@ -31,9 +31,9 @@ public sealed class BusRoutingTests
         var tap = new TestAudio.BusTap();
         TestAudio.RenderBlocks(engine, tap, blocks: 12);
 
-        Assert.Equal(0f, tap.Peak(BusKind.Main), 4);
+        Assert.Equal(0f, tap.Peak(BusKind.DeckA), 4);
+        Assert.Equal(0f, tap.Peak(BusKind.DeckB), 4);
         Assert.Equal(0.30f, tap.Peak(BusKind.Recording), 3);
-        Assert.Equal(0.30f, tap.Peak(BusKind.Bridge), 3);
     }
 
     [Fact]
@@ -50,12 +50,11 @@ public sealed class BusRoutingTests
         var tap = new TestAudio.BusTap();
         TestAudio.RenderBlocks(engine, tap, blocks: 12);
 
-        // Recording and Bridge see the unmuted device only; the muted cue device
-        // is audible to the operator alone.
+        // Recording sees the unmuted device only; the muted cue device is audible
+        // to the operator alone.
         Assert.Equal(0.30f, tap.Peak(BusKind.Recording), 3);
-        Assert.Equal(0.30f, tap.Peak(BusKind.Bridge), 3);
         Assert.Equal(0.10f, tap.Peak(BusKind.Monitor), 3);
-        Assert.Equal(0f, tap.Peak(BusKind.Main), 4);
+        Assert.Equal(0f, tap.Peak(BusKind.DeckA), 4);
 
         // Per-device meters stay live even while muted: muting is not a dead device.
         var peaks = engine.MicPeaks;
@@ -65,7 +64,7 @@ public sealed class BusRoutingTests
     }
 
     [Fact]
-    public async Task Bridge_equals_Main_plus_microphones_plus_soundboard_minus_monitor()
+    public async Task Soundboard_with_no_device_of_its_own_rides_Deck_A()
     {
         string deckPath = TestAudio.WriteConstantWav(0.20f);
         string sbPath = TestAudio.WriteConstantWav(0.10f);
@@ -73,36 +72,20 @@ public sealed class BusRoutingTests
         {
             using var engine = new AudioEngine();
             engine.Fader.Snap(0, 0);
-            // Keep the soundboard out of Main so both terms of the equation are
-            // visible independently; the Bridge must still carry it.
-            engine.SoundboardFollowsMain = false;
-            engine.Mics.SetStrips(new[]
-            {
-                Mic("open", 0.30f),
-                Mic("cue", 0.10f, muted: true, monitor: true),
-            });
-
-            await engine.DeckA.LoadAsync(deckPath);
+            engine.SoundboardFollowsMain = true;
             var voice = engine.Soundboard.GetOrAdd("tone", 2);
             await voice.LoadAsync(sbPath);
             voice.Play();
+            await engine.DeckA.LoadAsync(deckPath);
 
             var tap = new TestAudio.BusTap();
             TestAudio.RenderBlocks(engine, tap, blocks: 30);
 
-            float main = tap.Peak(BusKind.Main);
-            float mics = tap.Peak(BusKind.Recording);
-            float monitor = tap.Peak(BusKind.Monitor);
-            float bridge = tap.Peak(BusKind.Bridge);
-
-            Assert.Equal(0.20f, main, 3);
-            Assert.Equal(0.30f, mics, 3);
-            Assert.Equal(0.10f, monitor, 3);
-
-            // Bridge = Main + mics + soundboard (0.10), and never the monitor cue.
-            Assert.Equal(0.60f, bridge, 3);
-            Assert.Equal(main + mics + 0.10f, bridge, 3);
-            Assert.Equal(main + mics + 0.10f - monitor, bridge - monitor, 3);
+            // Deck A is deck A plus the soundboard when the soundboard has nowhere
+            // else to go; deck B is a different bus and never sees either of them.
+            Assert.Equal(0.30f, tap.Peak(BusKind.DeckA), 3);
+            Assert.Equal(0f, tap.Peak(BusKind.DeckB), 4);
+            Assert.Equal(0f, tap.Peak(BusKind.Soundboard), 4);
         }
         finally
         {
@@ -112,7 +95,29 @@ public sealed class BusRoutingTests
     }
 
     [Fact]
-    public async Task Karaoke_aid_stays_silent_while_both_stems_play_in_the_mix()
+    public async Task Deck_B_bus_stays_silent_while_deck_A_plays()
+    {
+        string deckPath = TestAudio.WriteConstantWav(0.20f);
+        try
+        {
+            using var engine = new AudioEngine();
+            engine.Fader.Snap(0, 0);
+            await engine.DeckA.LoadAsync(deckPath);
+
+            var tap = new TestAudio.BusTap();
+            TestAudio.RenderBlocks(engine, tap, blocks: 12);
+
+            Assert.Equal(0.20f, tap.Peak(BusKind.DeckA), 3);
+            Assert.Equal(0f, tap.Peak(BusKind.DeckB), 4);
+        }
+        finally
+        {
+            TestAudio.TryDelete(deckPath);
+        }
+    }
+
+    [Fact]
+    public async Task Mix_mode_is_unity_gain_with_the_original_and_karaoke_takes()
     {
         string original = TestAudio.WriteConstantWav(0.20f);
         string karaoke = TestAudio.WriteConstantWav(0.50f);
@@ -125,15 +130,50 @@ public sealed class BusRoutingTests
             var tap = new TestAudio.BusTap();
             TestAudio.RenderBlocks(engine, tap, blocks: 12);
 
-            Assert.Equal(0f, tap.Peak(BusKind.KaraokeAid), 4);
-            // No global karaoke mode: a deck's sub-stem stays in the mix, with the
-            // deck's karaoke gain (0.5 by default) on it, and the aid bus is silent.
-            Assert.Equal(0.45f, tap.Peak(BusKind.Main), 3);
+            // Raw sum is 0.20 + 0.50 * 0.5 = 0.45 at the 1:0.5 balance; the
+            // summer normalises by the gains present (1 + 0.5 = 1.5) so the peak
+            // is 0.30 instead of 0.45. The balance is unchanged.
+            Assert.Equal(0.30f, tap.Peak(BusKind.DeckA), 3);
         }
         finally
         {
             TestAudio.TryDelete(original);
             TestAudio.TryDelete(karaoke);
+        }
+    }
+
+    [Fact]
+    public async Task Monitor_bus_carries_both_decks_at_their_own_gains_when_MON_is_on()
+    {
+        string deckA = TestAudio.WriteConstantWav(0.20f);
+        string deckB = TestAudio.WriteConstantWav(0.10f);
+        try
+        {
+            using var engine = new AudioEngine();
+            engine.Fader.Snap(0, 0);
+            engine.MonitorEnabled = true;
+            engine.MonitorAGain = 0.5f;
+            engine.MonitorBGain = 1.0f;
+            await engine.DeckA.LoadAsync(deckA);
+            await engine.DeckB.LoadAsync(deckB);
+
+            var tap = new TestAudio.BusTap();
+            TestAudio.RenderBlocks(engine, tap, blocks: 12);
+
+            // The monitor tap is pre-fader: deck B sits on the far side of the
+            // crossfader and is still audible to the operator at its own gain:
+            //   0.20 * 0.5 + 0.10 * 1.0 = 0.20
+            Assert.Equal(0.20f, tap.Peak(BusKind.Monitor), 3);
+
+            engine.MonitorEnabled = false;
+            var tap2 = new TestAudio.BusTap();
+            TestAudio.RenderBlocks(engine, tap2, blocks: 6);
+            Assert.Equal(0f, tap2.Peak(BusKind.Monitor), 4);
+        }
+        finally
+        {
+            TestAudio.TryDelete(deckA);
+            TestAudio.TryDelete(deckB);
         }
     }
 }
