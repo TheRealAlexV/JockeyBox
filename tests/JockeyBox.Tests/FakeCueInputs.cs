@@ -22,6 +22,9 @@ internal sealed class FakeCueTarget : ICueActionTarget
 
     public HashSet<(PlaybackDeck Deck, int Slot)> Empty { get; } = new();
 
+    /// <summary>When set, a recall throws: the router must not leak the message.</summary>
+    public bool ThrowOnRecall { get; set; }
+
     public bool SyncAvailable { get; set; } = true;
 
     public long PositionMs { get; set; } = 42_000;
@@ -39,6 +42,8 @@ internal sealed class FakeCueTarget : ICueActionTarget
 
     public bool Recall(PlaybackDeck deck, int slot, out long positionMs, out string error)
     {
+        if (ThrowOnRecall) throw new InvalidOperationException("C:\\Dev\\secret\\library.db is locked");
+
         if (Empty.Contains((deck, slot)))
         {
             positionMs = 0;
@@ -95,6 +100,11 @@ internal sealed class FakeHotkeyRegistrar : IHotkeyRegistrar
     public Dictionary<string, string> Live { get; } = new(StringComparer.OrdinalIgnoreCase);
 
     public List<string> Events { get; } = new();
+
+    public event Action<string>? Triggered;
+
+    /// <summary>Simulate a registered chord firing.</summary>
+    public void Raise(string actionId) => Triggered?.Invoke(actionId);
 
     public bool TryBind(string actionId, string? chord, out string? error)
     {

@@ -23,38 +23,50 @@ namespace JockeyBox.ViewModels;
 /// </summary>
 public partial class MainViewModel
 {
-    private CueHotkeyBinder? _cueHotkeys;
+    private CueHotkeyInput? _cueHotkeys;
+
+    /// <summary>Live cue registrations (tests; 0 before attach, during a stop or with no window).</summary>
+    internal int CueHotkeyBound => _cueHotkeys?.Bound ?? 0;
+
+    /// <summary>Refused chords (tests); -1 when no input exists at all, which is the silent failure.</summary>
+    internal int CueHotkeyFailureCount => _cueHotkeys?.Failures.Count ?? -1;
 
     private DeckViewModel DeckFor(PlaybackDeck deck) => deck == PlaybackDeck.A ? DeckA : DeckB;
 
-    /// <summary>Create the binder; registration waits for the window handle.</summary>
+    /// <summary>Create the input surface; registration waits for the window handle.</summary>
     internal void StartCueHotkeys()
     {
         if (_hotkeys == null) return;
 
-        _cueHotkeys = new CueHotkeyBinder(_hotkeys);
-        _hotkeys.PadTriggered += OnHotkeyPressed;
+        _cueHotkeys ??= new CueHotkeyInput(_hotkeys, OnCueAction);
     }
 
-    /// <summary>Register every cue chord. Safe to call again after a settings change.</summary>
-    internal void AttachCueHotkeys() =>
-        _cueHotkeys?.Bind(CueHotkeys.Resolve(_settings.CueHotkeys));
+    /// <summary>
+    /// Register every cue chord. Self-sufficient on purpose: it recreates the
+    /// input after a stop, which is what the settings-reload path needs. Binding
+    /// through a nullable field here made every key silently dead until restart.
+    /// </summary>
+    internal void AttachCueHotkeys()
+    {
+        StartCueHotkeys();
+        if (_cueHotkeys == null) return;
+
+        _cueHotkeys.Attach(CueHotkeys.Resolve(_settings.CueHotkeys));
+        Log.Info($"cue hotkeys: {_cueHotkeys.Bound} bound, {_cueHotkeys.Failures.Count} failed");
+    }
 
     /// <summary>Drop the registrations and the subscription (shutdown and settings reload).</summary>
     internal void StopCueHotkeys()
     {
-        if (_hotkeys != null) _hotkeys.PadTriggered -= OnHotkeyPressed;
-        _cueHotkeys?.Dispose();
+        _cueHotkeys?.Detach();
         _cueHotkeys = null;
     }
 
     /// <summary>The HTTP face of the cue surface, wired to this view model.</summary>
     internal CueApiRouter CreateCueApiRouter() => new(new CueApiTarget(this));
 
-    private void OnHotkeyPressed(string id)
+    private void OnCueAction(CueAction action)
     {
-        if (!CueHotkeys.TryParseId(id, out var action)) return;
-
         var dispatcher = System.Windows.Application.Current?.Dispatcher;
         if (dispatcher == null)
         {

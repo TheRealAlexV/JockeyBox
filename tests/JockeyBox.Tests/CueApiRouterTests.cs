@@ -221,4 +221,19 @@ public sealed class CueApiRouterTests
         Assert.False(CueApiRouter.Handles("/sounds"));
         Assert.False(CueApiRouter.Handles("/state"));
     }
+
+    [Fact]
+    public void An_internal_failure_is_a_500_that_keeps_the_detail_in_the_log()
+    {
+        var target = new FakeCueTarget { ThrowOnRecall = true };
+        var log = new List<string>();
+        var router = NewRouter(target, log);
+
+        var outcome = router.Handle("POST", "/cue/a/1/recall", null);
+
+        Assert.Equal(500, outcome.Status);
+        Assert.Contains("internal error", outcome.Json);
+        Assert.DoesNotContain("secret", outcome.Json);
+        Assert.Contains(log, line => line.Contains("secret", StringComparison.OrdinalIgnoreCase));
+    }
 }

@@ -48,6 +48,17 @@ public sealed class GlobalHotkeyService : ISoundboardHotkeyHost, IHotkeyRegistra
     /// <summary>Raised (on the UI thread) when a registered hotkey fires.</summary>
     public event Action<string>? PadTriggered;
 
+    /// <summary>
+    /// The cue binder's view of the same hook: one WM_HOTKEY hook per window is
+    /// the only sane arrangement, so cue ids ride this event instead of a second
+    /// service.
+    /// </summary>
+    event Action<string>? IHotkeyRegistrar.Triggered
+    {
+        add => PadTriggered += value;
+        remove => PadTriggered -= value;
+    }
+
     /// <summary>Bindings that could not be registered, keyed by pad id ("already in use" etc).</summary>
     public IReadOnlyDictionary<string, string> Failures => _failures;
 

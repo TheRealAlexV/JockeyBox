@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http;
+using System.Text;
 using System.Net.Sockets;
 using JockeyBox.Api;
 
@@ -63,12 +64,14 @@ public sealed class CueApiLifecycleTests
 
         using var http = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{server.Port}/") };
 
-        var ok = await http.PostAsync("cue/a/2/recall", new StringContent(string.Empty));
+        var ok = await http.PostAsync(
+            "cue/a/2/recall", new StringContent(string.Empty, Encoding.UTF8, "application/json"));
         Assert.Equal(HttpStatusCode.OK, ok.StatusCode);
         Assert.Contains("\"ok\":true", await ok.Content.ReadAsStringAsync());
         Assert.Single(target.Recalls);
 
-        var bad = await http.PostAsync("cue/c/2/recall", new StringContent(string.Empty));
+        var bad = await http.PostAsync(
+            "cue/c/2/recall", new StringContent(string.Empty, Encoding.UTF8, "application/json"));
         Assert.Equal(HttpStatusCode.BadRequest, bad.StatusCode);
         Assert.Contains("unknown deck 'c'", await bad.Content.ReadAsStringAsync());
         Assert.Single(target.Recalls);

@@ -117,8 +117,10 @@ public sealed class CueApiRouter
         }
         catch (Exception ex)
         {
-            Warn($"{method} {path}: {ex.Message}");
-            return RouteOutcome.Reject(500, ex.Message);
+            // The caller gets a generic message; the detail stays in the log so a
+            // plugin or a browser cannot learn this process's internals.
+            Warn($"{method} {path}: {ex.GetType().Name}: {ex.Message}");
+            return RouteOutcome.Reject(500, "internal error; see the local api log");
         }
     }
 

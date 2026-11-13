@@ -1,4 +1,5 @@
 using JockeyBox.Playback;
+using JockeyBox.ViewModels;
 
 namespace JockeyBox.Tests;
 
@@ -172,5 +173,105 @@ public sealed class CueHotkeyTests
 
         Assert.Equal("Ctrl+Alt+F8", binder.BindingOf(new CueAction(PlaybackDeck.A, 1)));
         Assert.Equal(1, registrar.Live.Keys.Count(k => k == "cue.a.1"));
+    }
+    [Theory]
+    [InlineData("A", false)]
+    [InlineData("5", false)]
+    [InlineData("NumPad5", false)]
+    [InlineData("F13", true)]
+    [InlineData("Ctrl+Shift+1", true)]
+    [InlineData("Ctrl+Alt+Shift+Q", true)]
+    public void A_global_chord_needs_a_modifier_unless_it_is_a_function_key(string chord, bool allowed) =>
+        Assert.Equal(allowed, CueHotkeys.HasRequiredModifier(chord));
+
+    [Fact]
+    public void Binder_refuses_a_bare_letter_instead_of_swallowing_it_desktop_wide()
+    {
+        var registrar = new FakeHotkeyRegistrar();
+        var warnings = new List<string>();
+        using var binder = new CueHotkeyBinder(registrar, warnings.Add);
+
+        binder.Bind(CueHotkeys.Resolve(new Dictionary<string, string> { ["cue.a.1"] = "A" }));
+
+        Assert.False(registrar.Live.ContainsKey("cue.a.1"));
+        Assert.Contains("cue.a.1", binder.Failures);
+        Assert.Contains(warnings, w => w.Contains("cue.a.1") && w.Contains("A "));
+        Assert.Equal(17, binder.Count);
+    }
+
+    [Fact]
+    public void Binder_still_accepts_a_bare_function_key()
+    {
+        var registrar = new FakeHotkeyRegistrar();
+        using var binder = new CueHotkeyBinder(registrar);
+
+        binder.Bind(CueHotkeys.Resolve(new Dictionary<string, string> { ["cue.a.1"] = "F13" }));
+
+        Assert.Equal("F13", binder.BindingOf(new CueAction(PlaybackDeck.A, 1)));
+        Assert.Empty(binder.Failures);
+        Assert.Equal(18, binder.Count);
+    }
+
+    [Fact]
+    public void Cue_input_rebinds_and_fires_again_after_a_detach()
+    {
+        var registrar = new FakeHotkeyRegistrar();
+        var fired = new List<CueAction>();
+        using var input = new CueHotkeyInput(registrar, fired.Add);
+
+        input.Attach(CueHotkeys.Resolve(null));
+        Assert.Equal(18, input.Bound);
+
+        input.Detach();
+        Assert.Equal(0, input.Bound);
+        registrar.Raise("cue.a.2");
+        Assert.Empty(fired);
+
+        // The regression: after a stop the next attach must bind again, not
+        // silently do nothing until the app restarts.
+        input.Attach(CueHotkeys.Resolve(null));
+        Assert.Equal(18, input.Bound);
+
+        registrar.Raise("cue.a.2");
+        registrar.Raise("cue.b.q");
+        registrar.Raise("pad.unknown");
+        Assert.Equal(2, fired.Count);
+        Assert.Equal(new CueAction(PlaybackDeck.B, 0), fired[1]);
+    }
+
+    [Fact]
+    public void Main_view_model_asks_for_every_chord_again_after_a_stop()
+    {
+        var vm = UiThread.Run(() => new MainViewModel());
+        try
+        {
+            UiThread.Run(() =>
+            {
+                vm.StopCueHotkeys();
+                return 0;
+            });
+
+            // -1 is "no input object at all", which is exactly the silent failure.
+            Assert.Equal(-1, vm.CueHotkeyFailureCount);
+
+            UiThread.Run(() =>
+            {
+                vm.AttachCueHotkeys();
+                return 0;
+            });
+
+            // Headless: there is no window handle, so every chord is refused as
+            // "window not ready" - the point is that all 18 were attempted.
+            Assert.Equal(18, vm.CueHotkeyFailureCount);
+            Assert.Equal(0, vm.CueHotkeyBound);
+        }
+        finally
+        {
+            UiThread.Run(() =>
+            {
+                vm.Dispose();
+                return 0;
+            });
+        }
     }
 }

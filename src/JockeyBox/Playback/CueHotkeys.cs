@@ -87,6 +87,25 @@ public static class CueHotkeys
         return true;
     }
 
+    /// <summary>
+    /// True when a chord is safe to register system-wide: at least one modifier,
+    /// or a function key on its own. A bare letter or digit would swallow that
+    /// key everywhere on the desktop, including this app's own text boxes.
+    /// </summary>
+    public static bool HasRequiredModifier(string? chord)
+    {
+        if (string.IsNullOrWhiteSpace(chord)) return true;
+
+        string normalised = GlobalHotkeyService.Normalize(chord);
+        if (normalised.Contains('+')) return true;
+
+        string key = normalised.ToUpperInvariant();
+        return key.Length >= 2
+            && key[0] == 'F'
+            && int.TryParse(key[1..], out int fn)
+            && fn is >= 1 and <= 24;
+    }
+
     /// <summary>The shipped chord for one action; never null.</summary>
     public static string DefaultChord(CueAction action)
     {
@@ -132,6 +151,9 @@ public static class CueHotkeys
 /// </summary>
 public interface IHotkeyRegistrar
 {
+    /// <summary>Raised when a registered chord fires, with the id it was bound under.</summary>
+    event Action<string>? Triggered;
+
     bool TryBind(string actionId, string? chord, out string? error);
 
     void Unbind(string actionId);
@@ -183,6 +205,15 @@ public sealed class CueHotkeyBinder : IDisposable
             if (string.IsNullOrWhiteSpace(pair.Value)) continue;
 
             string id = CueHotkeys.Id(action);
+
+            if (!CueHotkeys.HasRequiredModifier(pair.Value))
+            {
+                string refusal = "needs a modifier (Ctrl/Alt/Shift/Win) unless the key is an F-key";
+                _failures[id] = refusal;
+                Warn($"cue hotkey {pair.Value} for {id} ({action.Label}): refused, {refusal}");
+                continue;
+            }
+
             if (_registrar.TryBind(id, pair.Value, out string? error))
             {
                 _live[id] = pair.Value;
@@ -191,7 +222,7 @@ public sealed class CueHotkeyBinder : IDisposable
 
             string message = error ?? "registration failed";
             _failures[id] = message;
-            Warn($"cue hotkey {pair.Value} ({action.Label}): {message}");
+            Warn($"cue hotkey {pair.Value} for {id} ({action.Label}): {message}");
         }
     }
 
@@ -209,5 +240,66 @@ public sealed class CueHotkeyBinder : IDisposable
     {
         if (_warn != null) _warn(message);
         else Log.Warn(message);
+    }
+}
+
+/// <summary>
+/// One cue input surface: the binder plus its trigger subscription, able to go
+/// through stop and attach again.
+///
+/// <para>This is the piece that used to leak. After <c>StopCueHotkeys</c> the
+/// view model held a null binder, so the attach that follows a settings reload
+/// bound nothing and logged nothing: every cue key stayed dead until restart.
+/// Attaching is now self-sufficient, and a second attach rebinds the same
+/// plan instead of stacking a second subscription.</para>
+/// </summary>
+public sealed class CueHotkeyInput : IDisposable
+{
+    private static readonly IReadOnlyDictionary<string, string> NoFailures =
+        new Dictionary<string, string>();
+
+    private readonly IHotkeyRegistrar _registrar;
+    private readonly Action<CueAction> _fire;
+    private CueHotkeyBinder? _binder;
+    private bool _subscribed;
+
+    public CueHotkeyInput(IHotkeyRegistrar registrar, Action<CueAction> fire)
+    {
+        _registrar = registrar ?? throw new ArgumentNullException(nameof(registrar));
+        _fire = fire ?? throw new ArgumentNullException(nameof(fire));
+    }
+
+    /// <summary>Live registrations, 0 before the first attach and after a detach.</summary>
+    public int Bound => _binder?.Count ?? 0;
+
+    /// <summary>Actions that could not be registered, with the reason.</summary>
+    public IReadOnlyDictionary<string, string> Failures => _binder?.Failures ?? NoFailures;
+
+    /// <summary>Register (or re-register) the plan and subscribe to triggers.</summary>
+    public void Attach(IReadOnlyDictionary<string, string> plan)
+    {
+        _binder ??= new CueHotkeyBinder(_registrar);
+        _binder.Bind(plan);
+
+        if (_subscribed) return;
+        _registrar.Triggered += OnTriggered;
+        _subscribed = true;
+    }
+
+    /// <summary>Drop every registration and the subscription; attach can follow.</summary>
+    public void Detach()
+    {
+        _binder?.UnbindAll();
+
+        if (!_subscribed) return;
+        _registrar.Triggered -= OnTriggered;
+        _subscribed = false;
+    }
+
+    public void Dispose() => Detach();
+
+    private void OnTriggered(string id)
+    {
+        if (CueHotkeys.TryParseId(id, out var action)) _fire(action);
     }
 }
