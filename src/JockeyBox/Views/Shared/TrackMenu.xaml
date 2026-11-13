@@ -39,15 +39,39 @@
                   Visibility="{Binding PlacementTarget.Tag.ShowVariantPlay, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={StaticResource MenuVisibility}}">
             <MenuItem.ItemContainerStyle>
                 <Style TargetType="MenuItem">
-                    <Setter Property="Header" Value="{Binding Header}"/>
+                    <Setter Property="Header" Value="{Binding}"/>
                     <Setter Property="Command" Value="{Binding Command}"/>
                     <Setter Property="AutomationProperties.Name" Value="{Binding Header}"/>
-                    <!-- The variant icon slot. TrackVariantItem.Icon carries the
-                         glyph; the design lane owns the characters and the width. -->
-                    <Setter Property="Icon">
+                    <!-- Mark then name, drawn by a template rather than a
+                         Setter.Value: a style setter holds one element and
+                         shares it, so a UIElement there can only ever appear on
+                         the last item. A template is built per item. -->
+                    <Setter Property="HeaderTemplate">
                         <Setter.Value>
-                            <TextBlock Text="{Binding Icon}" FontFamily="Consolas"
-                                       FontSize="12" Width="16"/>
+                            <DataTemplate>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="{Binding Icon}" FontFamily="Consolas"
+                                               FontSize="13" Width="16"
+                                               TextAlignment="Center"
+                                               VerticalAlignment="Center">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Foreground"
+                                                        Value="{DynamicResource TextBrush}"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding Variant}"
+                                                                 Value="Karaoke">
+                                                        <Setter Property="Foreground"
+                                                                Value="{DynamicResource AccentABrush}"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                    <TextBlock Text="{Binding Header}"
+                                               VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </DataTemplate>
                         </Setter.Value>
                     </Setter>
                 </Style>
@@ -72,13 +96,39 @@
                   Visibility="{Binding PlacementTarget.Tag.ShowVariantQueue, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={StaticResource MenuVisibility}}">
             <MenuItem.ItemContainerStyle>
                 <Style TargetType="MenuItem">
-                    <Setter Property="Header" Value="{Binding Header}"/>
+                    <Setter Property="Header" Value="{Binding}"/>
                     <Setter Property="Command" Value="{Binding Command}"/>
                     <Setter Property="AutomationProperties.Name" Value="{Binding Header}"/>
-                    <Setter Property="Icon">
+                    <!-- Mark then name, drawn by a template rather than a
+                         Setter.Value: a style setter holds one element and
+                         shares it, so a UIElement there can only ever appear on
+                         the last item. A template is built per item. -->
+                    <Setter Property="HeaderTemplate">
                         <Setter.Value>
-                            <TextBlock Text="{Binding Icon}" FontFamily="Consolas"
-                                       FontSize="12" Width="16"/>
+                            <DataTemplate>
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="{Binding Icon}" FontFamily="Consolas"
+                                               FontSize="13" Width="16"
+                                               TextAlignment="Center"
+                                               VerticalAlignment="Center">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Foreground"
+                                                        Value="{DynamicResource TextBrush}"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding Variant}"
+                                                                 Value="Karaoke">
+                                                        <Setter Property="Foreground"
+                                                                Value="{DynamicResource AccentABrush}"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                    <TextBlock Text="{Binding Header}"
+                                               VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </DataTemplate>
                         </Setter.Value>
                     </Setter>
                 </Style>

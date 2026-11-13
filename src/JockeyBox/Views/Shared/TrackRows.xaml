@@ -7,10 +7,13 @@
          One row design for every track list in the app: library tree, Spotify
          tracks, YouTube results.
          Column order is fixed: Name | Artist | BPM | Key | Length | Icons.
-         The icons are two independent slots:
-             square  = a local file exists     (filled = yes, hollow = no)
-             diamond = a karaoke version exists (filled = yes, hollow = no)
-         Both slots get a tooltip, so state is never carried by colour alone.
+         The Icons column is one strip, not two slots: a mark per take this row
+         actually has (see VariantGlyphs), in the fixed order
+             ■ Original   ◆ Karaoke   ◐ Keep backing   ♪ Vocals only
+         and nothing for a take it does not have. ◆ is the only accented mark:
+         it answers "can I start this one now", the rest describe the row.
+         Every mark carries a tooltip, so state is never carried by colour or
+         fill alone. A scanned row with no file behind it shows an em dash.
 
          Why the layout lives here as styles plus thin per-type templates: the
          three lists bind to three different item types (BrowserNode, SourceTrack,
@@ -67,11 +70,17 @@
         <Grid>
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" MinWidth="76"/>
-                <ColumnDefinition Width="150"/>
+                <!-- Artist is the column that gives way: at 1518 the browser has
+                     664 px and this sits at its 150 px natural width; at 1040 it
+                     has 382 px for six columns, so Artist shrinks to 60 and the
+                     Icons column stays on screen. Nothing to the right of it can
+                     scroll (the tree disables horizontal scrolling), so an
+                     overflowed badge strip is unreachable, not merely tight. -->
+                <ColumnDefinition Width="0.5*" MinWidth="60" MaxWidth="150"/>
                 <ColumnDefinition Width="46"/>
                 <ColumnDefinition Width="46"/>
                 <ColumnDefinition Width="58"/>
-                <ColumnDefinition Width="42"/>
+                <ColumnDefinition Width="60"/>
             </Grid.ColumnDefinitions>
             <TextBlock Grid.Column="0" Text="Track name" Style="{StaticResource TrackColumnHeader}"/>
             <TextBlock Grid.Column="1" Text="Artist" Style="{StaticResource TrackColumnHeader}"/>
@@ -83,14 +92,19 @@
         </Grid>
     </Border>
 
-    <!-- ===== Badge slots ===== -->
+    <!-- ===== Badge slots =====
+         One slot is 14 px wide at 13 px Consolas: the glyph advances about
+         7.2 px, so neighbours sit ~3.4 px apart with no explicit margin, and
+         four slots come to 56 px. That is the size the Icons column is cut for.
+         Default is the dim ink, for the marks that say "absent" (a hollow
+         square or diamond); the strip sets the brighter ink per mark. -->
     <Style x:Key="BadgeSlot" TargetType="TextBlock">
         <Setter Property="Width" Value="14"/>
         <Setter Property="FontFamily" Value="Consolas"/>
-        <Setter Property="FontSize" Value="12"/>
+        <Setter Property="FontSize" Value="13"/>
         <Setter Property="TextAlignment" Value="Center"/>
         <Setter Property="VerticalAlignment" Value="Center"/>
-        <Setter Property="Foreground" Value="{StaticResource SlotOffBrush}"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextDimBrush}"/>
         <Setter Property="Focusable" Value="False"/>
     </Style>
 
@@ -100,11 +114,17 @@
         <Grid Style="{StaticResource TrackRowGrid}">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" MinWidth="76"/>
-                <ColumnDefinition Width="150"/>
+                <!-- Artist is the column that gives way: at 1518 the browser has
+                     664 px and this sits at its 150 px natural width; at 1040 it
+                     has 382 px for six columns, so Artist shrinks to 60 and the
+                     Icons column stays on screen. Nothing to the right of it can
+                     scroll (the tree disables horizontal scrolling), so an
+                     overflowed badge strip is unreachable, not merely tight. -->
+                <ColumnDefinition Width="0.5*" MinWidth="60" MaxWidth="150"/>
                 <ColumnDefinition Width="46"/>
                 <ColumnDefinition Width="46"/>
                 <ColumnDefinition Width="58"/>
-                <ColumnDefinition Width="42"/>
+                <ColumnDefinition Width="60"/>
             </Grid.ColumnDefinitions>
 
             <TextBlock Grid.Column="0" Style="{StaticResource TrackTitle}"
@@ -151,7 +171,7 @@
                     <ColumnDefinition Width="46"/>
                     <ColumnDefinition Width="46"/>
                     <ColumnDefinition Width="58"/>
-                    <ColumnDefinition Width="42"/>
+                    <ColumnDefinition Width="60"/>
                 </Grid.ColumnDefinitions>
 
                 <TextBlock Grid.Column="0" Style="{StaticResource TrackCellNum}"
@@ -163,32 +183,15 @@
                 <TextBlock Grid.Column="2" Style="{StaticResource TrackCellNum}"
                            Text="{Binding Track.DurationText}"/>
 
-                <StackPanel Grid.Column="3" Orientation="Horizontal" HorizontalAlignment="Center">
-                    <TextBlock Style="{StaticResource BadgeSlot}"
-                               Text="■" ToolTip="Local file in the library"
-                               AutomationProperties.Name="Local file"
-                               Foreground="{DynamicResource TextBrush}"/>
-                    <TextBlock>
-                        <TextBlock.Style>
-                            <Style TargetType="TextBlock" BasedOn="{StaticResource BadgeSlot}">
-                                <Setter Property="Text" Value="◇"/>
-                                <Setter Property="ToolTip" Value="No karaoke version"/>
-                                <Setter Property="AutomationProperties.Name" Value="No karaoke version"/>
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding Track.HasBoth}" Value="True">
-                                        <Setter Property="Text" Value="◆"/>
-                                        <Setter Property="Foreground" Value="{DynamicResource AccentABrush}"/>
-                                        <Setter Property="ToolTip" Value="Karaoke version ready"/>
-                                        <Setter Property="AutomationProperties.Name" Value="Karaoke version ready"/>
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </TextBlock.Style>
-                    </TextBlock>
-                    <!-- One slot per take that exists, straight from the model
-                         (TrackEntry.Variants.Present). The characters are
-                         VariantGlyphs; the design lane owns them and this row's
-                         final layout. -->
+                <!-- The whole icon column is the variant strip: one mark per
+                     take that exists, in the model's stable order (Original,
+                     Karaoke, Backing, Vocals). It replaced a two-slot statement
+                     (square = local file, diamond = karaoke yes/no), because on a
+                     scanned row the Original mark IS the local-file mark and the
+                     absence of a Karaoke mark IS "no karaoke". Four marks is the
+                     ceiling, so the column is 56 px of slot in 60 px. -->
+                <StackPanel Grid.Column="3" Orientation="Horizontal"
+                            HorizontalAlignment="Center" VerticalAlignment="Center">
                     <ItemsControl ItemsSource="{Binding Track.Variants.Present}"
                                   VerticalAlignment="Center">
                         <ItemsControl.ItemsPanel>
@@ -198,13 +201,44 @@
                         </ItemsControl.ItemsPanel>
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
-                                <TextBlock Style="{StaticResource BadgeSlot}"
-                                           Text="{Binding Icon}"
-                                           ToolTip="{Binding Label}"
-                                           AutomationProperties.Name="{Binding Label}"/>
+                                <TextBlock ToolTip="{Binding Label}"
+                                           AutomationProperties.Name="{Binding Label}">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock"
+                                               BasedOn="{StaticResource BadgeSlot}">
+                                            <Setter Property="Text" Value="{Binding Icon}"/>
+                                            <Setter Property="Foreground"
+                                                    Value="{DynamicResource TextBrush}"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Variant}"
+                                                             Value="Karaoke">
+                                                    <Setter Property="Foreground"
+                                                            Value="{DynamicResource AccentABrush}"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
                             </DataTemplate>
                         </ItemsControl.ItemTemplate>
                     </ItemsControl>
+                    <!-- Scanned row with no file behind it: no take to draw, so
+                         say "nothing here" rather than leave the cell blank and
+                         look like a row nobody has looked at yet. -->
+                    <TextBlock Text="{x:Static lib:VariantGlyphs.Absent}"
+                               ToolTip="No audio file found for this track"
+                               AutomationProperties.Name="No audio file found">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock" BasedOn="{StaticResource BadgeSlot}">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding Track.Variants.Count}" Value="0">
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
                 </StackPanel>
             </Grid>
         </Grid>
@@ -215,11 +249,17 @@
         <Grid Style="{StaticResource TrackRowGrid}">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" MinWidth="76"/>
-                <ColumnDefinition Width="150"/>
+                <!-- Artist is the column that gives way: at 1518 the browser has
+                     664 px and this sits at its 150 px natural width; at 1040 it
+                     has 382 px for six columns, so Artist shrinks to 60 and the
+                     Icons column stays on screen. Nothing to the right of it can
+                     scroll (the tree disables horizontal scrolling), so an
+                     overflowed badge strip is unreachable, not merely tight. -->
+                <ColumnDefinition Width="0.5*" MinWidth="60" MaxWidth="150"/>
                 <ColumnDefinition Width="46"/>
                 <ColumnDefinition Width="46"/>
                 <ColumnDefinition Width="58"/>
-                <ColumnDefinition Width="42"/>
+                <ColumnDefinition Width="60"/>
             </Grid.ColumnDefinitions>
 
             <TextBlock Grid.Column="0" Style="{StaticResource TrackTitle}"
@@ -279,11 +319,17 @@
         <Grid Style="{StaticResource TrackRowGrid}">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*" MinWidth="76"/>
-                <ColumnDefinition Width="150"/>
+                <!-- Artist is the column that gives way: at 1518 the browser has
+                     664 px and this sits at its 150 px natural width; at 1040 it
+                     has 382 px for six columns, so Artist shrinks to 60 and the
+                     Icons column stays on screen. Nothing to the right of it can
+                     scroll (the tree disables horizontal scrolling), so an
+                     overflowed badge strip is unreachable, not merely tight. -->
+                <ColumnDefinition Width="0.5*" MinWidth="60" MaxWidth="150"/>
                 <ColumnDefinition Width="46"/>
                 <ColumnDefinition Width="46"/>
                 <ColumnDefinition Width="58"/>
-                <ColumnDefinition Width="42"/>
+                <ColumnDefinition Width="60"/>
             </Grid.ColumnDefinitions>
 
             <TextBlock Grid.Column="0" Style="{StaticResource TrackTitle}"

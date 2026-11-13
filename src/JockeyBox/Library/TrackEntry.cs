@@ -228,12 +228,45 @@ public sealed class VariantAvailability
 /// design lane owns the visual vocabulary and replaces these four values (and
 /// the row layout that binds them) without touching the model or the menus.
 /// </summary>
+/// <remarks>
+/// <para>Four silhouettes, each one a different shape, so the column reads by
+/// outline at 12 px instead of by fill or by a dot that disappears. Every mark
+/// is a solid glyph, so "font is present but light" can never be mistaken for
+/// "this take is missing" - a missing take is the absence of its mark, not a
+/// hollow version of it.</para>
+///
+/// <list type="bullet">
+/// <item><b>Original ■</b> - one solid block: the whole recording, nothing
+/// removed. Keeps the row's long-standing square-means-the-file meaning, so the
+/// operator learns nothing new for the take they use most.</item>
+/// <item><b>Karaoke ◆</b> - the diamond the product already used for
+/// karaoke-ready. Drawn in the accent colour, it is the only mark that answers
+/// "can I start this one now".</item>
+/// <item><b>Backing ◐</b> - a disc cut in half: the voices kept, the music bed
+/// gone. Half a shape for half a mix; unlike ◑ it has no mirror twin to be
+/// confused with, unlike ◇ it cannot read as "missing".</item>
+/// <item><b>Vocals ♪</b> - the one mark that is not a geometric block: the sung
+/// part on its own. Thin where the others are heavy, so it is unmistakable in a
+/// row of four.</item>
+/// </list>
+///
+/// <para>All four come from the DOS/CP437 repertoire that Consolas draws
+/// natively, so they share one advance width in the monospace slot and never
+/// pull in a fallback font with a different weight.</para>
+/// </remarks>
 public static class VariantGlyphs
 {
-    public const string Original = "\u25A0"; // the row's existing local-file glyph
-    public const string Karaoke = "\u25C6";  // the row's existing karaoke-ready glyph
-    public const string Backing = "\u25C7";
-    public const string Vocals = "\u25CB";
+    public const string Original = "\u25A0"; // ■ whole recording
+    public const string Karaoke = "\u25C6";  // ◆ instrumental, the accent mark
+    public const string Backing = "\u25D0";  // ◐ voices kept, bed removed
+    public const string Vocals = "\u266A";   // ♪ the sung part alone
+
+    /// <summary>
+    /// The view's "nothing here" mark: a row whose primary file is gone has no
+    /// variant at all, and the badge strip still has to say so rather than sit
+    /// empty and look like a row nobody has scanned yet.
+    /// </summary>
+    public const string Absent = "\u2014";
 
     public static string For(AudioVariant variant) => variant switch
     {
