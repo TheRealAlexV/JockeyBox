@@ -65,7 +65,22 @@ public partial class TrackEntry : ObservableObject
     /// Observable because analysis often finishes after the row is on screen.
     /// </summary>
     [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(KeyText))]
     private string? _key;
+
+    /// <summary>
+    /// True when <see cref="Key"/> is the analyser's chroma estimate rather than
+    /// the file's own TKEY tag. Observable with <see cref="Key"/>: a row analysed
+    /// after it was on screen gains an estimate, not an authored key, and has to
+    /// say so. Sorting ignores this - <see cref="ViewModels.TrackSortComparer"/>
+    /// orders on <see cref="Key"/> itself.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(KeyText))]
+    private bool _keyEstimated;
+
+    /// <summary>Key column text: see <see cref="KeyNotation.Display"/> ("8A", "~8A", or the em dash).</summary>
+    public string KeyText => KeyNotation.Display(Key, KeyEstimated);
 
     /// <summary>
     /// Tempo as the file's TBPM tag states it, or the analysed estimate when the

@@ -216,7 +216,10 @@ public partial class MainViewModel
             if (grid.Key != null)
                 foreach (var track in Tracks)
                     if (PathEquals(track.MusicPath, path) && string.IsNullOrEmpty(track.Key))
-                        track.Key = TrackKeyResolver.Resolve(tagKey: null, grid);
+                    {
+                        track.Key = TrackKeyResolver.Resolve(null, grid, out var keyIsEstimate);
+                        track.KeyEstimated = keyIsEstimate;
+                    }
 
             // Tempo follows the identical rule: the scan (which runs before this
             // worker) already wrote any TBPM tag, so a non-zero Bpm is authored

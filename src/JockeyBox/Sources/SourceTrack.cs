@@ -67,6 +67,12 @@ public partial class SourceTrack : ObservableObject
 
     private string? _key;
 
+    /// <summary>True when <see cref="Key"/> is an analysis estimate rather than a tag.</summary>
+    public bool KeyEstimated { get; set; }
+
+    /// <summary>Key column text: see <see cref="KeyNotation.Display"/>.</summary>
+    public string KeyText => KeyNotation.Display(Key, KeyEstimated);
+
     /// <summary>Name of the playlist this track was imported from - used by the playlist layout preset.</summary>
     public string? PlaylistName { get; set; }
 

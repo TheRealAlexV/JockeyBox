@@ -111,4 +111,59 @@ public sealed class KeyPrecedenceTests : IDisposable
         Assert.Equal("8A", row.Key);
         Assert.Contains(nameof(TrackEntry.Key), changed);
     }
+
+    // --- Provenance: which of the two sources a row is showing -------------
+    // The Key column marks an estimate with a leading tilde, so the row has to
+    // know which source won. These pin that, and that the marker is presentation
+    // only: TrackEntry.Key keeps the bare code the sorter parses.
+
+    [Fact]
+    public void EstimateIsReportedAsAnEstimate()
+    {
+        Assert.Equal("8A", TrackKeyResolver.Resolve(null, Analysed("Am"), out var estimated));
+        Assert.True(estimated);
+        Assert.Equal("~8A", KeyNotation.Display("8A", estimated));
+    }
+
+    [Fact]
+    public void TaggedKeyIsReportedAsATagEvenWhenAnEstimateExists()
+    {
+        Assert.Equal("4A", TrackKeyResolver.Resolve("Fm", Analysed("Am"), out var estimated));
+        Assert.False(estimated);
+    }
+
+    [Fact]
+    public void EstimateWrittenBackIntoTheTagCacheStaysAnEstimate()
+    {
+        // TagCache.SetKey fills a blank, so the scan stores the analyser's guess in
+        // library.json's Key field; the next scan hands it back as the "tag" key.
+        // Equal to this track's own estimate = write-back, and it keeps its tilde:
+        // calling a guess an authored tag is the error that makes the column lie.
+        var grid = Analysed("Am");
+        Assert.Equal("8A", TrackKeyResolver.Resolve("8A", grid, out var estimated));
+        Assert.True(estimated);
+        // A different tag is a real tag and loses the tilde.
+        Assert.Equal("4A", TrackKeyResolver.Resolve("Fm", grid, out var tagged));
+        Assert.False(tagged);
+    }
+
+    [Fact]
+    public void NoKeyIsAnEmDashWithNoProvenance()
+    {
+        Assert.Null(TrackKeyResolver.Resolve(null, Analysed(null), out var estimated));
+        Assert.False(estimated);
+        Assert.Equal(KeyNotation.NoKey, KeyNotation.Display(null, estimated));
+        Assert.Equal(KeyNotation.NoKey, KeyNotation.Display("", true));
+    }
+
+    [Fact]
+    public void RowKeyStaysBareSoSortingIsUnaffected()
+    {
+        var row = new TrackEntry { RelativeKey = "a/song", RelativePath = "a/song.mp3" };
+        row.Key = TrackKeyResolver.Resolve(null, Analysed("Am"), out var estimated);
+        row.KeyEstimated = estimated;
+
+        Assert.Equal("8A", row.Key);
+        Assert.Equal("~8A", row.KeyText);
+    }
 }

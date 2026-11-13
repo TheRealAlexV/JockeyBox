@@ -20,12 +20,38 @@ namespace JockeyBox.Library;
 /// </summary>
 public static class TrackKeyResolver
 {
-    public static string? Resolve(string? tagKey, BeatGrid? grid)
+    public static string? Resolve(string? tagKey, BeatGrid? grid) => Resolve(tagKey, grid, out _);
+
+    /// <summary>
+    /// As above, and reports whether the winner is the analyser's guess rather
+    /// than the file's own assertion, so the row can mark it (see
+    /// <see cref="KeyNotation.Display"/>).
+    ///
+    /// <para><b>The cached-key trap.</b> <c>library.json</c> keeps an estimated
+    /// key in the same <c>Key</c> field as a TKEY tag - <c>TagCache.SetKey</c>
+    /// fills only a blank - so after one scan a guess is indistinguishable from a
+    /// tag by provenance of the field alone. A cached key that equals this
+    /// track's own estimate is therefore treated as that estimate: calling a
+    /// guess an authored tag is the error that makes the column lie, while the
+    /// reverse (a real tag that happens to agree with the estimate) only shows a
+    /// tilde it had not earned.</para>
+    /// </summary>
+    public static string? Resolve(string? tagKey, BeatGrid? grid, out bool estimated)
     {
+        estimated = false;
+        var analysed = grid is { KeyAnalysed: true, Key: { Length: > 0 } }
+            ? KeyNotation.Normalize(grid.Key, out _)
+            : null;
+
         if (!string.IsNullOrWhiteSpace(tagKey))
-            return KeyNotation.Normalize(tagKey.Trim(), out _);
-        if (grid is { KeyAnalysed: true, Key: { Length: > 0 } analysed })
-            return KeyNotation.Normalize(analysed, out _);
-        return null;
+        {
+            var tagged = KeyNotation.Normalize(tagKey.Trim(), out _);
+            estimated = analysed is not null && string.Equals(tagged, analysed, StringComparison.Ordinal);
+            return tagged;
+        }
+
+        if (analysed is null) return null;
+        estimated = true;
+        return analysed;
     }
 }

@@ -146,6 +146,7 @@ internal static class UiShot
 
 
 
+
         // --uishot-rows: fill the YouTube tab's list with the same literal rows the
         // search window uses, so the row template, its density and its clipping are
         // photographable. Without it every YouTube capture shows an empty list and
@@ -392,8 +393,22 @@ internal static class UiShot
             return first == 1 && second == 1 && afterMainClosed == 0 ? 0 : 5;
         }
 
+        // Opt-in: the browser opens with its folders collapsed, so a library capture
+        // shows folder rows and never a track row - and the Key column only exists on
+        // track rows. Expanding the model now, after the scan has built the tree and
+        // before the render, is the same IsExpanded walk PerfProbe uses to measure a
+        // full tree: no click, no desktop, and no product code in the path.
+        if (Harness.Flag(args, "--uishot-expand") != null && window.DataContext is MainViewModel expandVm)
+            foreach (var root in expandVm.BrowserRoots) ExpandFolders(root);
+
         window.UpdateLayout();
         UiPump.Pump(200);
+
+        static void ExpandFolders(JockeyBox.Library.BrowserNode node)
+        {
+            node.IsExpanded = true;
+            foreach (var child in node.Children.ToList()) ExpandFolders(child);
+        }
 
         // The render is driven at an explicit size so the result does not depend
         // on the window station's virtual screen (a service session reports

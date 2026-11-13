@@ -158,8 +158,8 @@
                            Text="{Binding Track.BpmText}"/>
                 <!-- No musical key on the model yet: shows an em dash until it lands. -->
                 <TextBlock Grid.Column="1" Style="{StaticResource TrackCellNum}"
-                           Text="{Binding Track.Key, TargetNullValue=—, FallbackValue=—}"
-                           ToolTip="Musical key"/>
+                           Text="{Binding Track.KeyText}"
+                           ToolTip="Musical key: ~ marks a key estimated from the audio, not tagged"/>
                 <TextBlock Grid.Column="2" Style="{StaticResource TrackCellNum}"
                            Text="{Binding Track.DurationText}"/>
 
@@ -209,8 +209,8 @@
             <TextBlock Grid.Column="2" Style="{StaticResource TrackCellNum}"
                        Text="{Binding Bpm, TargetNullValue=—, FallbackValue=—}"/>
             <TextBlock Grid.Column="3" Style="{StaticResource TrackCellNum}"
-                       Text="{Binding Key, TargetNullValue=—, FallbackValue=—}"
-                       ToolTip="Musical key"/>
+                       Text="{Binding KeyText}"
+                       ToolTip="Musical key: ~ marks a key estimated from the audio, not tagged"/>
             <TextBlock Grid.Column="4" Style="{StaticResource TrackCellNum}"
                        Text="{Binding DurationText}" ToolTip="{Binding DurationText}"/>
 
@@ -271,7 +271,8 @@
             <TextBlock Grid.Column="1" Style="{StaticResource TrackCellDim}"
                        Text="{Binding Uploader}" ToolTip="{Binding Uploader}"/>
             <TextBlock Grid.Column="2" Style="{StaticResource TrackCellNum}" Text="—"/>
-            <TextBlock Grid.Column="3" Style="{StaticResource TrackCellNum}" Text="—" ToolTip="Musical key"/>
+            <TextBlock Grid.Column="3" Style="{StaticResource TrackCellNum}"
+                       Text="{x:Static lib:KeyNotation.NoKey}" ToolTip="Musical key"/>
             <TextBlock Grid.Column="4" Style="{StaticResource TrackCellNum}"
                        Text="{Binding Duration, StringFormat={}{0:m\:ss}}"/>
 

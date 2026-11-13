@@ -113,7 +113,8 @@ public class LibraryScanner
                 // file states no key do we show the analysis estimate, which is
                 // marked as such on the grid so a later tag supersedes it.
                 if (!string.IsNullOrWhiteSpace(tags.Key)) BeatGridStore.Shared?.MarkTagKey(metaSource);
-                track.Key = TrackKeyResolver.Resolve(tags.Key, BeatGridStore.Shared?.Get(metaSource));
+                track.Key = TrackKeyResolver.Resolve(tags.Key, BeatGridStore.Shared?.Get(metaSource), out var keyEstimated);
+                track.KeyEstimated = keyEstimated;
                 // Same write-back as the tempo above: a key only the grid knows
                 // must reach library.json, or it exists only in this row. SetKey
                 // refuses a non-blank cache entry, so a tag is never displaced.

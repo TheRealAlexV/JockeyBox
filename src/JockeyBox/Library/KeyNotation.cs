@@ -29,6 +29,27 @@ public static class KeyNotation
         return codes;
     }
 
+    /// <summary>Shown when a row has no key at all: never blank, never a guess.</summary>
+    public const string NoKey = "\u2014";
+
+    /// <summary>
+    /// What the Key column shows for a resolved key: a tagged key verbatim
+    /// ("8A"), an estimate with a leading tilde ("~8A"), and
+    /// <see cref="NoKey"/> when there is nothing to show.
+    ///
+    /// <para><b>Why the tilde.</b> The column is read down at speed, so the
+    /// difference has to be in the glyphs, not in a hover: "~" is "approximately"
+    /// in every engineer's shorthand, it survives a screenshot, and it does not
+    /// make the value look broken or disabled the way a dimmed cell does. An
+    /// authored key therefore renders exactly as it always has. The tilde is
+    /// presentation only - the row's <c>Key</c> keeps the bare code, so sorting
+    /// still parses 1A..12A and no consumer of the value sees a marker.</para>
+    /// </summary>
+    public static string Display(string? key, bool estimated) =>
+        string.IsNullOrWhiteSpace(key) ? NoKey
+        : estimated ? "~" + key
+        : key;
+
     /// <summary>
     /// Canonical Camelot form of <paramref name="raw"/>, or the value unchanged
     /// when it is neither a note name nor a valid Camelot code.

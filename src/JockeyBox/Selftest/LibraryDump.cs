@@ -22,7 +22,8 @@ namespace JockeyBox.Selftest;
 /// (<see cref="BrowserNode.Track"/> leaves under
 /// <see cref="MainViewModel.BrowserRoots"/>, the source of the row templates in
 /// Views/Shared/TrackRows.xaml) and prints <c>Track.BpmText</c> and
-/// <c>Track.Key</c> verbatim, so the answer is not a reimplementation of the
+/// <c>Track.KeyText</c> with the provenance behind it (<c>src=tag|estimate|none</c>),
+/// so the answer is not a reimplementation of the
 /// resolvers and cannot disagree with the column.</para>
 ///
 /// <para>Waits on the same two flags as <see cref="UiShot"/> with the same quiet
@@ -106,8 +107,14 @@ internal static class LibraryDump
             string title = Blank(leaf.Name);
             string artist = Blank(track?.Artist ?? "");
             string bpm = Blank(track?.BpmText ?? "");
-            string key = Blank(track?.Key ?? "");
-            Echo($"row: {title} | {artist} | bpm={bpm} | key={key}");
+            // The cell's own text, so the marker is provable without pixels, plus
+            // the provenance behind it: tag = the file states the key, estimate =
+            // the analyser guessed it. "-" means no key at all.
+            string key = Blank(track?.KeyText ?? "");
+            string src = track is null || string.IsNullOrEmpty(track.Key)
+                ? "none"
+                : track.KeyEstimated ? "estimate" : "tag";
+            Echo($"row: {title} | {artist} | bpm={bpm} | key={key} | src={src}");
         }
 
         Console.Out.Flush();
