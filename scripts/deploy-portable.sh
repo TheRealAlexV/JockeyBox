@@ -49,6 +49,27 @@ done
 [ -d "$SRC" ] || { echo "deploy-portable: no build output at $SRC - run build/build.sh first" >&2; exit 1; }
 [ -f "$SRC/JockeyBox.exe" ] || { echo "deploy-portable: $SRC/JockeyBox.exe missing - run build/build.sh first" >&2; exit 1; }
 
+# Ship the exe that was proven, not whatever is lying in dist/. dist/ is never
+# cleaned and the manifest below pins names, not hashes, so a stale exe passes
+# preflight; and a single-file exe built on an unstamped host starts and exits at
+# once with no build error anywhere. build/build.sh records the md5 of the exe
+# whose entry point it verified, so compare before copying anything.
+VERIFIED="$ROOT/dist/.exe-verified"
+if [ -f "$VERIFIED" ]; then
+  WANT_MD5="$(tr -d '[:space:]' < "$VERIFIED")"
+  SRC_MD5="$(md5sum "$SRC/JockeyBox.exe" | cut -d' ' -f1)"
+  if [ "$WANT_MD5" != "$SRC_MD5" ]; then
+    echo "deploy-portable: $SRC/JockeyBox.exe is not the exe build/build.sh verified" >&2
+    echo "deploy-portable:   verified $WANT_MD5" >&2
+    echo "deploy-portable:   on disk  $SRC_MD5" >&2
+    echo "deploy-portable: re-run build/build.sh so the exe being shipped is the one it checked" >&2
+    exit 1
+  fi
+  echo "deploy-portable: exe md5 ${SRC_MD5:0:12} matches the verified build"
+else
+  echo "deploy-portable: WARNING - no $VERIFIED; cannot prove this exe is the verified build" >&2
+fi
+
 # Temp files are cleaned on every exit path, including a refusal.
 TMP_LIST=""; TMP_WANT=""; TMP_HAVE=""; TMP_NEW=""
 tmp_cleanup() {
