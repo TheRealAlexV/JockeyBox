@@ -215,6 +215,13 @@ public class AppSettings
     /// <summary>Bearer token the localhost API requires (generated on first save).</summary>
     public string ApiToken { get; set; } = "";
 
+    /// <summary>
+    /// Cue recall chords, keyed "cue.a.1".."cue.a.8"/"cue.a.q" (deck B likewise).
+    /// A missing key falls back to <c>CueHotkeys.DefaultChord</c>; an empty value
+    /// leaves that cue deliberately unbound.
+    /// </summary>
+    public Dictionary<string, string> CueHotkeys { get; set; } = new();
+
     // Vocal removal engine (UVR models via the audio-separator CLI)
     /// <summary>Optional explicit python.exe used to build the engine venv; empty = auto-detect.</summary>
     public string PythonPath { get; set; } = "";
@@ -503,6 +510,12 @@ public class AppSettings
         // Older/hand-edited files may omit these or contain an explicit null.
         settings.LyricsOffsetByTrack ??= new();
         settings.LyricsSourceByTrack ??= new();
+
+        // Cue chords seed once, so the operator has something to edit in the
+        // settings file; an emptied map stays empty (every cue unbound on purpose).
+        settings.CueHotkeys ??= new();
+        if (settings.CueHotkeys.Count == 0)
+            settings.CueHotkeys = JockeyBox.Playback.CueHotkeys.Defaults();
 
         // Unknown/removed follow modes (e.g. from a newer build or a hand-edited
         // file) must not leave an undefined enum value behind.

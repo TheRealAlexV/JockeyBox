@@ -22,7 +22,7 @@ namespace JockeyBox.Playback;
 /// <para>Bindings are parsed from text ("F13", "Ctrl+Shift+1", "NumPad5") so the
 /// settings file stays readable and a pad can be re-bound without a rebuild.</para>
 /// </summary>
-public sealed class GlobalHotkeyService : ISoundboardHotkeyHost, IDisposable
+public sealed class GlobalHotkeyService : ISoundboardHotkeyHost, IHotkeyRegistrar, IDisposable
 {
     private const int WmHotkey = 0x0312;
     private const uint ModAlt = 0x0001;

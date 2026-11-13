@@ -34,7 +34,7 @@ public sealed class LocalApiServer : IDisposable
     /// <summary>Default port. Loopback only; the Stream Deck plugin reads it from its global settings.</summary>
     public const int DefaultPort = 17890;
 
-    private readonly HttpListener _listener = new();
+    private HttpListener _listener = new();
     private readonly CancellationTokenSource _cts = new();
     private readonly List<WebSocket> _sockets = new();
     private readonly object _socketGate = new();
@@ -44,6 +44,7 @@ public sealed class LocalApiServer : IDisposable
     private Action? _stopAll;
     private Func<ApiState>? _stateSource;
     private Func<string?, string?, Task<ApiAddResult>>? _addSound;
+    private CueApiRouter? _cueRouter;
     private string _token = string.Empty;
     private Task? _loop;
 
@@ -63,7 +64,8 @@ public sealed class LocalApiServer : IDisposable
         Action<string> playPad,
         Action stopAll,
         Func<ApiState> stateSource,
-        Func<string?, string?, Task<ApiAddResult>>? addSound = null)
+        Func<string?, string?, Task<ApiAddResult>>? addSound = null,
+        CueApiRouter? cueRouter = null)
     {
         _token = token ?? string.Empty;
         _padSource = padSource;
@@ -71,31 +73,47 @@ public sealed class LocalApiServer : IDisposable
         _stopAll = stopAll;
         _stateSource = stateSource;
         _addSound = addSound;
+        _cueRouter = cueRouter;
     }
 
     /// <summary>Start listening on 127.0.0.1:<paramref name="port"/> (falls back to the next free port).</summary>
     public bool Start(int port = DefaultPort)
     {
         if (IsRunning) return true;
+        if (_cts.IsCancellationRequested)
+        {
+            LastError = "the server was already disposed";
+            return false;
+        }
 
         for (int attempt = 0; attempt < 12; attempt++)
         {
             int candidate = port + attempt;
+
+            // A fresh listener per attempt: once http.sys refuses a prefix, that
+            // HttpListener instance stays unusable, so reusing it would make the
+            // walk-up fail for every remaining candidate and report the first
+            // conflict as if the whole range were taken.
+            var listener = new HttpListener();
+            listener.Prefixes.Add($"http://127.0.0.1:{candidate}/");
+
             try
             {
-                _listener.Prefixes.Clear();
-                _listener.Prefixes.Add($"http://127.0.0.1:{candidate}/");
-                _listener.Start();
-                Port = candidate;
-                IsRunning = true;
-                _loop = Task.Run(() => AcceptLoopAsync(_cts.Token));
-                Log.Info($"local api listening on http://127.0.0.1:{candidate}/");
-                return true;
+                listener.Start();
             }
             catch (Exception ex)
             {
                 LastError = ex.Message;
+                try { listener.Close(); } catch { }
+                continue;
             }
+
+            _listener = listener;
+            Port = candidate;
+            IsRunning = true;
+            _loop = Task.Run(() => AcceptLoopAsync(_cts.Token));
+            Log.Info($"local api listening on http://127.0.0.1:{candidate}/");
+            return true;
         }
 
         Log.Warn($"local api could not bind a port near {port}: {LastError}");
@@ -189,6 +207,24 @@ public sealed class LocalApiServer : IDisposable
             {
                 _stopAll?.Invoke();
                 await WriteJsonAsync(context.Response, new { ok = true }).ConfigureAwait(false);
+                return;
+            }
+
+            // Cue and transport keys: the router owns the parsing and the 4xx
+            // refusals, this listener only supplies the transport.
+            if (_cueRouter != null && CueApiRouter.Handles(path))
+            {
+                string? body = null;
+                if (method == "POST")
+                {
+                    using var reader = new StreamReader(
+                        context.Request.InputStream, context.Request.ContentEncoding ?? Encoding.UTF8);
+                    body = await reader.ReadToEndAsync().ConfigureAwait(false);
+                }
+
+                var outcome = _cueRouter.Handle(method, path, body);
+                context.Response.StatusCode = outcome.Status;
+                await WriteRawJsonAsync(context.Response, outcome.Json).ConfigureAwait(false);
                 return;
             }
 
@@ -324,6 +360,14 @@ public sealed class LocalApiServer : IDisposable
         {
             try { response.Close(); } catch { }
         }
+    }
+
+    /// <summary>Write an already-serialized body (the cue router returns JSON, not objects).</summary>
+    private static async Task WriteRawJsonAsync(HttpListenerResponse response, string json)
+    {
+        response.ContentType = "application/json";
+        response.Headers["Cache-Control"] = "no-store";
+        await WriteTextAsync(response, json).ConfigureAwait(false);
     }
 
     public void Dispose()
