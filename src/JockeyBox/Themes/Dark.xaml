@@ -92,6 +92,19 @@
         </Setter>
     </Style>
 
+    <!-- The one stepper geometry. A -/field/+ cluster is 18 px tall with 3 px
+         between its boxes wherever it appears, so the TEMPO cluster and the
+         karaoke DELAY cluster cannot drift into two shapes. The field beside a
+         nudge is the global TextBox with MinHeight 18 and no vertical padding:
+         it derives ~15 px from a 10 px font, the floor lifts it to the nudges'
+         18, and the three boxes line up exactly. -->
+    <Style x:Key="StepperNudge" TargetType="RepeatButton" BasedOn="{StaticResource NudgeButton}">
+        <Setter Property="Width" Value="20"/>
+        <Setter Property="Height" Value="18"/>
+        <Setter Property="FontSize" Value="10"/>
+        <Setter Property="VerticalAlignment" Value="Center"/>
+    </Style>
+
     <!-- ============ TextBox ============ -->
     <!-- Height is derived from the font, never fixed: the field grows with its
          text so the whole line box (ascent + descent + line gap) fits inside
@@ -245,7 +258,13 @@
                     <Grid VerticalAlignment="Center">
                         <Border Height="5" CornerRadius="2.5" Background="{StaticResource PanelAltBrush}"
                                 BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"/>
-                        <Track x:Name="PART_Track">
+                        <!-- Inset by half the 14 px thumb, so the thumb's centre
+                             stops one radius short of each end and the circle stays
+                             inside its own groove. Without it the deck scrub at
+                             position 0 (or at the end of a track) hung its knob
+                             over the edge of the track and past the card's inner
+                             edge. -->
+                        <Track x:Name="PART_Track" Margin="7,0">
                             <Track.DecreaseRepeatButton>
                                 <RepeatButton Style="{StaticResource SliderRepeat}" Command="Slider.DecreaseLarge"/>
                             </Track.DecreaseRepeatButton>
