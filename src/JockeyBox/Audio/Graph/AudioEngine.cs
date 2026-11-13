@@ -437,6 +437,13 @@ public sealed class AudioEngine : IDisposable
 
     private Action<float[], int>? _capture;
     private Action<float[], int>? _captureMonitor;
+
+    /// <summary>
+    /// Optional listener for the post-fan-out program mix (deck A bus + deck B bus),
+    /// one block per call. Used by <c>--audiotrace --wav</c> to write what the decks
+    /// actually produce to a file the operator can play.
+    /// </summary>
+    public Action<float[], int>? ProgramCapture { get; set; }
     private Action<BusKind, float[], int>? _busCapture;
     private double _offlineSeconds;
     private long _offlineFrames;
@@ -800,7 +807,12 @@ public sealed class AudioEngine : IDisposable
             _traceBusPeak[(int)bus.Kind] = Samples.Peak(bus.Input, 0, BlockFrames * Channels);
         }
 
-        _capture?.Invoke(ProgramTap(deckABus, deckBBus), BlockFrames);
+        if (_capture != null || ProgramCapture != null)
+        {
+            var program = ProgramTap(deckABus, deckBBus);
+            _capture?.Invoke(program, BlockFrames);
+            ProgramCapture?.Invoke(program, BlockFrames);
+        }
         _captureMonitor?.Invoke(monitor, BlockFrames);
         if (_busCapture != null)
             foreach (var bus in _buses) _busCapture(bus.Kind, bus.Output, BlockFrames);
@@ -842,7 +854,11 @@ public sealed class AudioEngine : IDisposable
         foreach (var output in _outputs)
         {
             var sink = output.Sink;
+            var stats = output.TakeStats();
             sb.Append($"device '{sink.DeviceName}' [sink={output.LastPeak:0.0000} " +
+                      $"L={stats.PeakL:0.0000} R={stats.PeakR:0.0000} " +
+                      $"rmsL={stats.RmsL:0.0000} rmsR={stats.RmsR:0.0000} " +
+                      $"corr={stats.Correlation:+0.000;-0.000;0.000} " +
                       $"buses={string.Join('+', output.Buses.Select(b => b.Kind.ToString()))} " +
                       $"depth={sink.Ring.DepthFrames}f under={sink.Ring.UnderrunFrames} " +
                       $"dropped={sink.Ring.DroppedBlocks} playing={sink.IsPlaying}] ");

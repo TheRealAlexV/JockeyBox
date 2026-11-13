@@ -59,6 +59,7 @@ internal static class AudioTrace
             Console.Error.WriteLine($"audiotrace: deck B track not found: {trackB}");
             return 2;
         }
+        string? wavPath = ValueOf(args, "--wav");
 
         var settings = AppSettings.Load();
         var route = DualDeckTransport.BuildRouteFromAppSettings(settings);
@@ -81,6 +82,7 @@ internal static class AudioTrace
 
         using var echo = new LogEcho(Console.Out);
         var engine = new AudioEngine();
+        WavDump? dump = null;
         int exit = 0;
         try
         {
@@ -102,6 +104,13 @@ internal static class AudioTrace
             {
                 Console.Error.WriteLine("audiotrace: no bus has a device - nothing to open");
                 return 3;
+            }
+
+            if (wavPath != null)
+            {
+                dump = new WavDump(wavPath);
+                engine.ProgramCapture = dump.Write;
+                Console.WriteLine($"audiotrace: writing program mix to {dump.Path}");
             }
 
             engine.Start();
@@ -147,6 +156,20 @@ internal static class AudioTrace
         {
             engine.Stop();
             engine.Dispose();
+
+            if (dump != null)
+            {
+                dump.Dispose();
+                var s = WavDump.Measure(dump.Path);
+                Console.WriteLine($"wav: {s.Path}");
+                Console.WriteLine($"wav: {s.Seconds:0.000}s {s.Frames} frames @ {s.SampleRate} Hz {s.Channels} ch");
+                Console.WriteLine($"wav: peakL={s.PeakL:0.0000} peakR={s.PeakR:0.0000} " +
+                                  $"rmsL={s.RmsL:0.0000} rmsR={s.RmsR:0.0000} " +
+                                  $"dcL={s.DcL:+0.000000;-0.000000;0.000000} dcR={s.DcR:+0.000000;-0.000000;0.000000} " +
+                                  $"corr={s.Correlation:+0.000;-0.000;0.000}");
+                Console.WriteLine("wav: bands " +
+                    string.Join(" ", s.Bands.Select(b => $"{b.Band}={b.Rms:0.000000}")));
+            }
         }
 
         return exit;
