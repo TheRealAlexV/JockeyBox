@@ -117,6 +117,13 @@ public sealed class LegacyImporter
                 var (tracks, skips) = ReadLibrary(libraryPath);
                 skipped += skips;
                 _tracks.UpsertMany(tracks, _tracks.BeginScan());
+
+                // Same prune policy as the scan. library.json is the source of
+                // truth this mirror is built from, so a row it no longer lists
+                // is retired here too. The mirror used to be insert/update only,
+                // which is how library.db kept tracks that could never play
+                // after a scan had already dropped them from the json.
+                _tracks.PruneExcept(tracks.Select(t => t.Path).ToList());
                 _db.SetInfo(LibraryJsonStampKey, libraryStamp.ToString(System.Globalization.CultureInfo.InvariantCulture));
                 report = report with { Tracks = tracks.Count, Skipped = skipped };
             }

@@ -135,9 +135,9 @@ public class LibraryScanner
             track.Artist = FirstNonEmpty(source?.Artist, track.Artist);
         }
 
-        _tagCache.Prune(list.SelectMany(t => new[] { t.KaraokePath, t.MusicPath })
-                            .Where(p => p != null)!);
-        _tagCache.Save();
+        // Pruning is the caller's job, because it must happen to the database in
+        // the same pass (see MainViewModel.PruneVanished): a scan alone must not
+        // forget a file while another store still lists it.
         return list;
     }
 

@@ -703,6 +703,18 @@ public partial class MainViewModel : ObservableObject, IDisposable
             if (ct.IsCancellationRequested) return;
             scanFinished = true;
 
+            // One scan result, one prune policy, both stores - and only when the
+            // scan could see its roots. An offline folder ("no files at all")
+            // must not be read as "every file deleted".
+            if (Data.LibraryPrune.RootsReachable(music, karaoke))
+                Data.LibraryPrune.Apply(
+                    list.SelectMany(t => new[] { t.MusicPath, t.KaraokePath }),
+                    _tagCache,
+                    Data.LibraryDatabase.Tracks);
+            else
+                Log.Warn($"scan: library folder unreachable ({music} / {karaoke}); " +
+                         "keeping library.db and library.json as they are");
+
             _separation.RebindEntries(list);
 
             // Suppress the per-row invalidation: 5,000 rows would bump the

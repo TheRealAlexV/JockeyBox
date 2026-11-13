@@ -221,6 +221,39 @@ public sealed class TrackRepository
     });
 
     /// <summary>
+    /// Delete every row the caller did not report as present: the single prune
+    /// policy the scan applies, so a retires in the same pass as the tag cache it
+    /// is scanned into. Returns how many rows went.
+    ///
+    /// <para><b>Callers must only pass a scan they trust.</b> "Nothing seen" is
+    /// indistinguishable from "every file gone", so a library folder that is
+    /// merely offline (unplugged drive, unreachable share) must skip the prune
+    /// entirely rather than call this with an empty list.</para>
+    ///
+    /// <para><b>Child rows</b> follow the row through the schema's own rules:
+    /// <c>karaoke_assets</c> and <c>hot_cues</c> are <c>ON DELETE CASCADE</c> - a
+    /// cue is a timestamp inside audio that no longer exists, and the karaoke
+    /// render has its own row when the file itself is still on disk.
+    /// <c>track_lyrics</c> is <c>ON DELETE SET NULL</c>, because a lyric document
+    /// belongs to the song and can be re-attached. <c>playlist_items</c> has no
+    /// FK on purpose (see the schema): membership survives, and the row renders
+    /// from its stored display columns instead of breaking the playlist.</para>
+    /// </summary>
+    public int PruneExcept(IReadOnlyCollection<string> presentPaths) => _db.WriteTransaction(conn =>
+    {
+        var keys = System.Text.Json.JsonSerializer.Serialize(
+            presentPaths.Where(p => !string.IsNullOrWhiteSpace(p))
+                        .Select(LibraryKeys.PathKey)
+                        .Distinct()
+                        .ToArray());
+
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "DELETE FROM tracks WHERE path_key NOT IN (SELECT value FROM json_each(@keys));";
+        cmd.Parameters.AddWithValue("@keys", keys);
+        return cmd.ExecuteNonQuery();
+    });
+
+    /// <summary>
     /// Mirror an analysed beat grid onto a track row. Returns false when the path
     /// is not in the library (a file outside the scanned folders) or the DB is
     /// read-only; the JSON beat-grid document stays authoritative either way.
