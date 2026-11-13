@@ -880,10 +880,22 @@ internal static class UiShot
     /// plus any ancestor whose <see cref="UIElement.ClipToBounds"/> is set or that has
     /// a non-null <see cref="UIElement.Clip"/>; a non-rectangular clip is treated as
     /// its bounding box, which is enough to separate "outside" from "inside".
+    ///
+    /// <para><c>hidden</c> when the block took no part in layout at all: its own
+    /// visibility is not <see cref="Visibility.Visible"/>, or an ancestor up to the
+    /// root is collapsed. Such a block keeps the arrange coordinates it had before
+    /// whatever collapsed it, so "outside the window" describes a stale rectangle
+    /// rather than the app, and reading it as clipped has produced two wrong
+    /// conclusions in a row: a karaoke cluster called "wider than the card and cut
+    /// by it" when the row did not exist, and deck B phantoms at x≈1041-1153 in a
+    /// 1040-pixel-wide window. Named rather than dropped, so a block that really is
+    /// cut still reaches the <c>clipped</c> arm below and this exclusion cannot pass
+    /// for a mute.</para>
     /// </summary>
     private static string ClipState(TextBlock textBlock, Visual? root)
     {
         if (root is not FrameworkElement rootElement) return "unknown";
+        if (!LaidOut(textBlock, rootElement)) return "hidden";
 
         Rect region = new Rect(0, 0, rootElement.ActualWidth, rootElement.ActualHeight);
         Rect bounds;
@@ -918,6 +930,23 @@ internal static class UiShot
         }
 
         return region.Contains(bounds) ? "inside" : "clipped";
+    }
+
+    /// <summary>
+    /// Whether <paramref name="element"/> and every ancestor up to the captured root
+    /// are <see cref="Visibility.Visible"/>, i.e. whether it was laid out at all.
+    /// </summary>
+    private static bool LaidOut(DependencyObject element, FrameworkElement root)
+    {
+        DependencyObject? current = element;
+        while (current != null)
+        {
+            if (current is FrameworkElement fe && fe.Visibility != Visibility.Visible) return false;
+            if (ReferenceEquals(current, root)) break;
+            current = current is Visual ? VisualTreeHelper.GetParent(current) : LogicalTreeHelper.GetParent(current);
+        }
+
+        return true;
     }
 
     /// <summary>
