@@ -490,10 +490,16 @@ public sealed class DualDeckTransport : IDisposable
 
     public bool IsDeckPlaying(PlaybackDeck deck) => Channel(deck).State == TransportState.Playing;
 
-    /// <summary>Load a track onto a deck (non-blocking; failures arrive via StateChanged).</summary>
-    public void LoadOnDeck(PlaybackDeck deck, string? primaryPath, string? karaokePath)
+    /// <summary>
+    /// Load a track onto a deck (non-blocking; failures arrive via StateChanged).
+    /// <paramref name="vocalsPath"/> is the reverse-render take, when the library has
+    /// one beside the source: resident as the third stem so the deck can switch to
+    /// it without re-pointing a reader.
+    /// </summary>
+    public void LoadOnDeck(PlaybackDeck deck, string? primaryPath, string? karaokePath,
+                           string? vocalsPath = null)
     {
-        Channel(deck).Load(primaryPath, karaokePath);
+        Channel(deck).Load(primaryPath, karaokePath, vocalsPath);
 
         // The load funnel is the one place the A-B link self-selects: a karaoke
         // pair filling both decks is the operator's "play it on both" case, and

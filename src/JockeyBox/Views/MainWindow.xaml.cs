@@ -47,6 +47,10 @@ public partial class MainWindow : Window
 
         // Play/Pause glyph follows VM changes; each deck card owns its waveform.
         UpdatePlayGlyph();
+        // The transport row's link and sync switches, and the cue banks, are wired
+        // from a partial beside MainViewModel; its constructor belongs to another
+        // lane, so the window is what calls the init hook.
+        Loaded += (_, _) => _vm.InitializeDeckUi();
         _vm.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName == nameof(MainViewModel.IsPlaying)) UpdatePlayGlyph();

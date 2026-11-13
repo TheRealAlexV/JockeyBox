@@ -73,6 +73,7 @@
                         <RowDefinition Height="Auto"/>   <!-- transport buttons -->
                         <RowDefinition Height="Auto"/>   <!-- scrub: own line -->
                         <RowDefinition Height="Auto"/>   <!-- karaoke sub-stem -->
+                        <RowDefinition Height="Auto"/>   <!-- cue bank -->
                     </Grid.RowDefinitions>
 
                     <!-- Header: deck name, active marker, local time readout.
@@ -82,6 +83,27 @@
                     <DockPanel Grid.Row="0" Grid.ColumnSpan="3">
                         <TextBlock Text="{Binding Title}" FontSize="11" FontWeight="Bold"
                                    Foreground="{DynamicResource DeckAccent}" VerticalAlignment="Center"/>
+                        <!-- Version submenu: built from what is on disk when the track
+                             loads. Switching crossfades over resident readers, so it
+                             is seamless; a track with one version shows a disabled
+                             menu whose tooltip says why instead of an empty popup. -->
+                        <Menu DockPanel.Dock="Right" Margin="8,0,0,0" VerticalAlignment="Center"
+                              Background="Transparent" IsMainMenu="False">
+                            <MenuItem Header="{Binding VersionLabel}" FontSize="9" FontWeight="Bold"
+                                      Padding="7,3" IsEnabled="{Binding CanSwitchVersion}"
+                                      ToolTip="{Binding VersionHint}"
+                                      ItemsSource="{Binding Versions}">
+                                <MenuItem.ItemContainerStyle>
+                                    <Style TargetType="MenuItem">
+                                        <Setter Property="Header" Value="{Binding MenuText}"/>
+                                        <Setter Property="ToolTip" Value="{Binding Reason}"/>
+                                        <Setter Property="IsEnabled" Value="{Binding IsAvailable}"/>
+                                        <Setter Property="Command" Value="{Binding SelectCommand}"/>
+                                        <Setter Property="CommandParameter" Value="{Binding}"/>
+                                    </Style>
+                                </MenuItem.ItemContainerStyle>
+                            </MenuItem>
+                        </Menu>
                         <Button DockPanel.Dock="Right" Margin="8,0,0,0"
                                 Command="{Binding ActivateCommand}"
                                 ToolTip="Route the shared seek bar and the lyrics clock to this deck">
@@ -313,6 +335,128 @@
                             </DockPanel>
                         </Grid>
                     </Border>
+
+                    <!-- Cue bank: eight saved pads plus the quick cue in one
+                         bordered strip, so the nine read as a bank and not as
+                         loose buttons. Occupied and empty differ by shape and
+                         text (solid outline + position vs dashed outline + dash),
+                         never by tint alone. 44 px pads: a gig is a touch target. -->
+                    <Grid Grid.Row="8" Grid.ColumnSpan="3" Margin="0,6,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="50"/>
+                            <ColumnDefinition Width="8"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid.Resources>
+                            <Style x:Key="CuePad" TargetType="Button"
+                                   BasedOn="{StaticResource {x:Type Button}}">
+                                <Setter Property="Width" Value="44"/>
+                                <Setter Property="Height" Value="44"/>
+                                <Setter Property="Padding" Value="0"/>
+                                <Setter Property="Margin" Value="0,0,3,0"/>
+                                <Setter Property="Background" Value="Transparent"/>
+                                <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+                                <Setter Property="Template">
+                                    <Setter.Value>
+                                        <ControlTemplate TargetType="Button">
+                                            <Grid>
+                                                <Rectangle x:Name="frame" RadiusX="3" RadiusY="3"
+                                                           Stroke="{StaticResource BorderBrush}"
+                                                           StrokeThickness="1" StrokeDashArray="2 2"
+                                                           Fill="{TemplateBinding Background}"/>
+                                                <StackPanel VerticalAlignment="Center"
+                                                            HorizontalAlignment="Center">
+                                                    <TextBlock x:Name="slotText" Text="{Binding SlotText}"
+                                                               FontSize="10" FontWeight="Bold"
+                                                               HorizontalAlignment="Center"
+                                                               Foreground="{TemplateBinding Foreground}"/>
+                                                    <TextBlock x:Name="posText" Text="{Binding PositionText}"
+                                                               FontFamily="Consolas" FontSize="9"
+                                                               Margin="0,1,0,0"
+                                                               HorizontalAlignment="Center"
+                                                               Foreground="{TemplateBinding Foreground}"/>
+                                                </StackPanel>
+                                            </Grid>
+                                            <ControlTemplate.Triggers>
+                                                <DataTrigger Binding="{Binding HasPosition}" Value="True">
+                                                    <Setter TargetName="frame" Property="Stroke"
+                                                            Value="{StaticResource TextDimBrush}"/>
+                                                    <Setter TargetName="frame" Property="StrokeDashArray"
+                                                            Value="{x:Null}"/>
+                                                    <Setter TargetName="frame" Property="Fill"
+                                                            Value="{StaticResource PanelAltBrush}"/>
+                                                    <Setter TargetName="slotText" Property="Foreground"
+                                                            Value="{StaticResource TextBrush}"/>
+                                                    <Setter TargetName="posText" Property="Foreground"
+                                                            Value="{StaticResource TextBrush}"/>
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding IsQuick}" Value="True">
+                                                    <Setter Property="Margin" Value="8,0,3,0"/>
+                                                </DataTrigger>
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter TargetName="frame" Property="Stroke"
+                                                            Value="{StaticResource TextBrush}"/>
+                                                </Trigger>
+                                                <Trigger Property="IsKeyboardFocused" Value="True">
+                                                    <Setter TargetName="frame" Property="Stroke"
+                                                            Value="{StaticResource TextBrush}"/>
+                                                    <Setter TargetName="frame" Property="StrokeThickness" Value="2"/>
+                                                </Trigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </Setter.Value>
+                                </Setter>
+                            </Style>
+                        </Grid.Resources>
+
+                        <TextBlock Grid.Column="0" Text="CUES" FontSize="9" FontWeight="Bold"
+                                   Foreground="{StaticResource TextDimBrush}" VerticalAlignment="Center"/>
+
+                        <Border Grid.Column="2" BorderBrush="{StaticResource BorderBrush}"
+                                BorderThickness="1" CornerRadius="3" Padding="3">
+                            <DockPanel>
+                                <!-- Clear mode says so on the control itself: CLEAR
+                                     arms it, the label becomes DONE, and the border
+                                     and weight change with it, so the armed state
+                                     never rests on colour alone. -->
+                                <Button DockPanel.Dock="Right" MinWidth="44" Height="44"
+                                        Margin="4,0,0,0" FontSize="9" FontWeight="Bold"
+                                        Command="{Binding Cues.ToggleClearModeCommand}"
+                                        Content="{Binding Cues.ClearModeText}"
+                                        ToolTip="Clear mode: while on, pressing a pad removes its cue">
+                                    <Button.Style>
+                                        <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                            <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding Cues.IsClearing}" Value="True">
+                                                    <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+                                                    <Setter Property="BorderBrush" Value="{StaticResource TextDimBrush}"/>
+                                                    <Setter Property="FontSize" Value="9"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Button.Style>
+                                </Button>
+                                <ItemsControl ItemsSource="{Binding Cues.Pads}" VerticalAlignment="Center">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <WrapPanel Orientation="Horizontal"/>
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <Button Style="{StaticResource CuePad}"
+                                                    CommandParameter="{Binding}"
+                                                    Command="{Binding DataContext.Cues.PressCommand,
+                                                              RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                    ToolTip="{Binding ToolTip}"
+                                                    AutomationProperties.Name="{Binding PadText}"/>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </DockPanel>
+                        </Border>
+                    </Grid>
                 </Grid>
             </Border>
         </DataTemplate>
@@ -1078,9 +1222,58 @@
 
                 <!-- Deck activation + download queue -->
                 <StackPanel Grid.Column="4" Orientation="Horizontal" VerticalAlignment="Center">
+                    <!-- Link and sync switches. Each carries a state glyph column
+                         of fixed width, so engaged and disengaged differ by text
+                         and weight as well as by tint, and nothing shifts sideways
+                         when one is pressed. -->
+                    <StackPanel.Resources>
+                        <Style x:Key="SyncSwitch" TargetType="ToggleButton">
+                            <Setter Property="Height" Value="26"/>
+                            <Setter Property="FontSize" Value="9"/>
+                            <Setter Property="FontWeight" Value="Bold"/>
+                            <Setter Property="Padding" Value="6,2"/>
+                            <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+                            <Setter Property="Background" Value="{StaticResource PanelAltBrush}"/>
+                            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
+                            <Setter Property="BorderThickness" Value="1"/>
+                            <Setter Property="Cursor" Value="Hand"/>
+                            <Setter Property="Template">
+                                <Setter.Value>
+                                    <ControlTemplate TargetType="ToggleButton">
+                                        <Border x:Name="bd" Background="{TemplateBinding Background}"
+                                                BorderBrush="{TemplateBinding BorderBrush}"
+                                                BorderThickness="{TemplateBinding BorderThickness}"
+                                                CornerRadius="3">
+                                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center"
+                                                        Margin="{TemplateBinding Padding}">
+                                                <TextBlock x:Name="state" Text="" Width="12"
+                                                           FontFamily="Consolas" FontSize="10"
+                                                           VerticalAlignment="Center"/>
+                                                <ContentPresenter VerticalAlignment="Center"/>
+                                            </StackPanel>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsChecked" Value="True">
+                                                <Setter TargetName="state" Property="Text" Value="&#x2713;"/>
+                                                <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+                                                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource TextDimBrush}"/>
+                                            </Trigger>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource TextBrush}"/>
+                                            </Trigger>
+                                            <Trigger Property="IsEnabled" Value="False">
+                                                <Setter Property="Opacity" Value="0.45"/>
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </Setter.Value>
+                            </Setter>
+                        </Style>
+                    </StackPanel.Resources>
+
                     <Button Content="A" FontSize="10" Padding="8,3" Margin="0,0,4,0"
-                            Command="{Binding ActivateDeckACommand}"
-                            ToolTip="Make deck A the active deck (seek bar + lyrics clock)">
+                            Command="{Binding SelectDeckACommand}"
+                            ToolTip="Make deck A the active deck (seek bar + lyrics clock). Drops the A-B link.">
                         <Button.Style>
                             <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
                                 <Setter Property="FontSize" Value="10"/>
@@ -1094,9 +1287,9 @@
                             </Style>
                         </Button.Style>
                     </Button>
-                    <Button Content="B" Margin="0,0,8,0"
-                            Command="{Binding ActivateDeckBCommand}"
-                            ToolTip="Make deck B the active deck (seek bar + lyrics clock)">
+                    <Button Content="B" Margin="0,0,4,0"
+                            Command="{Binding SelectDeckBCommand}"
+                            ToolTip="Make deck B the active deck (seek bar + lyrics clock). Drops the A-B link.">
                         <Button.Style>
                             <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
                                 <Setter Property="FontSize" Value="10"/>
@@ -1110,6 +1303,49 @@
                             </Style>
                         </Button.Style>
                     </Button>
+
+                    <!-- A-B link: transport commands address both decks. Wider and
+                         bolder than the sync switches so the row reads as the link
+                         plus three things that depend on it. -->
+                    <ToggleButton Margin="4,0,0,0" MinWidth="52" Height="26"
+                                  FontSize="10" Padding="8,2"
+                                  IsChecked="{Binding IsABMode, Mode=TwoWay}"
+                                  ToolTip="A-B link: play, seek, stop and volume act on both decks at once">
+                        <ToggleButton.Style>
+                            <Style TargetType="ToggleButton" BasedOn="{StaticResource SyncSwitch}">
+                                <Setter Property="FontSize" Value="10"/>
+                                <Setter Property="Padding" Value="8,2"/>
+                                <Setter Property="Margin" Value="4,0,0,0"/>
+                                <Setter Property="MinWidth" Value="52"/>
+                            </Style>
+                        </ToggleButton.Style>
+                        <ToggleButton.Content>
+                            <TextBlock Text="A-B" FontWeight="Bold"/>
+                        </ToggleButton.Content>
+                    </ToggleButton>
+
+                    <!-- Three switches that only mean anything with the link on, so
+                         they are disabled otherwise instead of quietly doing nothing. -->
+                    <Border Margin="6,0,8,0" Padding="6,0" CornerRadius="3"
+                            BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <TextBlock Text="SYNC" FontSize="8" Margin="0,0,6,0"
+                                       Foreground="{StaticResource TextBrush}"
+                                       VerticalAlignment="Center"/>
+                            <ToggleButton Style="{StaticResource SyncSwitch}" Margin="0,0,4,0"
+                                          Content="DECK" IsEnabled="{Binding IsSyncAvailable}"
+                                          IsChecked="{Binding IsDeckSync, Mode=TwoWay}"
+                                          ToolTip="Master/slave playhead: the active deck drives the other"/>
+                            <ToggleButton Style="{StaticResource SyncSwitch}" Margin="0,0,4,0"
+                                          Content="VOL" IsEnabled="{Binding IsSyncAvailable}"
+                                          IsChecked="{Binding IsVolumeSync, Mode=TwoWay}"
+                                          ToolTip="One fader move, both decks (needs the A-B link)"/>
+                            <ToggleButton Style="{StaticResource SyncSwitch}"
+                                          Content="TEMPO" IsEnabled="{Binding IsSyncAvailable}"
+                                          IsChecked="{Binding IsTempoSync, Mode=TwoWay}"
+                                          ToolTip="One tempo move, both decks (needs the A-B link)"/>
+                        </StackPanel>
+                    </Border>
 
                     <!-- Download queue: compact entry point with an active-count badge -->
                     <Button Command="{Binding ShowDownloadsCommand}"

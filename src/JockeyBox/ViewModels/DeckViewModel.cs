@@ -4,7 +4,10 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using JockeyBox.Audio;
 using JockeyBox.Audio.Beat;
+using JockeyBox.Audio.Graph;
+using JockeyBox.Library;
 using JockeyBox.Playback;
+using JockeyBox.Separation;
 
 namespace JockeyBox.ViewModels;
 
@@ -86,7 +89,121 @@ public partial class DeckViewModel : ObservableObject
             _transport.ApplyDeckSettingsChange(DeckTarget);
             _persistSettings();
         };
+
+        // The pad bank reads the media clock directly: a cue captured from the
+        // audible clock would land late by the output delay.
+        Cues = new CueBankViewModel(
+            MainViewModel.CueDeckOf(deckTarget),
+            () => _channel.MediaPositionSeconds,
+            seconds => _channel.Seek(TimeSpan.FromSeconds(seconds)),
+            () => MainViewModel.HotCueStore);
     }
+
+    /// <summary>Eight saved pads plus the quick cue, bound in the card's pad bank.</summary>
+    public CueBankViewModel Cues { get; }
+
+    /// <summary>
+    /// The takes this track has on disk, as a submenu: only what
+    /// <c>KaraokeNaming.DiscoverVariants</c> reports, built when the track loads.
+    /// Switching one calls <c>SetStemMode</c>, which crossfades over readers that
+    /// are already resident, so the change is seamless.
+    /// </summary>
+    public ObservableCollection<DeckVersion> Versions { get; } = new();
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(VersionLabel))]
+    private DeckVersion? _selectedVersion;
+
+    /// <summary>The version menu's own label: what the deck plays right now.</summary>
+    public string VersionLabel => SelectedVersion?.Label ?? "VERSION";
+
+    /// <summary>False when the track has nothing to switch to, so the menu cannot open.</summary>
+    public bool CanSwitchVersion => Versions.Count(v => v.IsAvailable) > 1;
+
+    /// <summary>Why the version menu is not usable, shown as its tooltip.</summary>
+    public string VersionHint => CanSwitchVersion
+        ? "Which take this deck plays"
+        : "This track has only one version on disk";
+
+    [RelayCommand]
+    private void SelectVersion(DeckVersion? version)
+    {
+        if (version is not { IsAvailable: true }) return;
+
+        // 25 ms: short enough to feel instant, long enough that the switch is a
+        // crossfade over the resident readers instead of a click.
+        _channel.SetStemMode(version.Kind, 25);
+
+        foreach (var option in Versions) option.IsSelected = ReferenceEquals(option, version);
+        SelectedVersion = version;
+    }
+
+    /// <summary>
+    /// Build the version submenu from what is on disk. The deck has one
+    /// instrumental reader, so the file that was loaded as the partner is the one
+    /// the menu offers: a track whose only render is a keep-backing file gets
+    /// "Keep backing", never a second instrumental the deck cannot reach.
+    /// </summary>
+    private void SetVersions(string? musicPath, string? karaokePath, string? vocalsPath)
+    {
+        Versions.Clear();
+        SelectedVersion = null;
+
+        foreach (var option in BuildVersions(musicPath, karaokePath, vocalsPath))
+            Versions.Add(option);
+
+        var current = Versions.FirstOrDefault(v => v.IsAvailable);
+        if (current != null) SelectVersion(current);
+        else Versions.Clear();
+
+        foreach (var option in Versions) option.SelectCommand = SelectVersionCommand;
+
+        OnPropertyChanged(nameof(CanSwitchVersion));
+        OnPropertyChanged(nameof(VersionHint));
+    }
+
+    /// <summary>
+    /// The menu a track's files support. Split out from the deck so the mapping
+    /// (file on disk to menu entry) can be checked without a window or a channel.
+    /// A track with only an original yields that one entry, unavailable, which the
+    /// menu shows disabled with its reason rather than as an empty popup.
+    /// </summary>
+    internal static List<DeckVersion> BuildVersions(string? musicPath, string? karaokePath,
+                                                   string? vocalsPath)
+    {
+        var options = new List<DeckVersion>();
+        if (string.IsNullOrWhiteSpace(musicPath)) return options;
+
+        foreach (var variant in KaraokeNaming.DiscoverVariants(musicPath))
+        {
+            var option = variant switch
+            {
+                AudioVariant.Original => new DeckVersion("Original", StemKind.Original, true),
+                AudioVariant.Karaoke => HasFile(karaokePath, KaraokeNaming.Marker)
+                    ? new DeckVersion("Karaoke", StemKind.Karaoke, true)
+                    : null,
+                AudioVariant.Backing => HasFile(karaokePath, KaraokeNaming.BackingMarker)
+                    ? new DeckVersion("Keep backing", StemKind.Karaoke, true)
+                    : null,
+                AudioVariant.Vocals => string.IsNullOrWhiteSpace(vocalsPath)
+                    ? null
+                    : new DeckVersion("Vocals", StemKind.Vocals, true),
+                _ => null,
+            };
+
+            if (option != null) options.Add(option);
+        }
+
+        if (options.Count == 0)
+            options.Add(new DeckVersion("Original", StemKind.Original, false,
+                                        "No version of this track was found on disk"));
+
+        return options;
+    }
+
+    private static bool HasFile(string? path, string marker) =>
+        !string.IsNullOrWhiteSpace(path)
+        && System.IO.Path.GetFileNameWithoutExtension(path).EndsWith(marker, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Card title. Normally the ctor's name ("DECK A"); a karaoke pair renames the
@@ -160,10 +277,21 @@ public partial class DeckViewModel : ObservableObject
             HasKaraoke = false;
             IsPlaying = false;
             PlayGlyph = "\u25B6";
+            SetVersions(null, null, null);
+            Cues.SetTrack(null);
             return;
         }
 
-        _transport.LoadOnDeck(DeckTarget, musicPath, karaokePath);
+        // The scan pairs ".karaoke"; a track whose only render is the keep-backing
+        // one would otherwise reach the deck with no partner at all, so the deck
+        // fills the partner in from what is actually on disk. The vocals take is
+        // resident as the third stem, so the version menu can reach it without
+        // re-pointing a reader.
+        karaokePath ??= VariantPath(musicPath, AudioVariant.Karaoke)
+                        ?? VariantPath(musicPath, AudioVariant.Backing);
+        string? vocalsPath = VariantPath(musicPath, AudioVariant.Vocals);
+
+        _transport.LoadOnDeck(DeckTarget, musicPath, karaokePath, vocalsPath);
 
         TrackTitle = title;
         TrackDetail = string.IsNullOrWhiteSpace(artist)
@@ -171,6 +299,35 @@ public partial class DeckViewModel : ObservableObject
             : artist;
         IsLoaded = _channel.IsLoaded;
         HasKaraoke = _channel.HasKaraoke;
+
+        SetVersions(musicPath, karaokePath, vocalsPath);
+        Cues.SetTrack(musicPath);
+    }
+
+    /// <summary>The file a variant lives in beside the source, or null when none does.</summary>
+    internal static string? VariantPath(string? primaryPath, AudioVariant variant)
+    {
+        if (string.IsNullOrWhiteSpace(primaryPath) || variant == AudioVariant.Original) return null;
+
+        var mode = variant switch
+        {
+            AudioVariant.Backing => KaraokeStemMode.InstrumentalKeepBacking,
+            AudioVariant.Vocals => KaraokeStemMode.VocalsOnly,
+            _ => KaraokeStemMode.Instrumental,
+        };
+
+        string folder = System.IO.Path.GetDirectoryName(primaryPath) ?? "";
+        string stem = KaraokeNaming.BaseFileName(primaryPath);
+        if (folder.Length == 0 || stem.Length == 0) return null;
+
+        string marker = KaraokeNaming.MarkerOf(mode);
+        foreach (var extension in new[] { KaraokeNaming.RenderExtension, ".flac" })
+        {
+            string candidate = System.IO.Path.Combine(folder, stem + marker + extension);
+            if (System.IO.File.Exists(candidate)) return candidate;
+        }
+
+        return null;
     }
 
     /// <summary>Apply generated waveforms unless a newer track was loaded meanwhile.</summary>
@@ -365,4 +522,44 @@ public partial class DeckViewModel : ObservableObject
     {
         _channel.KaraokeGain = value; // applies live, no resync needed
     }
+}
+
+/// <summary>
+/// One entry in a deck's version submenu. <see cref="MenuText"/> carries the tick
+/// because the app's MenuItem template draws only a header, never a check box, so
+/// the selected take has to say so in its own text.
+/// </summary>
+public partial class DeckVersion : ObservableObject
+{
+    public DeckVersion(string label, StemKind kind, bool isAvailable, string? reason = null)
+    {
+        Label = label;
+        Kind = kind;
+        IsAvailable = isAvailable;
+        Reason = reason ?? label;
+    }
+
+    public string Label { get; }
+
+    /// <summary>Which resident stem this entry crossfades to.</summary>
+    public StemKind Kind { get; }
+
+    public bool IsAvailable { get; }
+
+    /// <summary>What the entry means, for the tooltip.</summary>
+    public string Reason { get; }
+
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(MenuText))]
+    private bool _isSelected;
+
+    /// <summary>
+    /// The deck's select command, carried on the entry itself: a menu popup sits
+    /// outside the card's visual tree, so a RelativeSource binding to the deck
+    /// would not resolve from inside it.
+    /// </summary>
+    public IRelayCommand? SelectCommand { get; set; }
+
+    /// <summary>The header text, with a trailing tick on the selected entry.</summary>
+    public string MenuText => IsSelected ? Label + "   \u2713" : Label;
 }
