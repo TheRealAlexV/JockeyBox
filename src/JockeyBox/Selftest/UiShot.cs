@@ -760,14 +760,19 @@ internal static class UiShot
 
                 lines.Append(depth.ToString(CultureInfo.InvariantCulture)).Append('\t')
                     .Append(string.IsNullOrEmpty(textBlock.Name) ? "-" : textBlock.Name).Append('\t')
-                    .Append(Escaped(text)).Append('\t')
+                    // The text field is the one thing this dump exists to show, so
+                    // it is the one field exempt from the 60-char cap: a status
+                    // that explains itself in 131 characters is unreadable at 60.
+                    .Append(Escaped(text, cap: 0)).Append('\t')
                     .Append(OneDecimal(textBlock.ActualWidth)).Append('x')
                     .Append(OneDecimal(textBlock.ActualHeight)).Append('\t')
                     .Append(textBlock.Visibility.ToString()).Append('\t')
                     .Append(textBlock.DataContext?.GetType().Name ?? "null").Append('\t')
                     .Append(BrushName(textBlock.Foreground)).Append('\t')
                     .Append(RootOffset(textBlock, root)).Append('\t')
-                    .Append(ClipState(textBlock, root)).Append('\n');
+                    .Append(ClipState(textBlock, root)).Append('\t')
+                    .Append(LineFit(textBlock, text)).Append('\t')
+                    .Append(ParentBox(textBlock)).Append('\n');
             }
 
             if (node is not Visual && node is not System.Windows.Media.Media3D.Visual3D) return;
@@ -1100,8 +1105,11 @@ internal static class UiShot
         }
     }
 
-    /// <summary>One field of the dump: newlines and tabs escaped, empty as <c>''</c>, 60 chars max.</summary>
-    private static string Escaped(string? raw)
+    /// <summary>
+    /// One field of the dump: newlines and tabs escaped, empty as <c>''</c>, 60
+    /// chars max unless the caller asks for another cap (<c>0</c> = no cap).
+    /// </summary>
+    private static string Escaped(string? raw, int cap = 60)
     {
         if (string.IsNullOrEmpty(raw)) return "''";
 
@@ -1117,7 +1125,81 @@ internal static class UiShot
             }
         }
 
-        return sb.Length > 60 ? sb.ToString(0, 60) : sb.ToString();
+        return cap > 0 && sb.Length > cap ? sb.ToString(0, cap) : sb.ToString();
+    }
+
+    /// <summary>
+    /// <c>laidOut/visible</c> for one block: how many lines the text wrapped into at
+    /// the width it was given, and how many of those fit in the height it was given.
+    ///
+    /// <para><b>Why.</b> A block whose text wraps to four lines but whose height is
+    /// capped at two shows two, and the PNG cannot say whether the rest exists. The
+    /// line count is measured with the same font metrics the block lays out with, at
+    /// the same width, so <c>laidOut</c> is the wrap and <c>visible</c> is the
+    /// consequence of the height: equal numbers mean nothing is hidden, and the
+    /// remainder is what a cap, a clip or a scroll is holding back.</para>
+    /// </summary>
+    private static string LineFit(TextBlock textBlock, string text)
+    {
+        if (text.Length == 0 || textBlock.ActualWidth <= 0) return "0/0";
+
+        var typeface = new Typeface(
+            textBlock.FontFamily, textBlock.FontStyle, textBlock.FontWeight, textBlock.FontStretch);
+        double pixelsPerDip = VisualTreeHelper.GetDpi(textBlock).PixelsPerDip;
+
+        FormattedText Measure(string value, double maxWidth) => new(
+            value, CultureInfo.CurrentUICulture, textBlock.FlowDirection, typeface,
+            textBlock.FontSize, Brushes.Black, null,
+            TextOptions.GetTextFormattingMode(textBlock), pixelsPerDip)
+        {
+            MaxTextWidth = maxWidth,
+        };
+
+        // The height of one unwrapped line, and the height the block asked for. An
+        // explicit LineHeight wins, the way the text engine treats it.
+        double lineHeight = textBlock.LineHeight;
+        if (double.IsNaN(lineHeight) || lineHeight <= 0)
+            lineHeight = Measure("Ag", 100000).Height;
+        if (lineHeight <= 0) return "?/?";
+
+        double wrapWidth = textBlock.ActualWidth - textBlock.Padding.Left - textBlock.Padding.Right;
+        if (wrapWidth <= 0) return "0/0";
+
+        int laidOut = Math.Max(1, (int)Math.Round(Measure(text, wrapWidth).Height / lineHeight));
+        // Half a pixel of slack: a line-height sum and the block height differ by
+        // sub-pixel rounding, and reporting 2 visible for 2.0001 lines of room is right.
+        int visible = (int)Math.Floor((textBlock.ActualHeight + 0.5) / lineHeight);
+        if (visible > laidOut) visible = laidOut;
+        if (visible < 0) visible = 0;
+
+        return $"{laidOut}/{visible}";
+    }
+
+    /// <summary>
+    /// The laid-out height of the block's parent panel: the row, not the text.
+    ///
+    /// <para><b>Why.</b> A block's own height cannot show that its row ran out of
+    /// room, because a block that is clipped still reports the height it asked
+    /// for. The parent can: when the parent is shorter than the block, the text is
+    /// laid out and then cut, which is the failure a text dump otherwise describes
+    /// as "all lines present".</para>
+    /// </summary>
+    private static string ParentBox(TextBlock textBlock)
+    {
+        DependencyObject? parent;
+        try
+        {
+            parent = VisualTreeHelper.GetParent(textBlock);
+        }
+        catch (Exception)
+        {
+            // Not connected to a tree yet.
+            return "?";
+        }
+
+        return parent is FrameworkElement element
+            ? $"{element.GetType().Name} {OneDecimal(element.ActualHeight)}"
+            : "?";
     }
 
     private static string OneDecimal(double value) => value.ToString("0.0", CultureInfo.InvariantCulture);
