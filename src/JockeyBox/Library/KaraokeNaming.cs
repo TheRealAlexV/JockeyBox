@@ -27,16 +27,28 @@ public static class KaraokeNaming
     public const string VocalsMarker = ".vocals";
 
     /// <summary>
+    /// Marker for a keep-backing render ("Song" + BackingMarker + ".mp3"). It is
+    /// separate from <see cref="Marker"/> because the two modes are two different
+    /// files: a plain instrumental and a keep-backing one used to share
+    /// "Song.karaoke.mp3", so the second render silently overwrote the first and
+    /// no library could hold both. Files written before this split keep the
+    /// karaoke name - nothing is renamed, so an old track simply has one
+    /// instrumental entry instead of two.
+    /// </summary>
+    public const string BackingMarker = ".backing";
+
+    /// <summary>
     /// Every karaoke render is MP3, whatever the source container was: the
     /// separation step emits WAV and the encode step writes the final file.
     /// </summary>
     public const string RenderExtension = ".mp3";
 
     /// <summary>
-    /// The one owner of (stem mode, source path) → rendered file path. An
-    /// instrumental and its backing-vocal variant share "Song.karaoke.mp3" (a
-    /// track has one instrumental); the vocals take is "Song.vocals.mp3" beside
-    /// it. Returns "" when the source has no folder or no base name.
+    /// The one owner of (stem mode, source path) → rendered file path. Each mode
+    /// has its own name: "Song.karaoke.mp3" for a plain instrumental,
+    /// "Song.backing.mp3" for the keep-backing variant and "Song.vocals.mp3" for
+    /// the reverse render, so one track can hold all three at once. Returns ""
+    /// when the source has no folder or no base name.
     /// </summary>
     public static string RenderPathFor(KaraokeStemMode mode, string? sourcePath)
     {
@@ -58,10 +70,16 @@ public static class KaraokeNaming
     public static string RenderName(KaraokeStemMode mode, string? baseName)
     {
         if (string.IsNullOrEmpty(baseName)) return "";
-        return baseName
-            + (mode == KaraokeStemMode.VocalsOnly ? VocalsMarker : Marker)
-            + RenderExtension;
+        return baseName + MarkerOf(mode) + RenderExtension;
     }
+
+    /// <summary>The marker a mode writes, so the name rule lives in one place.</summary>
+    public static string MarkerOf(KaraokeStemMode mode) => mode switch
+    {
+        KaraokeStemMode.VocalsOnly => VocalsMarker,
+        KaraokeStemMode.InstrumentalKeepBacking => BackingMarker,
+        _ => Marker,
+    };
 
     /// <summary>
     /// True when the file name already carries the marker ("Song.karaoke.flac").
@@ -83,7 +101,8 @@ public static class KaraokeNaming
     public static string BaseFileName(string? fileName)
     {
         var stem = StemOf(Path.GetFileName(fileName));
-        return IsKaraokeStem(stem) ? stem[..^Marker.Length] : stem;
+        var marker = MarkerIn(stem);
+        return marker.Length == 0 ? stem : stem[..^marker.Length];
     }
 
     /// <summary>
@@ -132,10 +151,48 @@ public static class KaraokeNaming
         if (stem.Length == 0) return name;    // ".mp3" has no base name to extend
 
         var extension = Path.GetExtension(name);
-        return IsKaraokeStem(stem)
-            ? stem[..^Marker.Length] + suffix + Marker + extension
-            : stem + suffix + extension;
+        var marker = MarkerIn(stem);
+        return marker.Length == 0
+            ? stem + suffix + extension
+            : stem[..^marker.Length] + suffix + marker + extension;
     }
+
+    /// <summary>
+    /// Which renders of a track actually exist on disk, in a fixed menu order:
+    /// <see cref="AudioVariant.Original"/>, <see cref="AudioVariant.Karaoke"/>,
+    /// <see cref="AudioVariant.Backing"/>, <see cref="AudioVariant.Vocals"/>.
+    ///
+    /// <para><b>Why probe instead of assume</b>: after the split an old track has
+    /// at most one instrumental render (its pre-split file still carries the
+    /// karaoke name) while a new one may have both, and vocals are optional. A
+    /// submenu built from this list offers only entries that will play.</para>
+    ///
+    /// <para>Renders are MP3 by rule (<see cref="RenderExtension"/>), but a
+    /// 1.5.x library can hold an .flac beside a downloaded .mp3, so both are
+    /// probed. Matching is case-insensitive on the marker only; the file system
+    /// decides the rest.</para>
+    /// </summary>
+    public static IReadOnlyList<AudioVariant> DiscoverVariants(string? primaryAudioPath)
+    {
+        var found = new List<AudioVariant>(4);
+        if (string.IsNullOrWhiteSpace(primaryAudioPath)) return found;
+
+        if (File.Exists(primaryAudioPath)) found.Add(AudioVariant.Original);
+
+        var folder = Path.GetDirectoryName(primaryAudioPath) ?? "";
+        var stem = BaseFileName(primaryAudioPath);
+        if (folder.Length == 0 || stem.Length == 0) return found;
+
+        if (VariantExists(folder, stem, Marker)) found.Add(AudioVariant.Karaoke);
+        if (VariantExists(folder, stem, BackingMarker)) found.Add(AudioVariant.Backing);
+        if (VariantExists(folder, stem, VocalsMarker)) found.Add(AudioVariant.Vocals);
+
+        return found;
+    }
+
+    private static bool VariantExists(string folder, string stem, string marker) =>
+        File.Exists(Path.Combine(folder, stem + marker + RenderExtension))
+        || File.Exists(Path.Combine(folder, stem + marker + ".flac"));
 
     private static string StemOf(string? fileName)
     {
@@ -143,7 +200,32 @@ public static class KaraokeNaming
         return Path.GetFileNameWithoutExtension(fileName) ?? "";
     }
 
-    private static bool IsKaraokeStem(string stem) =>
-        stem.Length > Marker.Length
-        && stem.EndsWith(Marker, StringComparison.OrdinalIgnoreCase);
+    private static bool IsKaraokeStem(string stem) => MarkerIn(stem).Length > 0;
+
+    /// <summary>
+    /// The karaoke marker a stem already carries, or "" for a plain file. Both
+    /// instrumental variants count: "Song.backing.mp3" is as much a render as
+    /// "Song.karaoke.mp3", so it must not become a library row of its own.
+    /// </summary>
+    private static string MarkerIn(string stem)
+    {
+        if (stem.Length <= Marker.Length) return "";
+        if (stem.EndsWith(Marker, StringComparison.OrdinalIgnoreCase)) return Marker;
+        if (stem.EndsWith(BackingMarker, StringComparison.OrdinalIgnoreCase)) return BackingMarker;
+        return "";
+    }
 }
+
+/// <summary>
+/// A playable take of one track, as an audio-variant submenu lists it. The order
+/// of the members is the order <see cref="KaraokeNaming.DiscoverVariants"/>
+/// reports: original first, then each render.
+/// </summary>
+public enum AudioVariant
+{
+    Original,
+    Karaoke,
+    Backing,
+    Vocals,
+}
+
