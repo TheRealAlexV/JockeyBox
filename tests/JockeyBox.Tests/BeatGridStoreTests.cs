@@ -187,4 +187,77 @@ public sealed class BeatGridStoreTests : IDisposable
         Assert.Equal(0.82, record.BpmConfidence, 3);
         Assert.Equal(412, record.FirstBeatMs);
     }
+
+    [Fact]
+    public void StaleTruncatedTempNeverReplacesTheGoodDocument()
+    {
+        using (var store = new BeatGridStore(DocumentPath, mirror: (_, _) => true))
+        {
+            for (var i = 0; i < 40; i++) store.Save($@"C:\Music\t{i}.mp3", Grid(120 + i));
+            store.Flush();
+        }
+
+        var good = File.ReadAllBytes(DocumentPath);
+
+        // The shape of a kill mid-write: the new document is half on the temp file,
+        // the live one is still the previous complete document.
+        File.WriteAllText(DocumentPath + ".tmp", "{\"c:\\\\music\\\\t0.mp3\":{\"bpm\":12");
+
+        using var reopened = new BeatGridStore(DocumentPath, mirror: (_, _) => true);
+
+        Assert.Equal(40, reopened.Count);
+        Assert.False(File.Exists(DocumentPath + ".tmp"));
+        Assert.Equal(good, File.ReadAllBytes(DocumentPath));
+    }
+
+    [Fact]
+    public void TruncatedDocumentIsQuarantinedByteForByteAndTheNextSaveDoesNotTouchIt()
+    {
+        using (var store = new BeatGridStore(DocumentPath, mirror: (_, _) => true))
+        {
+            for (var i = 0; i < 40; i++) store.Save($@"C:\Music\t{i}.mp3", Grid(120 + i));
+            store.Flush();
+        }
+
+        // A writer that was killed without the temp-then-rename dance left a
+        // prefix of a whole document in place.
+        var whole = File.ReadAllText(DocumentPath);
+        var truncated = whole[..(whole.Length / 2)];
+        File.WriteAllText(DocumentPath, truncated);
+
+        using var reopened = new BeatGridStore(DocumentPath, mirror: (_, _) => true);
+
+        Assert.Equal(0, reopened.Count);
+        Assert.False(File.Exists(DocumentPath));
+        Assert.Equal(truncated, File.ReadAllText(DocumentPath + ".corrupt"));
+
+        // Nothing in the store may write over the preserved bytes.
+        reopened.Save(@"C:\Music\new.mp3", Grid(128));
+        reopened.Flush();
+
+        Assert.Equal(truncated, File.ReadAllText(DocumentPath + ".corrupt"));
+        using var doc = JsonDocument.Parse(File.ReadAllText(DocumentPath));
+        Assert.Single(doc.RootElement.EnumerateObject());
+    }
+
+    [Fact]
+    public void CorruptDocumentThatCannotBeMovedAsideIsNeverOverwritten()
+    {
+        const string corrupt = "{ this is not json";
+        File.WriteAllText(DocumentPath, corrupt);
+
+        // A reader (a backup tool, an antivirus scan) holding the file open: the
+        // quarantine rename cannot land, so the bytes on disk are the only copy.
+        using (var held = new FileStream(DocumentPath, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            using var store = new BeatGridStore(DocumentPath, mirror: (_, _) => true);
+            Assert.Equal(0, store.Count);
+
+            store.Save(@"C:\Music\a.mp3", Grid(128));
+            store.Flush();
+        }
+
+        Assert.Equal(corrupt, File.ReadAllText(DocumentPath));
+        Assert.False(File.Exists(DocumentPath + ".corrupt"));
+    }
 }

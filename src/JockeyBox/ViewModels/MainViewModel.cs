@@ -9,6 +9,7 @@ using System.Windows.Threading;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using JockeyBox.Audio;
+using JockeyBox.Audio.Beat;
 using JockeyBox.Downloads;
 using JockeyBox.Library;
 using JockeyBox.Lyrics;
@@ -714,6 +715,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
             else
                 Log.Warn($"scan: library folder unreachable ({music} / {karaoke}); " +
                          "keeping library.db and library.json as they are");
+
+            // Analysis already on disk reaches both stores here rather than by
+            // re-running the analyser: one pass, once per database (it records a
+            // marker), at the point where the two stores are loaded and pruned.
+            // The scan itself fills the cache per track; this covers the grids
+            // that were measured before anything wrote them down.
+            if (_bpmStore is { Count: > 0 } gridStore)
+            {
+                var db = Data.LibraryDatabase.Current;
+                await Task.Run(() => BpmBackfill.Run(gridStore, _tagCache, db), ct);
+            }
 
             _separation.RebindEntries(list);
 

@@ -189,6 +189,13 @@ public partial class MainViewModel
     /// </summary>
     private void OnBeatAnalysed(string path, BeatGrid grid)
     {
+        // Persist before repainting. A row that shows a tempo the file does not
+        // state is a value that dies with the process: library.json is the durable
+        // copy the next scan reads (the store already mirrored the grid into the
+        // tracks columns when it saved it). Off the UI thread, so the write is not
+        // in the paint path; SetBpm is a no-op for a tag tempo.
+        if (grid.Bpm > 0 && _tagCache.SetBpm(path, grid.Bpm)) _tagCache.Save();
+
         var dispatcher = System.Windows.Application.Current?.Dispatcher;
         if (dispatcher == null) return;
 

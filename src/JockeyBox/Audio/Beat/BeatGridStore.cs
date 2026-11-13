@@ -76,6 +76,12 @@ public sealed class BeatGridStore : IBeatGridStore, IDisposable
     private long _lastWriteMs;
     private int _disposed;
 
+    /// <summary>
+    /// Set when a corrupt document could not be moved aside: the bytes on disk are
+    /// then the only copy of every grid in them, so no save may overwrite them.
+    /// </summary>
+    private bool _writeBlocked;
+
     /// <summary>Minimum spacing between background writes.</summary>
     private const int WriteIntervalMs = 1000;
 
@@ -142,6 +148,19 @@ public sealed class BeatGridStore : IBeatGridStore, IDisposable
         lock (_gate) return _grids.ContainsKey(key);
     }
 
+    /// <summary>
+    /// Every cached grid with its normalised path key, for passes that fill another
+    /// store from analysis (the BPM backfill). The key is the same normalisation
+    /// every consumer applies, so a caller does not need the original casing.
+    /// </summary>
+    public IReadOnlyList<KeyValuePair<string, BeatGrid>> Snapshot()
+    {
+        lock (_gate)
+            return _grids
+                .Select(kv => new KeyValuePair<string, BeatGrid>(kv.Key, kv.Value.Grid))
+                .ToList();
+    }
+
     /// <summary>Store a grid. Marks the document dirty; the flusher writes it.</summary>
     public void Save(string path, BeatGrid grid)
     {
@@ -200,6 +219,7 @@ public sealed class BeatGridStore : IBeatGridStore, IDisposable
             {
                 if (!_dirty) return;
                 _dirty = false;
+                if (_writeBlocked) return;
                 Interlocked.Exchange(ref _lastWriteMs, Environment.TickCount64);
                 snapshot = new Dictionary<string, EntryDto>(_grids.Count, StringComparer.OrdinalIgnoreCase);
                 foreach (var (key, entry) in _grids) snapshot[key] = EntryDto.From(entry);
@@ -269,13 +289,18 @@ public sealed class BeatGridStore : IBeatGridStore, IDisposable
         try
         {
             File.Move(_path, target, overwrite: true);
+            Log.Warn($"beat grid store: {_path} was corrupt ({reason}); starting empty, " +
+                     $"the document is kept as {target} and its tracks will be re-analysed");
         }
         catch (Exception ex)
         {
-            Log.Warn($"beat grid store: corrupt file could not be moved aside ({ex.Message})");
+            // Nothing preserved the bytes, so the next save would write an empty
+            // document over the only copy of every grid in it. Keep reading, refuse
+            // to write, and say so: this is the case that used to destroy a pass.
+            lock (_gate) { _writeBlocked = true; _dirty = false; }
+            Log.Warn($"beat grid store: {_path} was corrupt ({reason}) and could not be moved aside " +
+                     $"({ex.Message}); starting empty and refusing to write, so the corrupt document is not overwritten");
         }
-        Log.Warn($"beat grid store: {Path.GetFileName(_path)} was corrupt ({reason}); " +
-                 "starting empty (the old file is kept as .corrupt and tracks will be re-analysed)");
     }
 
     /// <summary>

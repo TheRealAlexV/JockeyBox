@@ -157,6 +157,37 @@ public class TagCache
         return result;
     }
 
+    /// <summary>
+    /// Record an analysed tempo on an entry the scan already cached, so the number
+    /// lands in library.json instead of living only in a row on screen.
+    ///
+    /// <para>Tag first, like <see cref="TrackBpmResolver"/>: a non-zero Bpm is the
+    /// file's own TBPM assertion and is never replaced by an estimate. No entry is
+    /// created either - a grid for a file the library no longer has must not
+    /// resurrect an entry the prune just removed.</para>
+    ///
+    /// <para>Returns true when the value changed, so the caller saves once instead
+    /// of on every grid. The caller owns <see cref="Save"/>: the scan writes this
+    /// out in the same save that prunes its vanished files.</para>
+    /// </summary>
+    public bool SetBpm(string path, double bpm)
+    {
+        if (string.IsNullOrWhiteSpace(path) || bpm <= 0) return false;
+        lock (_lock)
+        {
+            if (!_entries.TryGetValue(path, out var cached) || cached.Bpm > 0) return false;
+            cached.Bpm = bpm;
+            return true;
+        }
+    }
+
+    /// <summary>The tempo the cache holds for a path (0 when unknown).</summary>
+    public double BpmOf(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return 0;
+        lock (_lock) return _entries.TryGetValue(path, out var cached) ? cached.Bpm : 0;
+    }
+
     /// <summary>Drop cache entries for files that no longer exist in the library.</summary>
     public void Prune(IEnumerable<string> livingPaths)
     {

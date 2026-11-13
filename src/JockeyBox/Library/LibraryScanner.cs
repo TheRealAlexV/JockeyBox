@@ -103,6 +103,11 @@ public class LibraryScanner
                 // track whose file states no tempo, which keeps a rescan from
                 // dropping an estimate already shown.
                 track.Bpm = TrackBpmResolver.Resolve(tags.Bpm, BeatGridStore.Shared?.Get(metaSource));
+                // Write the winner into the cache as well, or the number exists only
+                // in this row and dies with the process. SetBpm is a no-op for a tag
+                // tempo, so this only ever adds an estimate; the save that follows
+                // this scan (LibraryPrune) is the one that puts it on disk.
+                if (track.Bpm > 0) _tagCache.SetBpm(metaSource, track.Bpm);
 
                 // Precedence: an explicit TKEY tag always wins. Only when the
                 // file states no key do we show the analysis estimate, which is
