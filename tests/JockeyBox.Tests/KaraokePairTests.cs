@@ -17,6 +17,7 @@ namespace JockeyBox.Tests;
 /// silently - the deck titles (a pair must not outlive its own load) and the
 /// queue's two-row unit (a mate must never start on its own).
 /// </summary>
+[Collection(nameof(UiThreadCollection))]
 public sealed class KaraokePairTests
 {
     // ---- the two required regression tests ---------------------------------

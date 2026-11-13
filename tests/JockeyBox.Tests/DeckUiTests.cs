@@ -18,6 +18,7 @@ namespace JockeyBox.Tests;
 /// channel, because the media clock versus the audible clock is the whole point of
 /// a cue.
 /// </summary>
+[Collection(nameof(UiThreadCollection))]
 public sealed class DeckUiTests
 {
     private sealed class Rig : IDisposable
@@ -32,7 +33,35 @@ public sealed class DeckUiTests
 
         public DeckChannel A => Transport.DeckA;
 
+        public DeckChannel B => Transport.DeckB;
+
         public AudioEngine Engine => Transport.Engine;
+
+        /// <summary>
+        /// The fake output path the other transport tests use: tell both channels an
+        /// output exists (a command is refused as a no-op otherwise) and drain the
+        /// render queues by hand, because no engine thread runs in the test host.
+        /// </summary>
+        public void Pump()
+        {
+            A.SetOutputAvailable(true);
+            B.SetOutputAvailable(true);
+            Engine.DeckA.Commands.Drain();
+            Engine.DeckB.Commands.Drain();
+        }
+
+        public bool PumpUntil(Func<bool> until, int milliseconds = 30_000)
+        {
+            for (int i = 0; i < milliseconds / 5; i++)
+            {
+                Pump();
+                if (until()) return true;
+                Thread.Sleep(5);
+            }
+
+            Pump();
+            return until();
+        }
 
         public void Dispose() => Transport.Dispose();
     }
@@ -46,69 +75,122 @@ public sealed class DeckUiTests
             return model;
         });
 
+    /// <summary>
+    /// Tear a view model down the way the window's closing path does. It owns a
+    /// transport, timers and stores, so a test that leaves one behind keeps a
+    /// render thread and a device handle alive for the rest of the run.
+    /// </summary>
+    private static void Drop(MainViewModel vm) => UiThread.Run(() => vm.Dispose());
+
+    [Fact]
+    public void TestHost_NeverStartsTheAudioEngine()
+    {
+        // TestHome seeds a settings file with every bus empty and the "a choice
+        // was saved" flag set, so BuildRoute returns a route with no output and
+        // Engine.Start() is never reached. This is the guard for that: if the
+        // suite ever opens a real WASAPI endpoint again, one test name says so
+        // instead of the whole host dying somewhere in the middle of a run.
+        var vm = Linked();
+        try
+        {
+            // No device means Engine.Start() was never reached: no WASAPI endpoint
+            // opened, no render thread spawned, nothing for a later run to leak.
+            Assert.False(vm.Transport.Engine.IsRunning);
+        }
+        finally
+        {
+            Drop(vm);
+        }
+    }
+
     // ------------------------------------------------------------------ the link
 
     [Fact]
     public void ABMode_DrivesTheTransportTarget()
     {
         var vm = Linked();
-        Assert.Equal(TransportTarget.Active, vm.Transport.Target);
+        try
+        {
+            Assert.Equal(TransportTarget.Active, vm.Transport.Target);
 
-        UiThread.Run(() => vm.IsABMode = true);
-        Assert.Equal(TransportTarget.Both, vm.Transport.Target);
-        Assert.True(vm.IsSyncAvailable);
+            UiThread.Run(() => vm.IsABMode = true);
+            Assert.Equal(TransportTarget.Both, vm.Transport.Target);
+            Assert.True(vm.IsSyncAvailable);
 
-        UiThread.Run(() => vm.IsABMode = false);
-        Assert.Equal(TransportTarget.Active, vm.Transport.Target);
-        Assert.False(vm.IsSyncAvailable);
+            UiThread.Run(() => vm.IsABMode = false);
+            Assert.Equal(TransportTarget.Active, vm.Transport.Target);
+            Assert.False(vm.IsSyncAvailable);
+        }
+        finally
+        {
+            Drop(vm);
+        }
     }
 
     [Fact]
     public void ABMode_FollowsTheTransportWhenALoadSelectsThePair()
     {
         var vm = Linked();
+        try
+        {
+            // A karaoke load sets the target itself; the switch has to report it.
+            UiThread.Run(() => vm.Transport.Target = TransportTarget.Both);
+            Assert.True(vm.IsABMode);
 
-        // A karaoke load sets the target itself; the switch has to report it.
-        UiThread.Run(() => vm.Transport.Target = TransportTarget.Both);
-        Assert.True(vm.IsABMode);
-
-        UiThread.Run(() => vm.Transport.Target = TransportTarget.Active);
-        Assert.False(vm.IsABMode);
+            UiThread.Run(() => vm.Transport.Target = TransportTarget.Active);
+            Assert.False(vm.IsABMode);
+        }
+        finally
+        {
+            Drop(vm);
+        }
     }
 
     [Fact]
     public void LinkOff_TakesTheThreeSyncSwitchesWithIt()
     {
         var vm = Linked();
-
-        UiThread.Run(() =>
+        try
         {
-            vm.IsABMode = true;
-            vm.IsVolumeSync = true;
-            vm.IsTempoSync = true;
-            vm.IsABMode = false;
-        });
+            UiThread.Run(() =>
+            {
+                vm.IsABMode = true;
+                vm.IsVolumeSync = true;
+                vm.IsTempoSync = true;
+                vm.IsABMode = false;
+            });
 
-        Assert.False(vm.IsVolumeSync);
-        Assert.False(vm.IsTempoSync);
-        Assert.False(vm.IsDeckSync);
+            Assert.False(vm.IsVolumeSync);
+            Assert.False(vm.IsTempoSync);
+            Assert.False(vm.IsDeckSync);
+        }
+        finally
+        {
+            Drop(vm);
+        }
     }
 
     [Fact]
     public void PressingA_DropsTheLinkAndTakesDeckA()
     {
         var vm = Linked();
-
-        UiThread.Run(() =>
+        try
         {
-            vm.Transport.ActivateDeck(PlaybackDeck.B);
-            vm.IsABMode = true;
-            vm.SelectDeckACommand.Execute(null);
-        });
+            UiThread.Run(() =>
+            {
+                vm.Transport.ActivateDeck(PlaybackDeck.B);
+                vm.IsABMode = true;
+                vm.SelectDeckACommand.Execute(null);
+            });
 
-        Assert.False(vm.IsABMode);
-        Assert.Equal(TransportTarget.Active, vm.Transport.Target);
-        Assert.Equal(PlaybackDeck.A, vm.Transport.ActiveDeck);
+            Assert.False(vm.IsABMode);
+            Assert.Equal(TransportTarget.Active, vm.Transport.Target);
+            Assert.Equal(PlaybackDeck.A, vm.Transport.ActiveDeck);
+        }
+        finally
+        {
+            Drop(vm);
+        }
     }
 
     // ---------------------------------------------------------------- the guards
@@ -135,21 +217,28 @@ public sealed class DeckUiTests
     public void VolumeSync_MirrorsBothWaysAndStopsWhenSwitchedOff()
     {
         var vm = Linked();
-        UiThread.Run(() =>
+        try
         {
-            vm.IsABMode = true;
-            vm.IsVolumeSync = true;
-        });
+            UiThread.Run(() =>
+            {
+                vm.IsABMode = true;
+                vm.IsVolumeSync = true;
+            });
 
-        UiThread.Run(() => vm.DeckA.Volume = 0.25f);
-        Assert.Equal(0.25, vm.DeckB.Volume, 3);
+            UiThread.Run(() => vm.DeckA.Volume = 0.25f);
+            Assert.Equal(0.25, vm.DeckB.Volume, 3);
 
-        UiThread.Run(() => vm.DeckB.Volume = 0.75f);
-        Assert.Equal(0.75, vm.DeckA.Volume, 3);
+            UiThread.Run(() => vm.DeckB.Volume = 0.75f);
+            Assert.Equal(0.75, vm.DeckA.Volume, 3);
 
-        UiThread.Run(() => vm.IsVolumeSync = false);
-        UiThread.Run(() => vm.DeckA.Volume = 0.4f);
-        Assert.Equal(0.75, vm.DeckB.Volume, 3);
+            UiThread.Run(() => vm.IsVolumeSync = false);
+            UiThread.Run(() => vm.DeckA.Volume = 0.4f);
+            Assert.Equal(0.75, vm.DeckB.Volume, 3);
+        }
+        finally
+        {
+            Drop(vm);
+        }
     }
 
     // ----------------------------------------------------------------- the cues
@@ -162,22 +251,20 @@ public sealed class DeckUiTests
         {
             using var rig = new Rig();
             rig.Transport.LoadOnDeck(PlaybackDeck.A, path, null);
-
-            var deadline = DateTime.UtcNow.AddSeconds(30);
-            while (rig.A.Duration == TimeSpan.Zero && DateTime.UtcNow < deadline) Thread.Sleep(10);
-            Assert.True(rig.A.Duration > TimeSpan.Zero, "deck opened the file");
+            Assert.True(
+                rig.PumpUntil(() => rig.A.Duration > TimeSpan.Zero),
+                "deck opened the file");
 
             // 250 ms of output delay: the audible clock is what a cue must not use.
             rig.Engine.OutputDelayMs = 250;
 
-            rig.A.SetOutputAvailable(true);
-
-            // Park the playhead at a known media position. No render thread here, so
-            // the clock is set rather than run up; Seek posts a render command, and
-            // one block drains it. What matters is that the audible clock is 250 ms
-            // behind the media clock when the pad is pressed.
+            // Park the playhead at a known media position. No render thread runs in
+            // the test host, so Seek posts a command and one Pump drains it: what
+            // matters is that the audible clock is 250 ms behind the media clock
+            // when the pad is pressed.
             rig.A.Seek(TimeSpan.FromSeconds(6));
             var buffer = new float[480 * 2];
+            rig.Pump();
             rig.Engine.DeckA.Read(buffer, 0, buffer.Length);
 
             double media = rig.A.MediaPositionSeconds;
