@@ -3,14 +3,14 @@ using JockeyBox.Audio.Endpoints;
 
 namespace JockeyBox.Audio.Graph;
 
-/// <summary>The six named buses of the 2.1 routing model.</summary>
+/// <summary>The five named buses of the 2.2 routing model.</summary>
 public enum BusKind
 {
-    /// <summary>Decks (karaoke stem in karaoke mode) + soundboard when it follows Main. No microphones.</summary>
-    Main,
+    /// <summary>Deck A's output: the device the audience hears deck A on. No microphones, ever.</summary>
+    DeckA,
 
-    /// <summary>Original stems while karaoke mode is on, for the operator's headphones. Never delayed.</summary>
-    KaraokeAid,
+    /// <summary>Deck B's output: its own device, or the same one (then both are summed into one session).</summary>
+    DeckB,
 
     /// <summary>Sum of unmuted recording devices.</summary>
     Recording,
@@ -18,15 +18,11 @@ public enum BusKind
     /// <summary>Soundboard alone, when the soundboard has its own device.</summary>
     Soundboard,
 
-    /// <summary>Recording devices with Monitor on. Never delayed, never heard by the audience.</summary>
-    Monitor,
-
     /// <summary>
-    /// All sounds except monitor audio, on an ordinary render endpoint. Windows has
-    /// no user-mode way to create a capture endpoint, so this must be routed to a
-    /// virtual cable (VB-Audio Cable/Matrix); other apps use the cable's capture side.
+    /// Operator cue: deck A × mon A + deck B × mon B + monitored recording devices.
+    /// Not delayed, never on a deck output.
     /// </summary>
-    Bridge,
+    Monitor,
 }
 
 /// <summary>
@@ -58,11 +54,11 @@ public sealed class AudioBus : IDisposable
     public BusKind Kind { get; }
 
     /// <summary>
-    /// Main, Recording, Soundboard and Bridge are delayed by
-    /// <c>OutputDelayMs</c>; KaraokeAid and Monitor are the operator's cue buses
-    /// and stay pre-delay (exactly the rule the 2.0 monitor sink followed).
+    /// Deck A/B, Recording and Soundboard are delayed by
+    /// <c>OutputDelayMs</c>; Monitor is the operator's cue and stays pre-delay
+    /// (it is the only bus that is not part of what the audience hears).
     /// </summary>
-    public bool Delayed => Kind is BusKind.Main or BusKind.Recording or BusKind.Soundboard or BusKind.Bridge;
+    public bool Delayed => Kind is BusKind.DeckA or BusKind.DeckB or BusKind.Recording or BusKind.Soundboard;
 
     /// <summary>Signal before the bus delay. Written by the render thread.</summary>
     public float[] Input { get; }
@@ -109,9 +105,7 @@ public sealed class AudioBus : IDisposable
         _delay.ReadDelayed(_output, 0, frames);
     }
 
-    /// <summary>Push the staged block to this bus's device ring, if it has one.</summary>
-    public void WriteToSink(int frames) => Sink?.Write(_output, 0, frames);
-
+    /// <summary>Release this bus's device reference (the engine owns the session).</summary>
     public void Dispose()
     {
         EndpointSink? sink;

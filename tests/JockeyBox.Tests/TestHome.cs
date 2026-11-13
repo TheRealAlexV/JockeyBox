@@ -64,7 +64,6 @@ internal static class TestHome
               "KaraokeAidOutputDeviceId": null,
               "RecordingOutputDeviceId": null,
               "SoundboardOutputDeviceId": null,
-              "BridgeOutputDeviceId": null,
               "MonitorOutputDeviceId": null,
               "SecondOutputDeviceId": null,
               "DeckADeviceId": null,

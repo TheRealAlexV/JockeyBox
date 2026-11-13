@@ -409,7 +409,11 @@ public sealed class DeckSource : ISampleProvider, IDisposable
         StemKind.Original => (1, 0, 0),
         StemKind.Karaoke => (0, 1, 0),
         StemKind.Vocals => (0, 0, 1),
-        _ => (1, 1, 0), // Mix: what a deck did before modes existed.
+        // Mix: both takes, the 1:0.5 balance the operator has always heard. The
+        // sum is normalised in SumProvider (not here) because only the summer
+        // knows whether the karaoke take is actually present: scaling the primary
+        // weight would quieten every plain single-file track in the library.
+        _ => (1, 1, 0),
     };
 
     private void RampStemWeights(StemKind kind, long frames)
@@ -801,6 +805,18 @@ public sealed class DeckSource : ISampleProvider, IDisposable
                 Samples.ReadFull(vocals, _deck._vocalsScratch, 0, count);
                 Samples.AddScaled(buffer, _deck._vocalsScratch, offset, count, vocalsGain);
             }
+
+            // Unity-gain sum. Mix mode adds the original (weight 1) and the karaoke
+            // take (weight 1 × the 0.5 karaoke gain), so two equally loud takes
+            // reached 1.5 and hit SoftLimit's 0.707 knee on every loud passage -
+            // clipping-loud and never the intent. Normalising by the sum of the
+            // gains that are actually present keeps the 1:0.5 balance exactly as
+            // the operator hears it, and leaves a single-take file (the whole
+            // library) at unity instead of 0.67.
+            float mixTotal = _deck._blockPrimary;
+            if (karaoke != null) mixTotal += karaokeGain;
+            if (vocals != null) mixTotal += vocalsGain;
+            if (mixTotal > 1f) ScaleInPlace(buffer, offset, count, 1f / mixTotal);
 
             return count;
         }

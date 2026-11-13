@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using JockeyBox.Audio.Endpoints;
@@ -8,37 +9,37 @@ using JockeyBox.Tools;
 namespace JockeyBox.Audio.Graph;
 
 /// <summary>
-/// Which device each of the six buses is routed to. A null id means "None"
+/// Which device each of the five buses is routed to. A null id means "None"
 /// (the bus is silent and costs one block of copies).
+///
+/// <para>Two buses naming the same device are summed into <b>one</b> session for
+/// that device - never two sessions carrying the same signal.</para>
 /// </summary>
 public sealed record AudioRoute(
-    string? MainDeviceId = null,
-    string? KaraokeAidDeviceId = null,
+    string? DeckADeviceId = null,
+    string? DeckBDeviceId = null,
     string? RecordingDeviceId = null,
     string? SoundboardDeviceId = null,
-    string? MonitorDeviceId = null,
-    string? BridgeDeviceId = null)
+    string? MonitorDeviceId = null)
 {
     /// <summary>The device id for a bus, or null for None.</summary>
     public string? DeviceFor(BusKind kind) => kind switch
     {
-        BusKind.Main => MainDeviceId,
-        BusKind.KaraokeAid => KaraokeAidDeviceId,
+        BusKind.DeckA => DeckADeviceId,
+        BusKind.DeckB => DeckBDeviceId,
         BusKind.Recording => RecordingDeviceId,
         BusKind.Soundboard => SoundboardDeviceId,
         BusKind.Monitor => MonitorDeviceId,
-        BusKind.Bridge => BridgeDeviceId,
         _ => null,
     };
 
     /// <summary>True when at least one bus has a device.</summary>
     public bool AnyOutput =>
-        !string.IsNullOrWhiteSpace(MainDeviceId) ||
-        !string.IsNullOrWhiteSpace(KaraokeAidDeviceId) ||
+        !string.IsNullOrWhiteSpace(DeckADeviceId) ||
+        !string.IsNullOrWhiteSpace(DeckBDeviceId) ||
         !string.IsNullOrWhiteSpace(RecordingDeviceId) ||
         !string.IsNullOrWhiteSpace(SoundboardDeviceId) ||
-        !string.IsNullOrWhiteSpace(MonitorDeviceId) ||
-        !string.IsNullOrWhiteSpace(BridgeDeviceId);
+        !string.IsNullOrWhiteSpace(MonitorDeviceId);
 }
 
 /// <summary>
@@ -92,8 +93,8 @@ public sealed class AudioEngine : IDisposable
 
     private static readonly BusKind[] BusOrder =
     {
-        BusKind.Main, BusKind.KaraokeAid, BusKind.Recording,
-        BusKind.Soundboard, BusKind.Monitor, BusKind.Bridge,
+        BusKind.DeckA, BusKind.DeckB, BusKind.Recording,
+        BusKind.Soundboard, BusKind.Monitor,
     };
 
     private readonly object _sinkLock = new();
@@ -108,13 +109,21 @@ public sealed class AudioEngine : IDisposable
     private readonly float[] _soundboardScaled = new float[BlockFrames * Channels];
     private readonly float[] _micRecording = new float[BlockFrames * Channels];
     private readonly float[] _micMonitor = new float[BlockFrames * Channels];
+    private readonly float[] _programTap = new float[BlockFrames * Channels];
 
     private Thread? _thread;
     private volatile bool _running;
     private long _frameIndex;
 
     /// <summary>
-    /// The first open bus sink. Only used as the "is there any device at all?"
+    /// One entry per distinct physical device, in routing order. Each holds the
+    /// single <c>WasapiOut</c> session opened for that device and every bus summed
+    /// into it.
+    /// </summary>
+    private readonly List<DeviceOutput> _outputs = new();
+
+    /// <summary>
+    /// The first open device sink. Only used as the "is there any device at all?"
     /// sentinel for Start()/failure detection - it is no longer a program sink.
     /// </summary>
     private EndpointSink? _firstSink;
@@ -132,6 +141,25 @@ public sealed class AudioEngine : IDisposable
     private volatile bool _soundboardFollowsMain = true;
 
     private float _legacyMicVolume = 1f;
+
+    // Monitor (operator cue) deck sends. Both decks default to -3 dB, i.e. audible
+    // but not the same level as what the audience hears; MON is off by default so
+    // an install with no headphones does not send deck audio to the cue device.
+    private volatile bool _monitorEnabled;
+    private float _monitorAGain = 0.7f;
+    private float _monitorBGain = 0.7f;
+
+    // ---- audio trace -------------------------------------------------------
+    // "Nothing in the process ever proves a non-zero sample reached a device"
+    // was the 2.1 blind spot. These counters are cheap (one pass per block),
+    // always on, and reported once a second, so a silent player says where it
+    // went silent instead of leaving the operator with a moving clock.
+    private long _traceLastFrame;
+    private float _traceDeckPre;
+    private float _traceDeckPost;
+    private float _traceDeckA;
+    private float _traceDeckB;
+    private readonly float[] _traceBusPeak = new float[5];
 
     public AudioEngine()
     {
@@ -234,12 +262,38 @@ public sealed class AudioEngine : IDisposable
     }
 
     /// <summary>
-    /// Global output delay in ms. Applies to Main, Recording, Soundboard and
-    /// Bridge; KaraokeAid and Monitor are operator cues and stay pre-delay.
+    /// MON: when true the Monitor bus carries deck A × <see cref="MonitorAGain"/>
+    /// plus deck B × <see cref="MonitorBGain"/> (and monitored recording devices);
+    /// when false the cue device gets the monitored microphones only. A view model
+    /// binds this and the two gains.
+    /// </summary>
+    public bool MonitorEnabled
+    {
+        get => _monitorEnabled;
+        set => _monitorEnabled = value;
+    }
+
+    /// <summary>Deck A's send into the Monitor bus (0..1.2). Audible by default.</summary>
+    public float MonitorAGain
+    {
+        get => _monitorAGain;
+        set => _monitorAGain = Math.Clamp(value, 0f, 1.2f);
+    }
+
+    /// <summary>Deck B's send into the Monitor bus (0..1.2). Audible by default.</summary>
+    public float MonitorBGain
+    {
+        get => _monitorBGain;
+        set => _monitorBGain = Math.Clamp(value, 0f, 1.2f);
+    }
+
+    /// <summary>
+    /// Global output delay in ms. Applies to Deck A, Deck B, Recording and
+    /// Soundboard; Monitor is the operator's cue and stays pre-delay.
     /// </summary>
     public int OutputDelayMs
     {
-        get => _buses[(int)BusKind.Main].DelayMs;
+        get => _buses[(int)BusKind.DeckA].DelayMs;
         set
         {
             foreach (var bus in _buses)
@@ -335,9 +389,9 @@ public sealed class AudioEngine : IDisposable
             return sink == null ? "None" : $"{sink.DeviceName}@{sink.DepthMs:0}ms";
         }
 
-        return $"main={Fmt(BusKind.Main)} karaokeAid={Fmt(BusKind.KaraokeAid)} " +
+        return $"deckA={Fmt(BusKind.DeckA)} deckB={Fmt(BusKind.DeckB)} " +
                $"recording={Fmt(BusKind.Recording)} soundboard={Fmt(BusKind.Soundboard)} " +
-               $"monitor={Fmt(BusKind.Monitor)} bridge={Fmt(BusKind.Bridge)}";
+               $"monitor={Fmt(BusKind.Monitor)}";
     }
 
     /// <summary>Alias kept for callers of the 2.0 API.</summary>
@@ -404,47 +458,83 @@ public sealed class AudioEngine : IDisposable
     // ------------------------------------------------------------------ lifecycle
 
     /// <summary>
-    /// Open the configured buses. Devices are opened off the render thread and
-    /// swapped in, so a slow USB interface cannot stall playback.
+    /// Open the configured route: <b>one session per distinct device</b>. Devices
+    /// are opened off the render thread and swapped in, so a slow USB interface
+    /// cannot stall playback. Two buses naming the same endpoint share one
+    /// <see cref="DeviceOutput"/> and are summed into it.
     /// </summary>
     public async Task SetRouteAsync(AudioRoute route)
     {
         var built = await Task.Run(() =>
         {
-            var sinks = new EndpointSink?[BusOrder.Length];
+            var outputs = new List<DeviceOutput>();
+            var byDevice = new Dictionary<string, DeviceOutput>(StringComparer.OrdinalIgnoreCase);
+
             foreach (var kind in BusOrder)
             {
                 var id = route.DeviceFor(kind);
-                if (!string.IsNullOrWhiteSpace(id))
+                if (string.IsNullOrWhiteSpace(id)) continue;
+
+                if (!byDevice.TryGetValue(id!, out var output))
                 {
-                    try { sinks[(int)kind] = EndpointSink.TryOpen(id, Rate, Channels); }
-                    catch (Exception ex) { Log.Warn($"audio bus {kind} failed to open: {ex.Message}"); }
+                    EndpointSink? sink;
+                    try { sink = EndpointSink.TryOpen(id, Rate, Channels); }
+                    catch (Exception ex)
+                    {
+                        Log.Warn($"audio device '{id}' failed to open: {ex.Message}");
+                        sink = null;
+                    }
+                    if (sink == null) continue;
+
+                    output = new DeviceOutput(id!, sink, BlockFrames, Channels);
+                    byDevice.Add(id!, output);
+                    outputs.Add(output);
                 }
+
+                output.Attach(_buses[(int)kind]);
             }
-            return sinks;
+
+            return (Outputs: outputs, ByDevice: byDevice);
         }).ConfigureAwait(false);
 
-        var old = new EndpointSink?[BusOrder.Length];
+        List<DeviceOutput> old;
         lock (_sinkLock)
         {
-            for (int i = 0; i < _buses.Length; i++)
+            old = new List<DeviceOutput>(_outputs);
+            _outputs.Clear();
+            foreach (var output in built.Outputs)
             {
-                old[i] = _buses[i].Sink;
-                _buses[i].Sink = built[i];
+                _outputs.Add(output);
+                foreach (var bus in output.Buses) bus.Sink = output.Sink;
             }
+
+            // A bus with no device in the new route is off, not left pointing at a
+            // sink that is about to be disposed.
+            foreach (var bus in _buses)
+            {
+                var id = route.DeviceFor(bus.Kind);
+                if (string.IsNullOrWhiteSpace(id) ||
+                    !built.ByDevice.TryGetValue(id!, out var target) ||
+                    !target.Buses.Contains(bus))
+                    bus.Sink = null;
+            }
+
             _route = route;
             _firstSink = FirstOpenLocked();
         }
 
-        foreach (var sink in old) DisposeQuietly(sink);
+        foreach (var output in old) DisposeQuietly(output);
 
         // A reopened device starts with an empty history; keeping the old tail
         // would replay up to OutputDelayMs of audio into the new device.
         foreach (var bus in _buses) bus.ResetDelay();
 
-        // The route line lives in DualDeckTransport.BuildRoute/LogRoute: it is the
-        // only place that knows the friendly names, so the engine does not log a
-        // second, device-id-less copy here.
+        if (built.Outputs.Count > 0)
+            Log.Info($"audio route: {built.Outputs.Count} device session(s) for " +
+                     $"{BusOrder.Count(k => !string.IsNullOrWhiteSpace(route.DeviceFor(k)))} routed bus(es)");
+
+        // The route line lives in DualDeckTransport.BuildRouteFromAppSettings/LogRoute:
+        // it is the only place that knows the friendly names.
     }
 
     /// <summary>Start the render thread. No-op when no bus has a device.</summary>
@@ -473,36 +563,30 @@ public sealed class AudioEngine : IDisposable
         Log.Info("audio engine started");
     }
 
-    /// <summary>Stop the render thread and close every bus.</summary>
+    /// <summary>Stop the render thread and close every device session.</summary>
     public void Stop()
     {
         _running = false;
         try { _thread?.Join(TimeSpan.FromSeconds(2)); } catch { }
         _thread = null;
 
-        var old = new EndpointSink?[BusOrder.Length];
+        List<DeviceOutput> old;
         lock (_sinkLock)
         {
-            for (int i = 0; i < _buses.Length; i++)
-            {
-                old[i] = _buses[i].Sink;
-                _buses[i].Sink = null;
-            }
+            old = new List<DeviceOutput>(_outputs);
+            _outputs.Clear();
+            foreach (var bus in _buses) bus.Sink = null;
             _firstSink = null;
         }
 
-        foreach (var sink in old) DisposeQuietly(sink);
+        foreach (var output in old) DisposeQuietly(output);
     }
 
     private EndpointSink? FirstOpenLocked()
     {
-        // Main first: when it is present it should set the pace, so a paused deck
+        // Deck A first: when it is present it should set the pace, so a paused deck
         // still gets pulled in time with the device the audience hears.
-        foreach (var kind in BusOrder)
-        {
-            var sink = _buses[(int)kind].Sink;
-            if (sink != null) return sink;
-        }
+        foreach (var output in _outputs) return output.Sink;
         return null;
     }
 
@@ -535,7 +619,7 @@ public sealed class AudioEngine : IDisposable
     /// </summary>
     public double AudibleSeconds(DeckSource deck)
     {
-        double delay = _buses[(int)BusKind.Main].DelayMs / 1000.0;
+        double delay = _buses[(int)BusKind.DeckA].DelayMs / 1000.0;
         return Math.Max(0, deck.PositionSeconds - delay);
     }
 
@@ -560,13 +644,19 @@ public sealed class AudioEngine : IDisposable
                     OutputFault?.Invoke(firstSink.DeviceName);
                     lock (_sinkLock)
                     {
-                        foreach (var bus in _buses)
+                        var dead = _outputs.FirstOrDefault(o => ReferenceEquals(o.Sink, firstSink));
+                        if (dead != null)
                         {
-                            if (ReferenceEquals(bus.Sink, firstSink)) bus.Sink = null;
+                            _outputs.Remove(dead);
+                            foreach (var bus in dead.Buses) bus.Sink = null;
+                            DisposeQuietly(dead);
+                        }
+                        else
+                        {
+                            DisposeQuietly(firstSink);
                         }
                         _firstSink = FirstOpenLocked();
                     }
-                    DisposeQuietly(firstSink);
                     continue;
                 }
 
@@ -624,42 +714,42 @@ public sealed class AudioEngine : IDisposable
         //    "program", and it is the base of both Main and Bridge.
         for (int i = 0; i < _deckMix.Length; i++) _deckMix[i] = _deckABuffer[i] + _deckBBuffer[i];
         // Two 0.707 centre decks would reach 1.414, so limit before the master fader.
+        _traceDeckPre = Samples.Peak(_deckMix, 0, _deckMix.Length);
+        _traceDeckA = Samples.Peak(_deckABuffer, 0, _deckABuffer.Length);
+        _traceDeckB = Samples.Peak(_deckBBuffer, 0, _deckBBuffer.Length);
         Samples.SoftLimit(_deckMix, 0, _deckMix.Length);
+        _traceDeckPost = Samples.Peak(_deckMix, 0, _deckMix.Length);
         if (master != 1f)
             for (int i = 0; i < _deckMix.Length; i++) _deckMix[i] *= master;
 
         for (int i = 0; i < _soundboardScaled.Length; i++)
             _soundboardScaled[i] = _soundboardBlock[i] * master;
 
-        // 5. Main: decks + soundboard when it has nowhere else to go. No mics, ever.
-        var mainBus = _buses[(int)BusKind.Main];
+        // 5. Deck A output: deck A alone, plus the soundboard when it has no device
+        //    of its own. No microphones, ever. Deck B is its own bus; when both
+        //    name one physical device the DeviceOutput sums them into one session.
+        var deckABus = _buses[(int)BusKind.DeckA];
+        var deckBBus = _buses[(int)BusKind.DeckB];
         var soundboardBus = _buses[(int)BusKind.Soundboard];
-        bool soundboardOnMain = _soundboardFollowsMain && !soundboardBus.IsOpen;
-        var main = mainBus.Input;
-        if (soundboardOnMain)
-        {
-            for (int i = 0; i < main.Length; i++) main[i] = _deckMix[i] + _soundboardScaled[i];
-            // One limiter over the combined bus: the soundboard can push the sum
-            // over the knee, exactly like a third deck would.
-            Samples.SoftLimit(main, 0, main.Length);
-        }
-        else
-        {
-            Array.Copy(_deckMix, main, main.Length);
-        }
+        bool soundboardOnDeckA = _soundboardFollowsMain && !soundboardBus.IsOpen;
+        var deckAOut = deckABus.Input;
+        for (int i = 0; i < deckAOut.Length; i++)
+            deckAOut[i] = _deckABuffer[i] + (soundboardOnDeckA ? _soundboardScaled[i] : 0f);
+        // One limiter over the combined bus: the soundboard can push the sum over
+        // the knee, exactly like a second deck would.
+        if (soundboardOnDeckA) Samples.SoftLimit(deckAOut, 0, deckAOut.Length);
 
-        // 6. Karaoke aid: the original stems, only while karaoke mode is on.
-        var aid = _buses[(int)BusKind.KaraokeAid].Input;
-        if (karaoke)
+        // 6. Deck B output: deck B's render. This bus used to be the KaraokeAid cue
+        //    and was cleared every block, because the global karaoke mode that fed
+        //    it is gone. It is now deck B's real output and carries deck B.
+        var deckBOut = deckBBus.Input;
+        Array.Copy(_deckBBuffer, deckBOut, deckBOut.Length);
+        Samples.SoftLimit(deckBOut, 0, deckBOut.Length);
+
+        if (master != 1f)
         {
-            for (int i = 0; i < aid.Length; i++) aid[i] = _karaokeABuffer[i] + _karaokeBBuffer[i];
-            Samples.SoftLimit(aid, 0, aid.Length);
-            if (master != 1f)
-                for (int i = 0; i < aid.Length; i++) aid[i] *= master;
-        }
-        else
-        {
-            Array.Clear(aid, 0, aid.Length);
+            for (int i = 0; i < deckAOut.Length; i++) deckAOut[i] *= master;
+            for (int i = 0; i < deckBOut.Length; i++) deckBOut[i] *= master;
         }
 
         // 7. Soundboard bus: the soundboard alone, when it has a device.
@@ -672,32 +762,93 @@ public sealed class AudioEngine : IDisposable
         Array.Copy(_micRecording, recording, recording.Length);
         Samples.SoftLimit(recording, 0, recording.Length);
 
-        // 9. Monitor bus: monitored microphones (muted or not - the mute silences
-        //    the audience, not the operator's own cue).
+        // 9. Monitor bus: the operator's cue. Deck A × mon A + deck B × mon B while
+        //    MON is on, plus monitored recording devices (muted or not - the mute
+        //    silences the audience, not the operator's own cue).
         var monitor = _buses[(int)BusKind.Monitor].Input;
-        Array.Copy(_micMonitor, monitor, monitor.Length);
-        Samples.SoftLimit(monitor, 0, monitor.Length);
+        if (_monitorEnabled)
+        {
+            for (int i = 0; i < monitor.Length; i++)
+                monitor[i] = _deckABuffer[i] * _monitorAGain
+                           + _deckBBuffer[i] * _monitorBGain
+                           + _micMonitor[i];
+            Samples.SoftLimit(monitor, 0, monitor.Length);
+        }
+        else
+        {
+            Array.Copy(_micMonitor, monitor, monitor.Length);
+            Samples.SoftLimit(monitor, 0, monitor.Length);
+        }
 
-        // 10. Bridge: Main's deck content + soundboard + unmuted microphones. It
-        //     never carries monitor-only audio, and it mirrors karaoke mode because
-        //     its deck content is the same post-master mix Main gets.
-        var bridge = _buses[(int)BusKind.Bridge].Input;
-        for (int i = 0; i < bridge.Length; i++)
-            bridge[i] = _deckMix[i] + _soundboardScaled[i] + _micRecording[i];
-        Samples.SoftLimit(bridge, 0, bridge.Length);
-
-        // 11. Stage each bus through its own delay (cue buses bypass it), then feed
+        // 10. Stage each bus through its own delay (cue buses bypass it), then feed
         //     the device rings from the same block.
-        foreach (var bus in _buses) bus.Render(BlockFrames);
+        foreach (var bus in _buses)
+        {
+            bus.Render(BlockFrames);
+            _traceBusPeak[(int)bus.Kind] = Samples.Peak(bus.Input, 0, BlockFrames * Channels);
+        }
 
-        _capture?.Invoke(mainBus.Output, BlockFrames);
-        _captureMonitor?.Invoke(mainBus.Input, BlockFrames);
+        _capture?.Invoke(ProgramTap(deckABus, deckBBus), BlockFrames);
+        _captureMonitor?.Invoke(monitor, BlockFrames);
         if (_busCapture != null)
             foreach (var bus in _buses) _busCapture(bus.Kind, bus.Output, BlockFrames);
 
-        foreach (var bus in _buses) bus.WriteToSink(BlockFrames);
+        // 11. One write per physical device: every bus routed there is summed first,
+        //     so a device never receives two sessions carrying overlapping signal.
+        foreach (var output in _outputs) output.Write(BlockFrames);
+
+        TraceIfDue(frame);
 
         Interlocked.Exchange(ref _frameIndex, frame + BlockFrames);
+    }
+
+    /// <summary>
+    /// Once a second, write one line that answers "is there signal, and did it get
+    /// to a device?". Always on: the numbers are the only thing that distinguishes
+    /// a device-side fault from a graph fault, and the render thread is the only
+    /// place that knows both.
+    /// </summary>
+    private void TraceIfDue(long frame)
+    {
+        if (frame - _traceLastFrame < Rate) return;
+        _traceLastFrame = frame;
+
+        var sb = new System.Text.StringBuilder(320);
+        sb.Append("audio trace: ")
+          .Append($"A={DeckA.State}@{DeckA.PositionSeconds:0.00} ")
+          .Append($"B={DeckB.State}@{DeckB.PositionSeconds:0.00} ")
+          .Append($"deckA={_traceDeckA:0.0000} deckB={_traceDeckB:0.0000} ")
+          .Append($"deckMix pre={_traceDeckPre:0.0000} post={_traceDeckPost:0.0000} ")
+          .Append($"master={_masterVolume:0.00} fader={Fader.FaderAt(frame):0.00} ");
+
+        foreach (var kind in BusOrder)
+        {
+            var bus = _buses[(int)kind];
+            sb.Append($"{kind}[bus={_traceBusPeak[(int)kind]:0.0000} dev={(bus.IsOpen ? "open" : "none")}] ");
+        }
+
+        foreach (var output in _outputs)
+        {
+            var sink = output.Sink;
+            sb.Append($"device '{sink.DeviceName}' [sink={output.LastPeak:0.0000} " +
+                      $"buses={string.Join('+', output.Buses.Select(b => b.Kind.ToString()))} " +
+                      $"depth={sink.Ring.DepthFrames}f under={sink.Ring.UnderrunFrames} " +
+                      $"dropped={sink.Ring.DroppedBlocks} playing={sink.IsPlaying}] ");
+        }
+
+        Log.Info(sb.ToString());
+    }
+
+    /// <summary>
+    /// The offline verification tap's "program": both deck buses summed, which is
+    /// what the audience hears as a whole now that each deck has its own bus and
+    /// its own device session. Only built when a capture is attached.
+    /// </summary>
+    private float[] ProgramTap(AudioBus deckA, AudioBus deckB)
+    {
+        Array.Copy(deckA.Output, _programTap, _programTap.Length);
+        for (int i = 0; i < _programTap.Length; i++) _programTap[i] += deckB.Output[i];
+        return _programTap;
     }
 
     /// <summary>
@@ -725,7 +876,9 @@ public sealed class AudioEngine : IDisposable
         if (now - _lastMaintainSeconds < 0.5) return;
         _lastMaintainSeconds = now;
 
-        foreach (var bus in _buses) bus.Sink?.Maintain(BlockFrames);
+        // One maintain per device session: two buses on one device must not each
+        // count as a consumer of its ring, or the drift correction fights itself.
+        foreach (var output in _outputs) output.Maintain(BlockFrames);
 
         // Capture devices run on their own clocks too; the same drift rule keeps
         // each ring inside its band (and pads with silence rather than stuttering).
@@ -735,6 +888,11 @@ public sealed class AudioEngine : IDisposable
     private static void DisposeQuietly(EndpointSink? sink)
     {
         try { sink?.Dispose(); } catch { }
+    }
+
+    private static void DisposeQuietly(DeviceOutput? output)
+    {
+        try { output?.Dispose(); } catch { }
     }
 
     public void Dispose()

@@ -725,8 +725,9 @@ public sealed class DualDeckTransport : IDisposable
         changed |= AdoptOutputDelay(settings.OutputDelayMs);
         AdoptTransitions(settings);
         ApplyMicSettings(settings);
+        AdoptMonitorSettings(settings);
 
-        var route = BuildRoute(settings);
+        var route = BuildRouteFromAppSettings(settings);
         if (!route.Equals(_appliedRoute))
         {
             _appliedRoute = route;
@@ -738,7 +739,7 @@ public sealed class DualDeckTransport : IDisposable
     }
 
     /// <summary>
-    /// Settings as one six-bus engine route.
+    /// Settings as one five-bus engine route.
     ///
     /// <para>A profile that has never had a routing choice is routed to the
     /// system default output instead of playing into silence: "None" has to mean
@@ -750,25 +751,29 @@ public sealed class DualDeckTransport : IDisposable
     /// (the 2.0 monitor output): it is the operator's headphone endpoint, and the
     /// new model did not add a second setting for it.</para>
     /// </summary>
-    private AudioRoute BuildRoute(AppSettings settings)
+    internal static AudioRoute BuildRouteFromAppSettings(AppSettings settings)
     {
-        string? main = NullIfBlank(settings.MainOutputDeviceId);
-        string? karaokeAid = NullIfBlank(settings.KaraokeAidOutputDeviceId);
+        // The 2.1 names survive in the settings file on purpose: renaming the JSON
+        // keys would silently drop an existing install's routing to "None" and
+        // play into silence, which is the exact failure this change repairs.
+        // MainOutputDeviceId is Deck A's output; KaraokeAidOutputDeviceId is deck
+        // B's. The master-mix bridge setting is gone (see AppSettings).
+        string? deckA = NullIfBlank(settings.MainOutputDeviceId);
+        string? deckB = NullIfBlank(settings.KaraokeAidOutputDeviceId);
         string? recording = NullIfBlank(settings.RecordingOutputDeviceId);
         string? soundboard = NullIfBlank(settings.SoundboardOutputDeviceId);
         string? monitor = NullIfBlank(settings.MonitorOutputDeviceId);
-        string? bridge = NullIfBlank(settings.BridgeOutputDeviceId);
 
         if (!settings.AudioRoutingConfigured &&
-            main == null && karaokeAid == null && recording == null &&
-            soundboard == null && monitor == null && bridge == null)
+            deckA == null && deckB == null && recording == null &&
+            soundboard == null && monitor == null)
         {
-            main = DefaultOutputDeviceId();
-            if (main != null)
-                Log.Info("no audio routing configured yet: routing Main to the default output");
+            deckA = DefaultOutputDeviceId();
+            if (deckA != null)
+                Log.Info("no audio routing configured yet: routing Deck A to the default output");
         }
 
-        return new AudioRoute(main, karaokeAid, recording, soundboard, monitor, bridge);
+        return new AudioRoute(deckA, deckB, recording, soundboard, monitor);
     }
 
     /// <summary>The current default render endpoint, or null when the machine has no audio output.</summary>
@@ -803,6 +808,14 @@ public sealed class DualDeckTransport : IDisposable
         Engine.MasterVolume = target;
         _appliedMasterVolume = Engine.MasterVolume;
         return true;
+    }
+
+    /// <summary>Mirror the MON settings onto the engine (the view model binds these).</summary>
+    private void AdoptMonitorSettings(AppSettings settings)
+    {
+        Engine.MonitorEnabled = settings.MonitorEnabled;
+        Engine.MonitorAGain = settings.MonitorAGain;
+        Engine.MonitorBGain = settings.MonitorBGain;
     }
 
     private bool AdoptOutputDelay(int value)
@@ -846,7 +859,7 @@ public sealed class DualDeckTransport : IDisposable
             await Task.Yield();
 
             var settings = AppSettings.Load();
-            var route = BuildRoute(settings);
+            var route = BuildRouteFromAppSettings(settings);
 
             Engine.MasterVolume = Math.Clamp(settings.MasterVolume, 0f, 1.2f);
             Engine.OutputDelayMs = Math.Clamp(settings.OutputDelayMs, 0, 2000);
@@ -911,26 +924,18 @@ public sealed class DualDeckTransport : IDisposable
     }
 
     /// <summary>
-    /// Announce the six-bus route. The Bridge deserves the extra line: Windows has
-    /// no user-mode way to expose a capture endpoint, so the bridge is an ordinary
-    /// render endpoint that the user must point at a virtual cable (VB-Audio
-    /// Cable/Matrix, installed on this host); other applications then pick the
-    /// cable's capture side as their microphone. No virtual capture device is, or
-    /// can be, created here.
+    /// Announce the five-bus route, with the friendly device name for each. The
+    /// device sessions themselves are logged by <see cref="AudioEngine.SetRouteAsync"/>:
+    /// it is the only place that knows how many distinct sessions the route
+    /// actually opened (two buses on one device produce one).
     /// </summary>
     private void LogRoute(AudioRoute route)
     {
-        Log.Info($"audio route: main={Describe(route.MainDeviceId)} " +
-                 $"karaokeAid={Describe(route.KaraokeAidDeviceId)} " +
+        Log.Info($"audio route: deckA={Describe(route.DeckADeviceId)} " +
+                 $"deckB={Describe(route.DeckBDeviceId)} " +
                  $"recording={Describe(route.RecordingDeviceId)} " +
                  $"soundboard={Describe(route.SoundboardDeviceId)} " +
-                 $"monitor={Describe(route.MonitorDeviceId)} " +
-                 $"bridge={Describe(route.BridgeDeviceId)} mics={Engine.Mics.Count}");
-
-        if (route.BridgeDeviceId != null)
-            Log.Info("bridge: render endpoint only (Windows cannot create a capture endpoint); " +
-                     "route it to VB-Audio Cable/Matrix and use that cable's capture side as a " +
-                     "microphone in the other application");
+                 $"monitor={Describe(route.MonitorDeviceId)} mics={Engine.Mics.Count}");
     }
 
     /// <summary>Friendly name for a route id ("none" for None).</summary>

@@ -82,7 +82,6 @@ public partial class SettingsWindow : Window
         FillDeviceBox(RecordingOutputBox, devices, settings.RecordingOutputDeviceId);
         FillDeviceBox(SoundboardOutputBox, devices, settings.SoundboardOutputDeviceId);
         FillDeviceBox(MonitorOutputBox, devices, settings.MonitorOutputDeviceId);
-        FillDeviceBox(BridgeOutputBox, devices, settings.BridgeOutputDeviceId);
 
         SoundboardFollowsMainCheck.IsChecked = settings.SoundboardFollowsMain;
 
@@ -708,7 +707,6 @@ public partial class SettingsWindow : Window
         _settings.RecordingOutputDeviceId = SelectedDeviceId(RecordingOutputBox);
         _settings.SoundboardOutputDeviceId = SelectedDeviceId(SoundboardOutputBox);
         _settings.MonitorOutputDeviceId = SelectedDeviceId(MonitorOutputBox);
-        _settings.BridgeOutputDeviceId = SelectedDeviceId(BridgeOutputBox);
         _settings.SoundboardFollowsMain = SoundboardFollowsMainCheck.IsChecked == true;
 
         // Recording devices: the rows ARE the list. An enabled row is the whole
