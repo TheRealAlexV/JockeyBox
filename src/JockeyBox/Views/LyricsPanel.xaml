@@ -225,6 +225,7 @@
             <Grid>
                 <ListBox x:Name="LyricsList" ItemsSource="{Binding LyricLines}"
                          ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         ScrollViewer.VerticalScrollBarVisibility="Auto"
                          ScrollViewer.CanContentScroll="False"
                          VirtualizingPanel.IsVirtualizing="False"
                          Focusable="False"

@@ -655,6 +655,13 @@ internal static class UiShot
         // rows fit" would be a guess rather than a measurement.
         if (Harness.Flag(args, "--uishot-measure") != null) MeasureTrackLists(host);
 
+        // Opt-in layout probe: the numbers a PNG cannot show. "The window grew" is a
+        // statement about extents, not about drawn ink, and a scrollbar is a few dark
+        // pixels at the edge of a capture. Printing viewport against extent says which
+        // surface is carrying the overflow, and printing each slider's mark strip says
+        // whether the marks cost the deck card any height.
+        if (Harness.Flag(args, "--uishot-probe") != null) ProbeLayout(host);
+
         string? textDumpPath = Harness.Flag(args, "--uishot-textdump");
         if (!string.IsNullOrWhiteSpace(textDumpPath)) DumpTextBlocks(host, textDumpPath, identity);
 
@@ -1076,8 +1083,84 @@ internal static class UiShot
     /// numbers: TrackRowGrid is a fixed 28 px and the item container adds 3 px above
     /// and below, so a row is 34 px and a partly visible row does not count.
     /// </summary>
-    private static void MeasureTrackLists(Visual root)
+    /// <summary>
+    /// Opt-in layout probe: the numbers a capture cannot show. "The window grew" is a
+    /// statement about extents, not about drawn ink; a scrollbar is a few dark pixels
+    /// at the edge of a PNG. Viewport against extent says which surface is carrying
+    /// the overflow, and each slider's mark strip says whether the marks cost the deck
+    /// card any height.
+    /// </summary>
+    private static void ProbeLayout(Visual root)
     {
+        foreach (var panel in Descendants<LyricsPanel>(root))
+        {
+            ScrollViewer? host = null;
+            for (DependencyObject? node = VisualTreeHelper.GetParent(panel); node != null; node = VisualTreeHelper.GetParent(node))
+            {
+                if (node is ScrollViewer scroller)
+                {
+                    host = scroller;
+                    break;
+                }
+            }
+
+            var list = Descendants<ListBox>(panel).FirstOrDefault();
+            string top = "n/a";
+            if (host is not null)
+            {
+                try
+                {
+                    top = $"{panel.TransformToAncestor(host).Transform(new Point(0, 0)).Y:0.0}";
+                }
+                catch (InvalidOperationException)
+                {
+                    top = "n/a";
+                }
+            }
+
+            Console.Out.WriteLine(
+                $"uishot: lyrics top {top} height {panel.ActualHeight:0.0}"
+                + $" viewport {host?.ViewportHeight ?? double.NaN:0.0}"
+                + $" list {list?.ActualHeight ?? double.NaN:0.0} max {list?.MaxHeight ?? double.NaN:0.0}");
+        }
+
+        foreach (var scroller in Descendants<ScrollViewer>(root))
+        {
+            Console.Out.WriteLine(
+                $"uishot: scroll {Owner(scroller)} viewport {scroller.ViewportHeight:0.0}"
+                + $" extent {scroller.ExtentHeight:0.0} scrollable {scroller.ScrollableHeight:0.0}"
+                + $" bar {scroller.ComputedVerticalScrollBarVisibility}");
+        }
+
+        foreach (var slider in Descendants<Slider>(root))
+        {
+            var marks = Descendants<SliderTickBar>(slider).FirstOrDefault();
+            string owner = Owner(slider);
+            Console.Out.WriteLine(
+                $"uishot: slider {owner} {slider.ActualWidth:0.0}x{slider.ActualHeight:0.0}"
+                + $" range {slider.Minimum:0.###}..{slider.Maximum:0.###}"
+                + $" value {slider.Value:0.###} snap {slider.IsSnapToTickEnabled}"
+                + $" tf {slider.TickFrequency:0.###}"
+                + $" tf-source {DependencyPropertyHelper.GetValueSource(slider, Slider.TickFrequencyProperty).BaseValueSource}"
+                + $" marks {(marks is null ? "none" : marks.MarkCount.ToString(CultureInfo.InvariantCulture))}"
+                + $" centre {(marks is null || marks.MarkCount == 0 ? "n/a" : marks.CenterValue.ToString("0.###", CultureInfo.InvariantCulture))}"
+                + $" strip {(marks is null ? "n/a" : $"{marks.ActualWidth:0.0}x{marks.ActualHeight:0.0}")}");
+        }
+    }
+
+    private static string Owner(FrameworkElement element)
+    {
+        if (!string.IsNullOrEmpty(element.Name))
+        {
+            return element.Name;
+        }
+
+        return element.TemplatedParent is FrameworkElement owner && !string.IsNullOrEmpty(owner.Name)
+            ? $"{element.GetType().Name}<{owner.Name}>"
+            : element.GetType().Name;
+    }
+
+    private static void MeasureTrackLists(Visual root)    {
         const double rowPitch = 34;
 
         foreach (var view in Descendants<YouTubeView>(root))

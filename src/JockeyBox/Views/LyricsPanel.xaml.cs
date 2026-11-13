@@ -41,6 +41,27 @@ public partial class LyricsPanel : UserControl
     private bool _ballMeasureQueued;
     private bool _isBallHost = true;
 
+    /// <summary>
+    /// First-pass reserve: what must stay on screen under the lyric list before the
+    /// layout has been measured (the folders strip plus the shell's own padding).
+    /// <see cref="ApplyListCap"/> replaces it with the measured depth of the rows
+    /// below the panel as soon as one capped pass has been laid out.
+    /// </summary>
+    private const double ReservedBelowList = 40;
+
+    /// <summary>A few px so the last line is not flush against the strip below.</summary>
+    private const double ComfortGap = 4;
+
+    /// <summary>
+    /// Floor for the cap: about four lyric lines, so a window squeezed to its minimum
+    /// still shows a usable number of them instead of a sliver. Below this the panel
+    /// would rather let the shell scroll than become unreadable.
+    /// </summary>
+    private const double MinListHeight = 96;
+
+    private ScrollViewer? _shell;
+    private double? _belowList;
+
     public LyricsPanel()
     {
         InitializeComponent();
@@ -48,6 +69,10 @@ public partial class LyricsPanel : UserControl
         DataContextChanged += (_, _) => Attach();
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
+
+        // A second pass is needed after the first cap is laid out: only then is the
+        // depth of the rows under this panel readable (see ApplyListCap).
+        LyricsList.SizeChanged += (_, _) => ApplyListCap();
 
         // The right-click rule from the browser tree applies here too: WPF does
         // not select on right-click, and the timing menu acts on the selection.
@@ -84,8 +109,102 @@ public partial class LyricsPanel : UserControl
             // A panel opened in a background window must not measure immediately.
             _isBallHost = _host.IsActive;
         }
+        ApplyListCap();
         ScheduleBallMeasure();
     }
+
+    /// <summary>
+    /// Stops a long lyric set from growing the window.
+    ///
+    /// <para>The main window wraps its whole layout in a ScrollViewer (ShellScroll),
+    /// because the deck card and the activity console grow at runtime. Inside that
+    /// scope the measure height is infinite, so a list that reports its whole
+    /// document makes the browser+lyrics row as tall as every line: the rows below
+    /// it are pushed off the bottom and the overflow surfaces as a window-wide
+    /// scrollbar. The lyrics box is the one element there that should never drive
+    /// height - it is a document view.</para>
+    ///
+    /// <para>So the list is capped at the room the shell actually has under this
+    /// panel - its own top edge to the bottom of the viewport, less the panel's
+    /// header rows and less what must stay on screen below - and scrolls internally
+    /// instead. The list keeps filling whatever it is given: the cap is recomputed
+    /// from the live viewport on every resize, so a taller window means more lines
+    /// visible, never fewer.</para>
+    ///
+    /// <para>In the pop-out <see cref="LyricsWindow"/> there is no such scroller and
+    /// the row is star-sized, so the list is left uncapped there: the window's size
+    /// is the bound and a cap would only throw room away. Nothing here is a fixed
+    /// height, which is what made an earlier 30 px clamp hide two lines of the
+    /// diagnostic.</para>
+    /// </summary>
+    private void ApplyListCap()
+    {
+        var shell = FindAncestor<ScrollViewer>(this);
+        if (!ReferenceEquals(shell, _shell))
+        {
+            if (_shell != null)
+            {
+                _shell.SizeChanged -= OnShellSizeChanged;
+            }
+
+            _shell = shell;
+            if (_shell != null)
+            {
+                _shell.SizeChanged += OnShellSizeChanged;
+            }
+        }
+
+        if (_shell is null || _shell.ViewportHeight <= 0)
+        {
+            LyricsList.ClearValue(MaxHeightProperty);
+            return;
+        }
+
+        double top;
+        try
+        {
+            top = TransformToAncestor(_shell).Transform(new Point(0, 0)).Y;
+        }
+        catch (InvalidOperationException)
+        {
+            // Detached between the loaded event and this pass: no geometry to read.
+            return;
+        }
+
+        // Header rows + paddings: everything this panel draws except the list. It is
+        // content-independent (the list is the only elastic part), and it is read from
+        // the live layout rather than guessed, so a wrapped status line is covered.
+        double chrome = Math.Max(0, ActualHeight - LyricsList.ActualHeight);
+        double below = _belowList ?? ReservedBelowList;
+        double cap = Math.Max(
+            MinListHeight,
+            _shell.ViewportHeight - top - chrome - below - ComfortGap);
+
+        // Only assign on a real change: assigning MaxHeight invalidates measure, which
+        // re-enters this method through SizeChanged.
+        if (double.IsNaN(LyricsList.MaxHeight) || Math.Abs(cap - LyricsList.MaxHeight) > 1)
+        {
+            LyricsList.MaxHeight = cap;
+            return;
+        }
+
+        // Once one capped pass has been laid out, the distance from this panel's bottom
+        // to the end of the shell's content is just the rows under it (the folders
+        // strip) - and that is what the cap has to leave room for. Read it, keep it:
+        // it is a property of the window's layout, not of the window's height, and
+        // measuring it here keeps the number out of the source.
+        if (_belowList is null && ActualHeight > 0)
+        {
+            double measured = _shell.ExtentHeight - top - ActualHeight;
+            if (measured > 0 && measured < _shell.ViewportHeight / 2)
+            {
+                _belowList = measured;
+                ApplyListCap();
+            }
+        }
+    }
+
+    private void OnShellSizeChanged(object sender, SizeChangedEventArgs e) => ApplyListCap();
 
     private void OnUnloaded(object sender, RoutedEventArgs e)
     {
