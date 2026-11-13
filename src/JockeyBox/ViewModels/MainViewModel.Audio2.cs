@@ -692,6 +692,11 @@ public partial class MainViewModel
         // Reads AppSettings from disk, so it must run after the dialog wrote it.
         _transport.ApplyDeckSettingsChange(PlaybackDeck.A);
 
+        // The monitor device may have been reopened by the dialog: put the switch and
+        // the two sends back on whatever device the engine now has. The gains are the
+        // view model's, so this also undoes a dialog write the window never saw.
+        ApplyMonitor();
+
         RefreshMicDeviceCount();
     }
 

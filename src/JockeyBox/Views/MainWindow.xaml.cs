@@ -74,6 +74,10 @@ public partial class MainWindow : Window
         // then and the settings dialog path re-applies it.
         _vm.InitializeMic();
 
+        // MON: the header's switch and the two deck sends. Same shape as the mic -
+        // adopt the saved state, then push it to the engine.
+        _vm.InitializeMonitor();
+
         // Play/Pause glyph follows VM changes; each deck card owns its waveform.
         UpdatePlayGlyph();
         // The transport row's link and sync switches, and the cue banks, are wired

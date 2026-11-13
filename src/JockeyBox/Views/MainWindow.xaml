@@ -64,7 +64,11 @@
              output device and waveform, plus the karaoke sub-stem bar when the
              loaded track has a karaoke partner. -->
         <DataTemplate x:Key="DeckCardTemplate" DataType="{x:Type vm:DeckViewModel}">
-            <Border Style="{StaticResource Card}" Padding="12,6,12,20">
+            <!-- Bottom padding matched to the top: 20 px of it hung below the cue
+                 bank as an empty band on both cards, which is the slack the review
+                 measured at the card's foot. The cue bank is the last row, so 8 px
+                 is the breathing room it needs and the rest is the lyrics box's. -->
+            <Border Style="{StaticResource Card}" Padding="12,6,12,8">
                 <Grid>
                     <!-- One label column, one control column. Every slider (VOL,
                          TEMPO, the scrub, karaoke GAIN) starts on the same x and
@@ -157,8 +161,13 @@
                     <!-- Volume -->
                     <TextBlock Grid.Row="3" Grid.Column="0" Text="VOL" VerticalAlignment="Center"
                                FontSize="10" Foreground="{StaticResource TextDimBrush}"/>
+                    <!-- TickFrequency stays: the shared slider style draws its
+                         ladder from it, and the recentre tick at the middle. Snapping
+                         is the style's business now - IsSnapToTickEnabled="True" here
+                         said one thing while the template forced the other, so the
+                         attribute was a claim the control did not honour. -->
                     <Slider Grid.Row="3" Grid.Column="2" Minimum="0" Maximum="1.2"
-                            TickFrequency="0.1" IsSnapToTickEnabled="True"
+                            TickFrequency="0.1"
                             Value="{Binding Volume}"/>
 
                     <!-- Tempo / BPM (plan item 5): a slim, centre-detented pitch fader
@@ -249,8 +258,18 @@
                          row. Any click inside the card activates the deck
                          (OnDeckInteract in the code-behind), so these buttons
                          never move a deck the user is not looking at. -->
-                    <StackPanel Grid.Row="5" Grid.ColumnSpan="3" Orientation="Horizontal"
-                                Margin="0,2,0,0">
+                    <!-- Transport line: this deck's buttons on the left, the karaoke
+                         delay trim on the right. The trim used to sit in the karaoke
+                         strip below, on a line of its own beside a gain slider that is
+                         gone; the operator moved it up here, so it shares this line's
+                         height instead of costing the card a row. -->
+                    <Grid Grid.Row="5" Grid.ColumnSpan="3" Margin="0,2,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Grid.Column="0" Orientation="Horizontal">
                         <Button Style="{StaticResource DeckSecondaryButton}" Content="&#x23EE;"
                                 ToolTip="Previous track on this deck"
                                 Command="{Binding DataContext.PreviousTrackForDeckCommand, RelativeSource={RelativeSource AncestorType=Window}}"
@@ -271,7 +290,40 @@
                                 ToolTip="Next track on this deck"
                                 Command="{Binding DataContext.NextTrackForDeckCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                                 CommandParameter="{Binding}"/>
-                    </StackPanel>
+                        </StackPanel>
+
+                        <!-- DELAY MS, moved here whole: the 20 px nudges against an
+                             18 px field are untouched (a field smaller than its own
+                             steppers was the bug that made the glyphs unreadable at
+                             18 against 20), and the play glyph that sat beside them
+                             is gone - the deck's play button is the third button on
+                             the left of this same line, so the second one was a second
+                             handle on one command. Shown only with a stem, so a deck
+                             without one keeps this line at the buttons' height. -->
+                        <StackPanel Grid.Column="1" Orientation="Horizontal"
+                                    HorizontalAlignment="Right" VerticalAlignment="Center"
+                                    Visibility="{Binding HasKaraoke, Converter={StaticResource BoolToVisibility}}">
+                            <TextBlock Text="DELAY MS" FontSize="9" Margin="12,0,6,0"
+                                       Foreground="{StaticResource TextDimBrush}"
+                                       VerticalAlignment="Center"/>
+                            <RepeatButton Style="{StaticResource StepperNudge}"
+                                          Delay="400" Interval="150"
+                                          Content="&#x2212;"
+                                          Command="{Binding NudgeDelayCommand}" CommandParameter="-5"
+                                          ToolTip="Trim the karaoke stem 5 ms earlier"/>
+                            <TextBox Width="56" Margin="3,0"
+                                     TextAlignment="Center" FontSize="10"
+                                     MinHeight="18" Padding="4,0"
+                                     VerticalAlignment="Center"
+                                     Text="{Binding DelayMs, UpdateSourceTrigger=LostFocus, StringFormat=F0}"
+                                     ToolTip="Karaoke stem offset in milliseconds"/>
+                            <RepeatButton Style="{StaticResource StepperNudge}"
+                                          Delay="400" Interval="150"
+                                          Content="+"
+                                          Command="{Binding NudgeDelayCommand}" CommandParameter="5"
+                                          ToolTip="Trim the karaoke stem 5 ms later"/>
+                        </StackPanel>
+                    </Grid>
 
                     <!-- Scrub sits on its own line so it starts at the control
                          column, not under the last transport button. -->
@@ -283,118 +335,38 @@
                             LostMouseCapture="OnDeckSeekLostCapture"
                             ToolTip="Seek this deck"/>
 
-                    <!-- Karaoke sub-stem bar. Sits on the same label/control grid
-                         as the rows above: KARAOKE / GAIN stacked in the label
-                         column, the gain slider starting at the control column.
-                         The grab handle's seek slider was dropped: it bound the
-                         same PositionSeconds as the deck scrub on the line
-                         directly above, with the same three handlers, so it was a
-                         second handle on one value with no label of its own. -->
-                    <!-- The row is laid out on BOTH decks, always. A deck with a stem
-                         and a deck without one are played against each other, so
-                         their cue banks have to land on the same line: collapsing
-                         this row on the deck that has no stem left that card 47 px
-                         short inside its own border and read as a card that ran out
-                         of content. The empty slot says why it is empty instead of
-                         reserving dead space in silence. KARAOKE joins the other
-                         section labels in grey: accent is this card's state colour
-                         (ACTIVE, the stem's own thumb, the divider), not its heading
-                         colour, so the accent-coloured label read as an accident. -->
-                    <Border Grid.Row="7" Grid.ColumnSpan="3" Margin="0,6,0,0" Padding="0,5,0,0"
+                    <!-- What is left of the karaoke strip is the one thing the strip
+                         was holding for a reason: the sentence that explains an empty
+                         karaoke section. Its gain slider went with the karaoke gain
+                         control and its delay trim moved up to the transport line, so
+                         this row is now a single 12 px line instead of a 25 px label
+                         stack with a 44 px slider beside it - height the lyrics box
+                         gets instead of the card.
+
+                         Still laid out on both decks, always, and MinHeight holds the
+                         line with no text in it, so two cards cannot end on different
+                         lines and a deck with no stem says why the section is empty
+                         rather than reserving silence. -->
+                    <Border Grid.Row="7" Grid.ColumnSpan="3" Margin="0,5,0,0" Padding="0,4,0,0"
                             BorderBrush="{DynamicResource DeckAccent}" BorderThickness="0,1,0,0">
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="50"/>
-                                <ColumnDefinition Width="8"/>
-                                <ColumnDefinition Width="*"/>
-                            </Grid.ColumnDefinitions>
-
-                            <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                                <TextBlock Text="KARAOKE" FontSize="9" FontWeight="Bold"
-                                           Foreground="{StaticResource TextDimBrush}"/>
-                                <!-- The second label follows the row: GAIN when there
-                                     is a stem to balance, an em dash when there is not,
-                                     the way BPM and VERSION show an empty readout. -->
-                                <TextBlock FontSize="9" Margin="0,1,0,0"
-                                           Foreground="{StaticResource TextDimBrush}">
-                                    <TextBlock.Style>
-                                        <Style TargetType="TextBlock">
-                                            <Setter Property="Text" Value="GAIN"/>
-                                            <Style.Triggers>
-                                                <DataTrigger Binding="{Binding HasKaraoke}" Value="False">
-                                                    <Setter Property="Text" Value="&#x2014;"/>
-                                                </DataTrigger>
-                                            </Style.Triggers>
-                                        </Style>
-                                    </TextBlock.Style>
-                                </TextBlock>
-                            </StackPanel>
-
-                            <DockPanel Grid.Column="2"
-                                       Visibility="{Binding HasKaraoke, Converter={StaticResource BoolToVisibility}}">
-                                <!-- Delay cluster first, so it holds the right edge
-                                     and the gain slider keeps the control column. -->
-                                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal"
-                                            VerticalAlignment="Center">
-                                    <TextBlock Text="DELAY MS" FontSize="9" Margin="12,0,6,0"
-                                               Foreground="{StaticResource TextDimBrush}"
-                                               VerticalAlignment="Center"/>
-                                    <RepeatButton Style="{StaticResource StepperNudge}"
-                                                  Delay="400" Interval="150"
-                                                  Content="&#x2212;"
-                                                  Command="{Binding NudgeDelayCommand}" CommandParameter="-5"
-                                                  ToolTip="Trim the karaoke stem 5 ms earlier"/>
-                                    <TextBox Width="56" Margin="3,0"
-                                             TextAlignment="Center" FontSize="10"
-                                             MinHeight="18" Padding="4,0"
-                                             VerticalAlignment="Center"
-                                             Text="{Binding DelayMs, UpdateSourceTrigger=LostFocus, StringFormat=F0}"
-                                             ToolTip="Karaoke stem offset in milliseconds"/>
-                                    <RepeatButton Style="{StaticResource StepperNudge}"
-                                                  Delay="400" Interval="150"
-                                                  Content="+"
-                                                  Command="{Binding NudgeDelayCommand}" CommandParameter="5"
-                                                  ToolTip="Trim the karaoke stem 5 ms later"/>
-                                    <!-- Same 18 px as the field and the nudges, and
-                                         no trailing margin, so the cluster ends on the
-                                         right edge every slider above it runs to. -->
-                                    <Button Width="26" Height="18" Margin="8,0,0,0"
-                                            Padding="0" FontSize="11"
-                                            Style="{StaticResource TransportButton}"
-                                            Content="{Binding PlayGlyph}"
-                                            Command="{Binding PlayPauseCommand}"
-                                            ToolTip="Play/pause this deck (the karaoke stem follows the deck playhead)"/>
-                                </StackPanel>
-
-                                <Slider VerticalAlignment="Center" Minimum="0" Maximum="1"
-                                        Value="{Binding KaraokeGain}"
-                                        ToolTip="Karaoke mix: 0 = original only, 0.5 = both, 1 = karaoke only"/>
-                            </DockPanel>
-
-                            <!-- No stem: the slot keeps its size and states the
-                                 reason, so the two cards still read as one control.
-                                 With no track at all the deck already says so on its
-                                 title line, and this line stays empty. -->
-                            <TextBlock Grid.Column="2" FontSize="9" VerticalAlignment="Center"
-                                       Foreground="{StaticResource TextDimBrush}"
-                                       TextTrimming="CharacterEllipsis">
-                                <TextBlock.Style>
-                                    <Style TargetType="TextBlock">
-                                        <Setter Property="Visibility" Value="Collapsed"/>
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding HasKaraoke}" Value="False">
-                                                <Setter Property="Visibility" Value="Visible"/>
-                                                <Setter Property="Text" Value="no karaoke stem in this file"/>
-                                            </DataTrigger>
-                                            <DataTrigger Binding="{Binding IsLoaded}" Value="False">
-                                                <Setter Property="Visibility" Value="Visible"/>
-                                                <Setter Property="Text" Value=""/>
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </TextBlock.Style>
-                            </TextBlock>
-                        </Grid>
+                        <TextBlock MinHeight="12" FontSize="9" VerticalAlignment="Center"
+                                   Foreground="{StaticResource TextDimBrush}"
+                                   TextTrimming="CharacterEllipsis">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Text" Value=""/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding HasKaraoke}" Value="False">
+                                            <Setter Property="Text" Value="no karaoke stem in this file"/>
+                                        </DataTrigger>
+                                        <!-- An unloaded deck is empty, not stemless. -->
+                                        <DataTrigger Binding="{Binding IsLoaded}" Value="False">
+                                            <Setter Property="Text" Value=""/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
                     </Border>
 
                     <!-- Cue bank: eight saved pads plus the quick cue in one
@@ -974,6 +946,46 @@
                 </Setter.Value>
             </Setter>
         </Style>
+        <!-- Toggle pill for the monitor and mic strips: 18 px, dim until engaged,
+        accent fill while on. One style, two strips - the header's MON/MVSYNC
+        and the mic strip's MON/MUTE - so the two read as the same kind of switch. -->
+        <Style x:Key="MicToggle" TargetType="ToggleButton">
+        <Setter Property="Height" Value="18"/>
+        <Setter Property="Padding" Value="0"/>
+        <Setter Property="FontSize" Value="9"/>
+        <Setter Property="FontWeight" Value="Bold"/>
+        <Setter Property="VerticalAlignment" Value="Center"/>
+        <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Template">
+        <Setter.Value>
+        <ControlTemplate TargetType="ToggleButton">
+        <Border x:Name="bd" Background="{StaticResource PanelAltBrush}"
+        BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+        CornerRadius="3">
+        <!-- A TextBlock with its own Foreground, not a presenter:
+        a ContentPresenter does not follow these triggers, so
+        the checked state painted light text on the cyan fill. -->
+        <TextBlock x:Name="label" Text="{TemplateBinding Content}"
+        Foreground="{TemplateBinding Foreground}"
+        HorizontalAlignment="Center"
+        VerticalAlignment="Center"/>
+        </Border>
+        <ControlTemplate.Triggers>
+        <Trigger Property="IsMouseOver" Value="True">
+        <Setter TargetName="bd" Property="Background"
+        Value="{StaticResource HoverBrush}"/>
+        </Trigger>
+        <Trigger Property="IsChecked" Value="True">
+        <Setter TargetName="bd" Property="Background"
+        Value="{StaticResource AccentABrush}"/>
+        <Setter TargetName="label" Property="Foreground" Value="#08131A"/>
+        </Trigger>
+        </ControlTemplate.Triggers>
+        </ControlTemplate>
+        </Setter.Value>
+        </Setter>
+        </Style>
         </ResourceDictionary>
     </Window.Resources>
 
@@ -1017,21 +1029,86 @@
                                                   the gap after the waveform matches the
                                                   6 px card margins above it (the review
                                                   saw 13 px here against 11 px there). -->
-            <RowDefinition Height="2*" MinHeight="150"/>   <!-- browser + lyrics: still the elastic one -->
+            <RowDefinition Height="3*" MinHeight="150"/>   <!-- browser + lyrics: still the elastic one,
+                                                                and the heavier share of it now: the lyric
+                                                                list is what is read, the wave canvases
+                                                                are at their floor. -->
             <RowDefinition Height="Auto"/>   <!-- status console: jobs, downloads, log -->
             <RowDefinition Height="Auto"/>   <!-- soundboard -->
             <RowDefinition Height="Auto"/>   <!-- footer -->
         </Grid.RowDefinitions>
 
         <!-- ================= Header ================= -->
-        <DockPanel Grid.Row="0" Margin="0,0,0,8">
-            <TextBlock Text="JOCKEY" FontSize="20" FontWeight="Black"/>
-            <TextBlock Text="BOX" FontSize="20" FontWeight="Black" Foreground="{StaticResource AccentABrush}"/>
-            <TextBlock Text="{Binding LoadedTrackTitle}" Margin="24,0,0,0" FontSize="14"
-                       VerticalAlignment="Center" Foreground="{StaticResource TextDimBrush}"
-                       TextTrimming="CharacterEllipsis"/>
+        <!-- LastChildFill is off so the title cannot take the room the two
+             right-docked groups need: docked children are measured in the order they
+             are declared, so Settings and the monitor cluster claim the right edge
+             first and the title gets what is left of it and ellipsises. -->
+        <DockPanel Grid.Row="0" Margin="0,0,0,8" LastChildFill="False">
             <Button DockPanel.Dock="Right" Content="&#x2699; Settings" HorizontalAlignment="Right"
                     Click="OnSettingsClick"/>
+
+            <!-- Monitor cluster: MON, one send per deck, MVSYNC. It lives on this
+                 line because it has nowhere else to go that costs nothing: the deck
+                 block, the browser row and the folders strip already fill the
+                 viewport at 1518x900 to the pixel, so a second line under MON would
+                 have to be taken out of the lyrics box, which is the other thing this
+                 pass is asked to grow. One line, and window-wide state on the strip
+                 that is always visible: the monitor is one bus, not a deck's property.
+
+                 Each slider is the shared slider style with nothing local but an
+                 opacity trigger, so the tick ladder and the recentre tick come from
+                 the style and are not hand-rolled. MON off dims the pair and disables
+                 it; every width is fixed here, so the row cannot resize or shift when
+                 MON toggles. The A and B labels carry the deck colours - the letter is
+                 the label, the colour only says which card it belongs to. -->
+            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center"
+                        Margin="16,0,10,0">
+                <ToggleButton Style="{StaticResource MicToggle}" Width="42" Margin="0,0,10,0"
+                              Content="MON" IsChecked="{Binding MonitorEnabled}"
+                              ToolTip="Play both decks on the monitor output"/>
+                <TextBlock Text="A" FontSize="9" FontWeight="Bold" VerticalAlignment="Center"
+                           Margin="0,0,5,0" Foreground="{StaticResource AccentABrush}"/>
+                <Slider Width="92" Minimum="0" Maximum="1.2" TickFrequency="0.1"
+                        Value="{Binding MonitorAGain}" IsEnabled="{Binding MonitorEnabled}"
+                        ToolTip="Deck A monitor level">
+                    <Slider.Style>
+                        <Style TargetType="Slider" BasedOn="{StaticResource {x:Type Slider}}">
+                            <Setter Property="Opacity" Value="0.35"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding MonitorEnabled}" Value="True">
+                                    <Setter Property="Opacity" Value="1"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Slider.Style>
+                </Slider>
+                <TextBlock Text="B" FontSize="9" FontWeight="Bold" VerticalAlignment="Center"
+                           Margin="10,0,5,0" Foreground="{StaticResource AccentBBrush}"/>
+                <Slider Width="92" Minimum="0" Maximum="1.2" TickFrequency="0.1"
+                        Value="{Binding MonitorBGain}" IsEnabled="{Binding MonitorEnabled}"
+                        ToolTip="Deck B monitor level">
+                    <Slider.Style>
+                        <Style TargetType="Slider" BasedOn="{StaticResource {x:Type Slider}}">
+                            <Setter Property="Opacity" Value="0.35"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding MonitorEnabled}" Value="True">
+                                    <Setter Property="Opacity" Value="1"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Slider.Style>
+                </Slider>
+                <ToggleButton Style="{StaticResource MicToggle}" Width="58" Margin="12,0,0,0"
+                              Content="MVSYNC" IsChecked="{Binding MonitorSyncEnabled}"
+                              ToolTip="Move both monitor sliders together"/>
+            </StackPanel>
+
+            <TextBlock DockPanel.Dock="Left" Text="JOCKEY" FontSize="20" FontWeight="Black"/>
+            <TextBlock DockPanel.Dock="Left" Text="BOX" FontSize="20" FontWeight="Black"
+                       Foreground="{StaticResource AccentABrush}"/>
+            <TextBlock DockPanel.Dock="Left" Text="{Binding LoadedTrackTitle}" Margin="24,0,0,0" FontSize="14"
+                       VerticalAlignment="Center" Foreground="{StaticResource TextDimBrush}"
+                       TextTrimming="CharacterEllipsis"/>
         </DockPanel>
 
         <!-- ================= Deck block: decks / waveforms / crossfader / transport =================
@@ -1091,46 +1168,6 @@
                     <Setter Property="VerticalAlignment" Value="Center"/>
                 </Style>
 
-                <!-- Mic strip toggles: same 18 px height as the master reset
-                     button, lit with the accent colour while engaged so MON and
-                     MUTE read at a glance from across the booth. -->
-                <Style x:Key="MicToggle" TargetType="ToggleButton">
-                    <Setter Property="Height" Value="18"/>
-                    <Setter Property="Padding" Value="0"/>
-                    <Setter Property="FontSize" Value="9"/>
-                    <Setter Property="FontWeight" Value="Bold"/>
-                    <Setter Property="VerticalAlignment" Value="Center"/>
-                    <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
-                    <Setter Property="Cursor" Value="Hand"/>
-                    <Setter Property="Template">
-                        <Setter.Value>
-                            <ControlTemplate TargetType="ToggleButton">
-                                <Border x:Name="bd" Background="{StaticResource PanelAltBrush}"
-                                        BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
-                                        CornerRadius="3">
-                                    <!-- A TextBlock with its own Foreground, not a presenter:
-                                         a ContentPresenter does not follow these triggers, so
-                                         the checked state painted light text on the cyan fill. -->
-                                    <TextBlock x:Name="label" Text="{TemplateBinding Content}"
-                                               Foreground="{TemplateBinding Foreground}"
-                                               HorizontalAlignment="Center"
-                                               VerticalAlignment="Center"/>
-                                </Border>
-                                <ControlTemplate.Triggers>
-                                    <Trigger Property="IsMouseOver" Value="True">
-                                        <Setter TargetName="bd" Property="Background"
-                                                Value="{StaticResource HoverBrush}"/>
-                                    </Trigger>
-                                    <Trigger Property="IsChecked" Value="True">
-                                        <Setter TargetName="bd" Property="Background"
-                                                Value="{StaticResource AccentABrush}"/>
-                                        <Setter TargetName="label" Property="Foreground" Value="#08131A"/>
-                                    </Trigger>
-                                </ControlTemplate.Triggers>
-                            </ControlTemplate>
-                        </Setter.Value>
-                    </Setter>
-                </Style>
             </Border.Resources>
             <Grid>
                 <Grid.ColumnDefinitions>

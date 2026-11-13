@@ -39,8 +39,8 @@ public sealed class KaraokePairTests
 
             UiThread.Run(() => Invoke(vm, "LoadKaraokePair", pair, AudioVariant.Karaoke));
             Assert.True(PairLoaded(vm));
-            Assert.Equal("DECK: KARAOKE", vm.DeckA.Title);
-            Assert.Equal("DECK: ORIGINAL", vm.DeckB.Title);
+            Assert.Equal("DECK A: KARAOKE", vm.DeckA.Title);
+            Assert.Equal("DECK B: ORIGINAL", vm.DeckB.Title);
 
             // An ordinary load is the release choke point: it runs first, so the
             // lock and both titles are back before the new track lands.
@@ -327,8 +327,8 @@ public sealed class KaraokePairTests
             Assert.True(karaokeRow.IsPlayed);
             Assert.True(originalRow.IsPlayed);
             Assert.Same(karaokeRow, vm.Queue[vm.CurrentIndex]);
-            Assert.Equal("DECK: KARAOKE", vm.DeckA.Title);
-            Assert.Equal("DECK: ORIGINAL", vm.DeckB.Title);
+            Assert.Equal("DECK A: KARAOKE", vm.DeckA.Title);
+            Assert.Equal("DECK B: ORIGINAL", vm.DeckB.Title);
 
             // A request for the original row starts the pair, never deck B alone.
             await (Task)UiThread.Run(() => Invoke(vm, "StartQueueItemAsync", originalRow, false))!;

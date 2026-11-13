@@ -49,8 +49,8 @@ public partial class MainViewModel
         DeckB.HoldStem(StemKind.Original);
 
         _karaokePairLoaded = true;
-        DeckA.SetKaraokeTitle("DECK: KARAOKE");
-        DeckB.SetKaraokeTitle("DECK: ORIGINAL");
+        DeckA.SetKaraokeTitle("DECK A: KARAOKE");
+        DeckB.SetKaraokeTitle("DECK B: ORIGINAL");
 
         _activeDeck = PlaybackDeck.A;
         _transport.ActivateDeck(PlaybackDeck.A);
