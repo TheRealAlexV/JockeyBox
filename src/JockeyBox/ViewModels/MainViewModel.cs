@@ -4518,6 +4518,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _playlistStore.Dispose();
         _separation.Dispose();
         _watcher.Dispose();
+        DeckA.Dispose();
+        DeckB.Dispose();
         _transport.Dispose();
         TeardownStep("tag cache and the library.json re-mirror");
         _tagCache.Save();

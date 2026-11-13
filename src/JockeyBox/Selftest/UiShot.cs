@@ -39,6 +39,19 @@ internal static class UiShot
         string? path = Harness.Flag(args, "--uishot");
         if (string.IsNullOrWhiteSpace(path)) return 2;
 
+        // Before the window exists: a capture's numbers mean nothing without the
+        // binary that produced them (see CaptureIdentity).
+        string[]? identity = CaptureIdentity.Header();
+        if (identity is null)
+        {
+            Console.Error.WriteLine(
+                "uishot: UNIDENTIFIED - cannot read the running exe, so the capture would be unattributable");
+            Console.Error.Flush();
+            return CaptureIdentity.UnidentifiedExitCode;
+        }
+        foreach (string line in identity) Console.Out.WriteLine(line);
+        Console.Out.Flush();
+
         RenderOptions.ProcessRenderMode = System.Windows.Interop.RenderMode.SoftwareOnly;
 
         // This method closes the window before it returns its exit code, and the
@@ -356,6 +369,23 @@ internal static class UiShot
             Console.Out.WriteLine(
                 $"uishot: track \"{hit.Artist} - {hit.Title}\" lines={trackVm.LyricLines.Count} "
                 + $"ok={gotLines} status={trackVm.LyricsStatus}");
+
+            // The deck opens the track on a worker, so a dump taken in the gap
+            // photographs a card that is empty by timing rather than by design -
+            // 0:00 / 0:00 and no KARAOKE row on a track that has a partner. Wait
+            // for the deck itself to report loaded, then read the flags back so
+            // the capture says which of the two states it saw.
+            var decks = new[] { ("A", trackVm.DeckA), ("B", trackVm.DeckB) };
+            var loaded = decks.FirstOrDefault(d => d.Item2.IsLoaded) is { Item2: not null } onDeck
+                ? onDeck
+                : decks[0];
+            bool deckLoaded = UiPump.PumpUntil(() => loaded.Item2.IsLoaded, 30000);
+            // One more quiet window: the flags land after the readers open, which
+            // is a further worker hop behind "loaded".
+            UiPump.Pump(Harness.QuietMs);
+            Console.Out.WriteLine(
+                $"uishot: deck {loaded.Item1} loaded={deckLoaded} IsLoaded={loaded.Item2.IsLoaded} "
+                + $"HasKaraoke={loaded.Item2.HasKaraoke} readout=\"{loaded.Item2.TimeReadout}\"");
             Console.Out.Flush();
         }
 
@@ -626,7 +656,7 @@ internal static class UiShot
         if (Harness.Flag(args, "--uishot-measure") != null) MeasureTrackLists(host);
 
         string? textDumpPath = Harness.Flag(args, "--uishot-textdump");
-        if (!string.IsNullOrWhiteSpace(textDumpPath)) DumpTextBlocks(host, textDumpPath);
+        if (!string.IsNullOrWhiteSpace(textDumpPath)) DumpTextBlocks(host, textDumpPath, identity);
 
         var bitmap = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
         bitmap.Render(host);
@@ -741,10 +771,11 @@ internal static class UiShot
     /// switch rather than a throwaway patch so the next such question costs a run
     /// and not an edit.</para>
     /// </summary>
-    private static void DumpTextBlocks(Visual? root, string path)
+    private static void DumpTextBlocks(Visual? root, string path, string[] identity)
     {
         int total = 0, nullContext = 0, emptyText = 0, textWithoutWidth = 0;
         var lines = new StringBuilder();
+        foreach (string line in identity) lines.Append(line).Append('\n');
 
         void Walk(DependencyObject? node, int depth)
         {

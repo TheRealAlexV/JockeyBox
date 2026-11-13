@@ -48,6 +48,17 @@ internal static class LibraryDump
         if (string.IsNullOrWhiteSpace(dumpPath)) dumpPath = null;
         var mirror = dumpPath is null ? null : new StringBuilder();
 
+        // Which binary printed these rows, before any row: the mirror file carries
+        // the same lines, so a dump read off disk is attributable by itself.
+        string[]? identity = CaptureIdentity.Header();
+        if (identity is null)
+        {
+            Console.Error.WriteLine("dump: UNIDENTIFIED - cannot read the running exe, so the rows would be unattributable");
+            Console.Error.Flush();
+            return CaptureIdentity.UnidentifiedExitCode;
+        }
+        foreach (string line in identity) Echo(line);
+
         Echo($"dump: home {AppPaths.Home}");
         Console.Out.Flush();
 

@@ -21,7 +21,7 @@ namespace JockeyBox.ViewModels;
 /// sub-bar seeks the same deck position, so both stems stay locked together
 /// while the two decks themselves run independently.
 /// </summary>
-public partial class DeckViewModel : ObservableObject
+public partial class DeckViewModel : ObservableObject, IDisposable
 {
     private readonly DeckChannel _channel;
     private readonly DualDeckTransport _transport;
@@ -80,6 +80,13 @@ public partial class DeckViewModel : ObservableObject
         _getDeviceDelay = getDeviceDelay;
         _setDeviceDelay = setDeviceDelay;
 
+        // The channel loads the track on a worker, so the flags sampled in
+        // SetTrack are stale by construction. Subscribe once, here, and let the
+        // channel say when the deck has actually reached a loaded state: a
+        // per-load subscribe would double up on every re-load, and this channel
+        // outlives every track that passes through the deck.
+        _channel.StateChanged += OnChannelStateChanged;
+
         // Debounce resync/persist so held +/- buttons or rapid edits produce a
         // single clean restart instead of a restart per step.
         _resyncDebounce = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
@@ -101,6 +108,19 @@ public partial class DeckViewModel : ObservableObject
 
     /// <summary>Eight saved pads plus the quick cue, bound in the card's pad bank.</summary>
     public CueBankViewModel Cues { get; }
+
+    /// <summary>
+    /// Diagnostic for the deck's asynchronous load, on when
+    /// <c>JOCKEYBOX_DECK_TRACE</c> is set: the state sampled at load time next to
+    /// the state the channel reports when it is actually ready. stderr, so a
+    /// capture's stdout parsing is unaffected.
+    /// </summary>
+    internal static void DeckTrace(string message)
+    {
+        if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable("JOCKEYBOX_DECK_TRACE"))) return;
+        Console.Error.WriteLine($"decktrace: {message}");
+        Console.Error.Flush();
+    }
 
     /// <summary>
     /// The takes this track has on disk, as a submenu: only what
@@ -299,6 +319,9 @@ public partial class DeckViewModel : ObservableObject
             : artist;
         IsLoaded = _channel.IsLoaded;
         HasKaraoke = _channel.HasKaraoke;
+        DeckTrace($"SetTrack sample deck={DeckTarget} track={System.IO.Path.GetFileName(musicPath)} " +
+                  $"karaoke={System.IO.Path.GetFileName(karaokePath ?? "")} karaokeOnDisk={System.IO.File.Exists(karaokePath ?? "")} " +
+                  $"IsLoaded={IsLoaded} HasKaraoke={HasKaraoke} duration={_channel.Duration.TotalSeconds:0.000}s");
 
         SetVersions(musicPath, karaokePath, vocalsPath);
         Cues.SetTrack(musicPath);
@@ -375,6 +398,36 @@ public partial class DeckViewModel : ObservableObject
 
     /// <summary>Path of the track loaded on this deck, or null when empty.</summary>
     public string? TrackPath => _channel.PrimaryPath;
+
+    /// <summary>
+    /// The channel says what the deck now holds. <see cref="SetTrack"/> samples
+    /// <see cref="IsLoaded"/> and <see cref="HasKaraoke"/> the instant it asks for
+    /// the load, but the channel opens the readers on a worker, so on a real
+    /// load both read false and the KARAOKE row never appears. This is the other
+    /// half of that load: by the time the channel announces, the flags are true,
+    /// and the card re-reads them instead of keeping the sample it took at 0 ms.
+    /// </summary>
+    private void OnChannelStateChanged(object? sender, EventArgs e)
+    {
+        bool loaded = _channel.IsLoaded;
+        bool karaoke = _channel.HasKaraoke;
+        DeckTrace($"StateChanged deck={DeckTarget} state={_channel.State} IsLoaded={loaded} " +
+                  $"HasKaraoke={karaoke} duration={_channel.Duration.TotalSeconds:0.000}s");
+        if (IsLoaded == loaded && HasKaraoke == karaoke) return;
+
+        IsLoaded = loaded;
+        HasKaraoke = karaoke;
+        // The readout's own gate is IsLoaded: without this it keeps the
+        // "0:00 / 0:00" it printed while the deck was still opening.
+        UpdateReadout();
+    }
+
+    /// <summary>Detach from the channel this deck listens to.</summary>
+    public void Dispose()
+    {
+        _resyncDebounce.Stop();
+        _channel.StateChanged -= OnChannelStateChanged;
+    }
 
     /// <summary>Called by the view when a deck seek drag starts.</summary>
     public void BeginSeek() => _isUserSeeking = true;
