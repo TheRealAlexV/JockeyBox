@@ -16,14 +16,16 @@ namespace JockeyBox.Activity;
 /// marshalled onto the WPF dispatcher, so a UI can bind to <see cref="Rows"/>
 /// and <see cref="RecentLog"/> without knowing which subsystem reported.
 /// </summary>
-public sealed class ActivityFeed : ObservableObject
+public sealed partial class ActivityFeed : ObservableObject
 {
     /// <summary>
     /// How many log lines the console keeps. A download emits a handful of
-    /// lines per second; 200 covers the last few minutes of one job, stays
-    /// cheap to scroll, and never grows without bound.
+    /// lines per second, and a karaoke render adds queue/created/failed lines
+    /// that the operator needs to find afterwards; 500 covers a working session
+    /// including several karaoke jobs, stays cheap to scroll, and never grows
+    /// without bound.
     /// </summary>
-    private const int DefaultLogCapacity = 200;
+    private const int DefaultLogCapacity = 500;
 
     /// <summary>Process-wide feed; the app has exactly one status console.</summary>
     public static ActivityFeed Shared { get; } = CreateShared();
@@ -52,6 +54,51 @@ public sealed class ActivityFeed : ObservableObject
     /// <summary>Maximum number of lines <see cref="RecentLog"/> holds.</summary>
     public int LogCapacity => _logCapacity;
 
+    /// <summary>
+    /// The job row the operator is inspecting, or null. Set by the console when a
+    /// row is clicked or arrowed to; the detail pane and its Copy button read it.
+    /// </summary>
+    [ObservableProperty]
+    [NotifyPropertyChangedFor(nameof(HasSelectedRow), nameof(SelectedRowDetail))]
+    private ActivityRow? _selectedRow;
+
+    /// <summary>True when a row is selected, so the detail pane can show itself.</summary>
+    public bool HasSelectedRow => SelectedRow is not null;
+
+    /// <summary>The detail pane's text for the selected row.</summary>
+    public string SelectedRowDetail => DescribeRow(SelectedRow);
+
+    /// <summary>
+    /// The log line the operator selected. Log lines are clipped horizontally, so
+    /// selection exists to name the line a Copy button will take in full.
+    /// </summary>
+    [ObservableProperty]
+    private string? _selectedLogLine;
+
+    /// <summary>
+    /// Multi-line text for the detail pane, and what its Copy button puts on the
+    /// clipboard: every field the operator may need to quote in a bug report.
+    /// </summary>
+    public static string DescribeRow(ActivityRow? row)
+    {
+        if (row is null) return "";
+        var lines = new List<string>
+        {
+            $"Id:          {row.Id}",
+            $"Kind:        {row.Kind}",
+            $"Source:      {(string.IsNullOrEmpty(row.Source) ? "(unknown)" : row.Source)}",
+            $"Title:       {row.Title}",
+            $"Started:     {row.Started:yyyy-MM-dd HH:mm:ss}",
+            $"Finished:    {(row.Finished is { } f ? f.ToString("yyyy-MM-dd HH:mm:ss") : "(running)")}",
+            $"State:       {row.StageText}",
+            $"Percent:     {(row.Percent is { } p ? $"{p:0}%" : "(none)")}",
+            $"Detail:      {(string.IsNullOrWhiteSpace(row.Detail) ? "(none)" : row.Detail)}",
+            $"Output:      {(string.IsNullOrWhiteSpace(row.OutputPath) ? "(none)" : row.OutputPath)}",
+            $"Error:       {(string.IsNullOrWhiteSpace(row.Error) ? "(none)" : row.Error)}",
+        };
+        return string.Join(Environment.NewLine, lines);
+    }
+
     /// <summary>Rows that have not reached a terminal state yet.</summary>
     public int ActiveCount => _rows.Count(r => !r.IsFinished);
 
@@ -68,7 +115,9 @@ public sealed class ActivityFeed : ObservableObject
         string id,
         string title,
         bool canCancel = false,
-        Action? cancel = null)
+        Action? cancel = null,
+        string source = "",
+        string? outputPath = null)
     {
         var row = new ActivityRow
         {
@@ -77,6 +126,8 @@ public sealed class ActivityFeed : ObservableObject
             Title = title,
             CanCancel = canCancel && cancel is not null,
             CancelAction = cancel,
+            Source = source,
+            OutputPath = outputPath,
         };
 
         OnUi(() =>
@@ -90,7 +141,12 @@ public sealed class ActivityFeed : ObservableObject
     }
 
     /// <summary>Push state/progress for a row. Safe from any thread; null row is ignored.</summary>
-    public void Update(ActivityRow? row, DownloadState state, double? percent = null, string? detail = null)
+    public void Update(
+        ActivityRow? row,
+        DownloadState state,
+        double? percent = null,
+        string? detail = null,
+        string? error = null)
     {
         if (row is null) return;
 
@@ -99,13 +155,18 @@ public sealed class ActivityFeed : ObservableObject
             if (row.State != state) row.State = state;
             if (percent is { } p && row.Percent != p) row.Percent = p;
             if (detail != row.Detail) row.Detail = detail;
+            if (error is not null && error != row.Error) row.Error = error;
             row.Finished = row.IsFinished ? row.Finished ?? DateTimeOffset.Now : null;
         });
     }
 
     /// <summary>Terminal update: done/failed/cancelled.</summary>
-    public void Finish(ActivityRow? row, DownloadState state = DownloadState.Done, string? detail = null)
-        => Update(row, state, null, detail);
+    public void Finish(
+        ActivityRow? row,
+        DownloadState state = DownloadState.Done,
+        string? detail = null,
+        string? error = null)
+        => Update(row, state, null, detail, error);
 
     /// <summary>Look up a row by id. UI thread only (producers hold their own reference).</summary>
     public ActivityRow? Find(string id) => _rows.FirstOrDefault(r => r.Id == id);
@@ -132,6 +193,7 @@ public sealed class ActivityFeed : ObservableObject
             foreach (ActivityRow row in e.OldItems) row.PropertyChanged -= OnRowPropertyChanged;
         if (e.NewItems is not null)
             foreach (ActivityRow row in e.NewItems) row.PropertyChanged += OnRowPropertyChanged;
+        if (SelectedRow is { } selected && !_rows.Contains(selected)) SelectedRow = null;
         RaiseCounts();
     }
 

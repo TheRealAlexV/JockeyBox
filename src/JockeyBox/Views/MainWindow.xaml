@@ -2249,16 +2249,41 @@
                             ToolTip="Remove finished jobs from the list. The log keeps its lines."/>
                 </DockPanel>
 
-                <TabControl x:Name="ConsoleTabs" Style="{StaticResource ConsoleTabs}" Height="214"
+                <TabControl x:Name="ConsoleTabs"
                             Visibility="{Binding IsChecked, ElementName=ConsoleToggle, Converter={StaticResource BoolToVisibility}}">
+                    <TabControl.Style>
+                        <!-- 214 is the collapsed-comfortable height the console has
+                             always had. The selected-job pane needs its own room: 380
+                             keeps two or three rows above it instead of squeezing the
+                             list to nothing, and drops back the moment it closes. -->
+                        <Style TargetType="TabControl" BasedOn="{StaticResource ConsoleTabs}">
+                            <Setter Property="Height" Value="214"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding HasSelectedRow, Source={x:Static activity:ActivityFeed.Shared}}"
+                                             Value="True">
+                                    <Setter Property="Height" Value="380"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TabControl.Style>
 
                     <!-- Jobs: every ActivityFeed row, one list -->
                     <TabItem Header="JOBS" Style="{StaticResource ConsoleTabItem}">
                         <Grid>
-                            <ScrollViewer VerticalScrollBarVisibility="Auto"
-                                          HorizontalScrollBarVisibility="Disabled">
-                                <ItemsControl ItemsSource="{Binding Rows, Source={x:Static activity:ActivityFeed.Shared}}">
-                                    <ItemsControl.ItemTemplate>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="*"/>
+                                <RowDefinition Height="Auto"/>
+                            </Grid.RowDefinitions>
+                            <ListBox x:Name="JobList" Grid.Row="0" MinHeight="56"
+                                     ItemsSource="{Binding Rows, Source={x:Static activity:ActivityFeed.Shared}}"
+                                     SelectedItem="{Binding SelectedRow, Source={x:Static activity:ActivityFeed.Shared}, Mode=TwoWay}"
+                                     ItemContainerStyle="{StaticResource ConsoleJobItem}"
+                                     Background="Transparent" BorderThickness="0"
+                                     HorizontalContentAlignment="Stretch"
+                                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                     ScrollViewer.VerticalScrollBarVisibility="Auto"
+                                     AutomationProperties.Name="Activity jobs">
+                                    <ListBox.ItemTemplate>
                                         <DataTemplate>
                                             <Border x:Name="jobRow" MinHeight="28" Margin="0,0,0,2" Padding="6,0"
                                                     CornerRadius="3" BorderThickness="1"
@@ -2281,6 +2306,15 @@
                                                             </DataTrigger>
                                                             <DataTrigger Binding="{Binding State}" Value="Cancelled">
                                                                 <Setter Property="Opacity" Value="0.6"/>
+                                                            </DataTrigger>
+                                                            <!-- Selected row: the detail pane below
+                                                                 is showing this one. Accent border, because
+                                                                 it is a selection not a state. -->
+                                                            <DataTrigger Binding="{Binding IsSelected,
+                                                                RelativeSource={RelativeSource AncestorType=ListBoxItem}}"
+                                                                         Value="True">
+                                                                <Setter Property="BorderBrush" Value="{StaticResource AccentABrush}"/>
+                                                                <Setter Property="Background" Value="{StaticResource PanelAltBrush}"/>
                                                             </DataTrigger>
                                                         </Style.Triggers>
                                                     </Style>
@@ -2479,12 +2513,45 @@
                                                 </Grid>
                                             </Border>
                                         </DataTemplate>
-                                    </ItemsControl.ItemTemplate>
-                                </ItemsControl>
-                            </ScrollViewer>
+                                    </ListBox.ItemTemplate>
+                            </ListBox>
+
+                            <!-- Selected job detail. A tooltip only carries Detail;
+                                 this carries the whole row, including what file the
+                                 job produced and why it failed, and copies it. -->
+                            <Border Grid.Row="1" Margin="0,6,0,0" Padding="8,6" CornerRadius="3"
+                                    Background="{StaticResource PanelAltBrush}"
+                                    BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                                    Visibility="{Binding HasSelectedRow, Source={x:Static activity:ActivityFeed.Shared},
+                                                 Converter={StaticResource BoolToVisibility}}">
+                                <DockPanel>
+                                    <DockPanel DockPanel.Dock="Top" LastChildFill="False">
+                                        <TextBlock DockPanel.Dock="Left" Text="JOB DETAIL"
+                                                   FontSize="10" VerticalAlignment="Center"
+                                                   Foreground="{StaticResource TextDimBrush}"/>
+                                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                            <Button Content="Copy" Style="{StaticResource ConsoleAction}"
+                                                    Click="CopyJobDetail_Click"
+                                                    AutomationProperties.Name="Copy job detail"
+                                                    ToolTip="Copy every field of this job"/>
+                                            <Button Content="Close" Style="{StaticResource ConsoleAction}"
+                                                    Click="CloseJobDetail_Click"
+                                                    ToolTip="Hide the detail pane"/>
+                                        </StackPanel>
+                                    </DockPanel>
+                                    <ScrollViewer MaxHeight="170" VerticalScrollBarVisibility="Auto"
+                                                  HorizontalScrollBarVisibility="Disabled">
+                                        <TextBlock Text="{Binding SelectedRowDetail, Source={x:Static activity:ActivityFeed.Shared}}"
+                                                   FontFamily="Consolas" FontSize="10" Margin="0,4,0,0"
+                                                   TextWrapping="Wrap"
+                                                   AutomationProperties.Name="Selected job detail"/>
+                                    </ScrollViewer>
+                                </DockPanel>
+                            </Border>
 
                             <!-- Empty state: says what belongs here -->
                             <TextBlock Text="Downloads and karaoke jobs appear here while they run."
+                                       Grid.Row="0"
                                        FontSize="11" Margin="4,8,0,0" VerticalAlignment="Top"
                                        Foreground="{StaticResource TextDimBrush}">
                                 <TextBlock.Style>
@@ -2801,17 +2868,37 @@
                         </ScrollViewer>
                     </TabItem>
 
-                    <!-- Log: the app log tail, kept out of the jobs list's way -->
+                    <!-- Log: the app log tail, kept out of the jobs list's way.
+                         Lines are clipped horizontally, so the list is selectable
+                         and the Copy button takes the whole line. -->
                     <TabItem Header="LOG" Style="{StaticResource ConsoleTabItem}">
-                        <ListBox Style="{StaticResource ConsoleLogList}"
-                                 ItemsSource="{Binding RecentLog, Source={x:Static activity:ActivityFeed.Shared}}"
-                                 AutomationProperties.Name="Recent log lines">
-                            <ListBox.ItemTemplate>
-                                <DataTemplate>
-                                    <TextBlock Text="{Binding}" TextWrapping="NoWrap"/>
-                                </DataTemplate>
-                            </ListBox.ItemTemplate>
-                        </ListBox>
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+                            <DockPanel Grid.Row="0" LastChildFill="False" Margin="0,0,0,3">
+                                <TextBlock DockPanel.Dock="Left" VerticalAlignment="Center"
+                                           Text="Select a line, then copy it in full."
+                                           FontSize="10" Foreground="{StaticResource TextDimBrush}"/>
+                                <Button DockPanel.Dock="Right" Content="Copy line"
+                                        Style="{StaticResource ConsoleAction}"
+                                        Click="CopyLogLine_Click"
+                                        AutomationProperties.Name="Copy selected log line"
+                                        ToolTip="Copy the selected log line in full"/>
+                            </DockPanel>
+                            <ListBox x:Name="LogList" Grid.Row="1"
+                                     Style="{StaticResource ConsoleLogList}"
+                                     ItemsSource="{Binding RecentLog, Source={x:Static activity:ActivityFeed.Shared}}"
+                                     SelectedItem="{Binding SelectedLogLine, Source={x:Static activity:ActivityFeed.Shared}, Mode=TwoWay}"
+                                     AutomationProperties.Name="Recent log lines">
+                                <ListBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding}" TextWrapping="NoWrap"/>
+                                    </DataTemplate>
+                                </ListBox.ItemTemplate>
+                            </ListBox>
+                        </Grid>
                     </TabItem>
                 </TabControl>
             </DockPanel>

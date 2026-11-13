@@ -9,11 +9,14 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
+using JockeyBox.Activity;
+using JockeyBox.Downloads;
 using JockeyBox.Playback;
 using JockeyBox.Tools;
 using JockeyBox.ViewModels;
 using JockeyBox.Views;
 using JockeyBox.YouTube;
+using ActivityKind = JockeyBox.Activity.ActivityKind;
 
 namespace JockeyBox.Selftest;
 
@@ -151,6 +154,31 @@ internal static class UiShot
         {
             foreach (var entry in StubSearchRows) rowsVm.YouTube.Results.Add(entry);
             rowsVm.YouTube.SelectedResult = rowsVm.YouTube.Results[0];
+        }
+
+        // --uishot-activity: seed the console's JOBS list with the rows a karaoke
+        // job produces, select one, and open its detail pane, so the row, the
+        // selection border and the pane are photographed instead of asserted. No
+        // engine, no files, no queue: the same rows a real job writes.
+        if (Harness.Flag(args, "--uishot-activity") != null)
+        {
+            var feed = ActivityFeed.Shared;
+            var running = feed.Start(
+                ActivityKind.Karaoke,
+                "karaoke:uishot-running",
+                "Daft Punk - Get Lucky",
+                source: "karaoke",
+                outputPath: @"C:\Music\Daft Punk\Get Lucky.karaoke.mp3");
+            feed.Update(running, DownloadState.Converting, 62, "62%");
+
+            var created = feed.Start(
+                ActivityKind.Karaoke,
+                "karaoke:uishot-created",
+                "Fleetwood Mac - Dreams",
+                source: "karaoke",
+                outputPath: @"C:\Music\Fleetwood Mac\Dreams.karaoke.mp3");
+            feed.Finish(created, DownloadState.Done, "done");
+            feed.SelectedRow = created;
         }
 
         window.Show();
