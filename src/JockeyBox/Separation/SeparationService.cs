@@ -225,7 +225,17 @@ public class SeparationService : IDisposable
                 lock (_lock) _jobs.Remove(job.Key);
                 // Only the instrumental modes fill the deck-A slot. A vocals
                 // take is a separate file, not this track's karaoke partner.
-                if (job.Mode != KaraokeStemMode.VocalsOnly) job.Entry.KaraokePath = output;
+                //
+                // The pointer is a fallback partner, not a registry: a second
+                // render must not steal it, because the row and the deck would
+                // then lose sight of the file the first one wrote. An empty slot
+                // is still filled, so a first instrumental behaves as before, and
+                // every mode rings the variant bell so the row and the menus
+                // re-read what is on disk.
+                if (job.Mode != KaraokeStemMode.VocalsOnly
+                    && string.IsNullOrWhiteSpace(job.Entry.KaraokePath))
+                    job.Entry.KaraokePath = output;
+                job.Entry.NotifyVariantsChanged();
                 job.Entry.Separation = SeparationState.None;
                 job.Entry.SeparationProgress = 0;
                 Completed?.Invoke(job.Entry, output);

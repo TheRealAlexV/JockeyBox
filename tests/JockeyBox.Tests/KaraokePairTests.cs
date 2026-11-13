@@ -2,10 +2,13 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Threading;
 using System.Threading.Tasks;
+using JockeyBox.Audio;
 using JockeyBox.Library;
 using JockeyBox.Playback;
 using JockeyBox.Settings;
+using JockeyBox.Tools;
 using JockeyBox.ViewModels;
 using Xunit;
 
@@ -34,7 +37,7 @@ public sealed class KaraokePairTests
             var pair = Track("a/song", music, karaoke);
             var normal = Track("a/other", other, null);
 
-            UiThread.Run(() => Invoke(vm, "LoadKaraokePair", pair));
+            UiThread.Run(() => Invoke(vm, "LoadKaraokePair", pair, AudioVariant.Karaoke));
             Assert.True(PairLoaded(vm));
             Assert.Equal("DECK: KARAOKE", vm.DeckA.Title);
             Assert.Equal("DECK: ORIGINAL", vm.DeckB.Title);
@@ -65,6 +68,88 @@ public sealed class KaraokePairTests
 
         Assert.Equal("DECK A", vm.DeckA.Title);
         Assert.Equal("DECK B", vm.DeckB.Title);
+    }
+
+    [Fact]
+    public void KaraokePair_StartsBothDecks_WithTheLockEngaged()
+    {
+        string music = TestAudio.WriteConstantWav(0.20f, seconds: 30);
+        string karaoke = TestAudio.WriteConstantWav(0.50f, seconds: 30);
+        var lines = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        void Capture(string line) => lines.Enqueue(line);
+
+        Log.LineWritten += Capture;
+        try
+        {
+            var vm = UiThread.Run(() =>
+            {
+                var model = new MainViewModel();
+                model.InitializeDeckUi();
+                return model;
+            });
+
+            try
+            {
+                var pair = Track("a/song", music, karaoke);
+
+                // One karaoke load arms the link and the lock, then starts both
+                // decks. It used to call PlayDeck(A), which bypasses Target.
+                UiThread.Run(() => Invoke(vm, "LoadKaraokePair", pair, AudioVariant.Karaoke));
+
+                bool both = false;
+                for (int i = 0; i < 4000 && !both; i++)
+                {
+                    // The fake output path the other transport tests use, re-asserted
+                    // each pass: no engine thread runs here, so the transport keeps
+                    // reporting the route as gone and a load would fail with
+                    // "no output configured".
+                    UiThread.Run(() =>
+                    {
+                        vm.Transport.DeckA.SetOutputAvailable(true);
+                        vm.Transport.DeckB.SetOutputAvailable(true);
+                    });
+                    vm.Transport.Engine.DeckA.Commands.Drain();
+                    vm.Transport.Engine.DeckB.Commands.Drain();
+                    // Let the marshalled state notifications run: the channel posts
+                    // them to the UI dispatcher, which no test thread pumps by itself.
+                    UiThread.Run(() => { });
+                    both = vm.Transport.DeckA.State == TransportState.Playing
+                        && vm.Transport.DeckB.State == TransportState.Playing;
+                    if (!both) Thread.Sleep(5);
+                }
+
+                Assert.True(both,
+                    $"both decks play: A={vm.Transport.DeckA.State} ({vm.Transport.DeckA.Error}), " +
+                    $"B={vm.Transport.DeckB.State} ({vm.Transport.DeckB.Error})");
+                Assert.Equal(TransportTarget.Both, vm.Transport.Target);
+                Assert.True(vm.Transport.SyncActive, "the pair engages the master/slave lock");
+
+                // One UI tick, the same one the window's timer runs: a deck reaching
+                // Playing raises no channel event, so the settled line is written by
+                // the tick that drives the readouts. No timer here, so drive it once.
+                UiThread.Run(() => Invoke(vm, "OnUiTick"));
+
+                // The same line that lands in jockeybox.log proves it without the UI.
+                var pairText = string.Join("\n", lines.Where(line => line.Contains("karaoke pair")));
+                var loadedFlag = ReadField(vm, "_karaokePairLoaded");
+                var loggedFlag = ReadField(vm, "_pairStartLogged");
+                Assert.True(pairText.Contains("both decks Playing") && pairText.Contains("sync=True"),
+                    $"the pair's log lines: {pairText}\n" +
+                    $"pairLoaded={loadedFlag} pairStartLogged={loggedFlag} " +
+                    $"A={vm.Transport.DeckA.State} B={vm.Transport.DeckB.State} " +
+                    $"target={vm.Transport.Target} sync={vm.Transport.SyncActive}");
+            }
+            finally
+            {
+                UiThread.Run(() => vm.Dispose());
+            }
+        }
+        finally
+        {
+            Log.LineWritten -= Capture;
+            TestAudio.TryDelete(music);
+            TestAudio.TryDelete(karaoke);
+        }
     }
 
     // ---- settings migration -------------------------------------------------
@@ -277,4 +362,9 @@ public sealed class KaraokePairTests
         (bool)typeof(MainViewModel)
             .GetField("_karaokePairLoaded", BindingFlags.Instance | BindingFlags.NonPublic)!
             .GetValue(vm)!;
+
+    private static object? ReadField(MainViewModel vm, string name) =>
+        typeof(MainViewModel)
+            .GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(vm);
 }

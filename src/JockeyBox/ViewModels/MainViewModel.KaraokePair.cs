@@ -1,7 +1,10 @@
 using System.IO;
 using CommunityToolkit.Mvvm.Input;
+using JockeyBox.Audio;
+using JockeyBox.Audio.Graph;
 using JockeyBox.Library;
 using JockeyBox.Playback;
+using JockeyBox.Tools;
 
 namespace JockeyBox.ViewModels;
 
@@ -15,30 +18,60 @@ namespace JockeyBox.ViewModels;
 public partial class MainViewModel
 {
     private bool _karaokePairLoaded;
+    private bool _pairStartLogged; // the settled both-decks line, written once per pair
 
     /// <summary>
-    /// Load the pair: the karaoke file on A, playing at once (hard cut), and the
-    /// original on B, loaded and cued at 0:00 with its own transport fully live.
-    /// The second <c>SetTrack</c> argument is always null - a deck in a pair plays
-    /// one file, exactly like any other load.
+    /// Load the pair: one take of the song on A, the original on B. The take is
+    /// the variant the operator picked; both decks get ordinary single-file
+    /// loads, so the second <c>SetTrack</c> argument is always null.
+    ///
+    /// <para><b>Why both decks start and the link is engaged here.</b> The old
+    /// body called <c>PlayDeck(PlaybackDeck.A)</c>, which names one deck and
+    /// bypasses <see cref="DualDeckTransport.Target"/>. The two loads above each
+    /// set the target from their own arguments, so a take that loaded without a
+    /// discovered partner left it on Active: deck B stayed cued and silent and no
+    /// sync lock was ever set. Nothing else re-armed it later, and the UI tick
+    /// only reads the target back, so the pair never recovered. This is the one
+    /// place a karaoke play begins, so the pair arms Both and the lock here.</para>
     /// </summary>
-    private void LoadKaraokePair(TrackEntry track)
+    private void LoadKaraokePair(TrackEntry track, AudioVariant variant = AudioVariant.Karaoke)
     {
         ReleaseKaraokePair(); // idempotent: a second pair reloads both decks
 
-        var karaokePath = StemOnDisk(track) ?? StemBeside(track.MusicPath);
+        var karaokePath = VariantOnDisk(track, variant);
         if (karaokePath == null || string.IsNullOrWhiteSpace(track.MusicPath)) return;
 
         DeckA.SetTrack(karaokePath, null, track.Title, track.Artist);
         DeckB.SetTrack(track.MusicPath, null, track.Title, track.Artist);
+        // Deck B is the original, alone. Its load discovers the sibling render
+        // beside it as a partner, and the deck's default Mix mode would then sum
+        // both files: the pair is one take per deck, so B is pinned to its own.
+        DeckB.HoldStem(StemKind.Original);
+
         _karaokePairLoaded = true;
         DeckA.SetKaraokeTitle("DECK: KARAOKE");
         DeckB.SetKaraokeTitle("DECK: ORIGINAL");
 
         _activeDeck = PlaybackDeck.A;
-        _transport.PlayDeck(PlaybackDeck.A, autoCue: false);
         _transport.ActivateDeck(PlaybackDeck.A);
         SyncDeckActivation();
+
+        // Explicit, not inferred: the last load above is the last word on the
+        // target, and PlayDeck would ignore it anyway.
+        _transport.SetTarget(TransportTarget.Both);
+        IsABMode = true;
+        IsDeckSync = true;
+        _pairStartLogged = false;
+        Log.Info($"karaoke pair: start take={variant} file={Path.GetFileName(karaokePath)} " +
+                 $"target={_transport.Target} sync={_transport.SyncActive}");
+
+        // Play() fans out over Targets(), so both loaded decks roll. A deck whose
+        // load has not started yet refuses a play outright, so each one is also
+        // armed on its own loaded transition; whichever lane wins, the start is
+        // not lost between the load and the first frame.
+        DeckA.StartWhenLoaded();
+        DeckB.StartWhenLoaded();
+        _transport.Play();
     }
 
     /// <summary>
@@ -72,6 +105,18 @@ public partial class MainViewModel
         if (SelectedTreeNode?.Track is { } track) LoadKaraokePair(track);
     }
 
+    /// <summary>
+    /// Play one named take of a row: the per-variant menu item calls this. The
+    /// original is an ordinary single-deck load; every other take is the pair.
+    /// </summary>
+    private void PlayVariant(TrackEntry? track, AudioVariant variant)
+    {
+        if (track == null) return;
+
+        if (variant == AudioVariant.Original) LoadTrack(track, fromQueue: false);
+        else LoadKaraokePair(track, variant);
+    }
+
     [RelayCommand(CanExecute = nameof(CanKaraokeSelected))]
     private void QueueKaraokeSelected()
     {
@@ -94,6 +139,20 @@ public partial class MainViewModel
     private bool CanKaraokeSelected() => HasKaraokePairOnDisk(SelectedTreeNode?.Track);
 
     // ---- helpers ------------------------------------------------------------
+
+    /// <summary>
+    /// The file for one take: the partner the scan paired first (it may live in
+    /// the karaoke root, outside the song's folder), then the sibling on disk.
+    /// </summary>
+    private static string? VariantOnDisk(TrackEntry? track, AudioVariant variant)
+    {
+        if (track == null) return null;
+
+        if (variant == AudioVariant.Karaoke)
+            return StemOnDisk(track) ?? KaraokeNaming.VariantPathFor(track.MusicPath, variant);
+
+        return KaraokeNaming.VariantPathFor(track.MusicPath, variant);
+    }
 
     /// <summary>The karaoke partner of a row, but only when the file is really there.</summary>
     private static string? StemOnDisk(TrackEntry? track)

@@ -5,6 +5,7 @@ using System.Threading;
 using JockeyBox.Audio;
 using JockeyBox.Audio.Graph;
 using JockeyBox.Data;
+using JockeyBox.Library;
 using JockeyBox.Playback;
 using JockeyBox.ViewModels;
 using Xunit;
@@ -375,23 +376,30 @@ public sealed class DeckUiTests
             File.WriteAllBytes(Song("Song.backing.mp3"), Array.Empty<byte>());
             File.WriteAllBytes(Song("Song.vocals.mp3"), Array.Empty<byte>());
 
-            var options = DeckViewModel.BuildVersions(all,
-                DeckViewModel.VariantPath(all, JockeyBox.Library.AudioVariant.Karaoke),
-                DeckViewModel.VariantPath(all, JockeyBox.Library.AudioVariant.Vocals));
+            var options = DeckViewModel.BuildVersions(all);
 
-            // The deck has one instrumental reader, so a track with both renders
-            // offers the one it actually loaded, never two entries that play the same.
-            Assert.Equal(new[] { "Original", "Karaoke", "Vocals" },
+            // Every render on disk gets its own entry. This is the case that used
+            // to collapse: validating Karaoke and Backing against one shared
+            // partner path meant only one of them could match, so the other was
+            // dropped and the deck's menu went dead.
+            Assert.Equal(new[] { "Original", "Karaoke", "Keep backing", "Vocals" },
                 options.Where(o => o.IsAvailable).Select(o => o.Label).ToArray());
-            Assert.Equal(3, options.Count);
+            Assert.Equal(4, options.Count);
+
+            // Each entry carries the file it plays, and the two instrumentals are
+            // two different files.
+            var karaokeEntry = options.Single(o => o.Variant == AudioVariant.Karaoke);
+            var backingEntry = options.Single(o => o.Variant == AudioVariant.Backing);
+            Assert.Equal(Song("Song.karaoke.mp3"), karaokeEntry.Path);
+            Assert.Equal(Song("Song.backing.mp3"), backingEntry.Path);
+            Assert.NotEqual(karaokeEntry.Path, backingEntry.Path);
 
             // Keep-backing only, and one version is not a choice.
             var backingOnly = Song("Backing.mp3");
             File.WriteAllBytes(backingOnly, Array.Empty<byte>());
             File.WriteAllBytes(Song("Backing.backing.mp3"), Array.Empty<byte>());
 
-            var backing = DeckViewModel.BuildVersions(backingOnly,
-                DeckViewModel.VariantPath(backingOnly, JockeyBox.Library.AudioVariant.Backing), null);
+            var backing = DeckViewModel.BuildVersions(backingOnly);
             Assert.Equal(new[] { "Original", "Keep backing" },
                 backing.Where(o => o.IsAvailable).Select(o => o.Label).ToArray());
 
@@ -399,14 +407,14 @@ public sealed class DeckUiTests
             // which is what makes the deck's menu read as disabled.
             var alone = Song("Alone.mp3");
             File.WriteAllBytes(alone, Array.Empty<byte>());
-            var single = DeckViewModel.BuildVersions(alone, null, null);
+            var single = DeckViewModel.BuildVersions(alone);
             var only = Assert.Single(single);
             Assert.Equal("Original", only.Label);
             Assert.True(only.IsAvailable);
 
             // A path with no file at all cannot even offer the original: the entry
             // is still there so the menu has a header, unavailable and with a reason.
-            var missing = DeckViewModel.BuildVersions(Song("Missing.mp3"), null, null);
+            var missing = DeckViewModel.BuildVersions(Song("Missing.mp3"));
             var none = Assert.Single(missing);
             Assert.False(none.IsAvailable);
             Assert.False(string.IsNullOrWhiteSpace(none.Reason));

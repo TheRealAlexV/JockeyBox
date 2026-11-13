@@ -119,9 +119,127 @@ public partial class TrackEntry : ObservableObject
         _ => "no music",
     };
 
+    /// <summary>
+    /// Which takes this track has, read from disk on access through
+    /// <see cref="KaraokeNaming.DiscoverVariants"/>. No cache on purpose: a render
+    /// that lands while the row is on screen must show up, and a second copy of
+    /// the file list is exactly the kind of state that drifts out of date.
+    /// </summary>
+    public VariantAvailability Variants => VariantAvailability.From(MusicPath);
+
+    /// <summary>
+    /// Raise the variant properties after a render lands. Callers on the
+    /// separation path own no part of the model, so they ring this one bell
+    /// instead of writing a path and hoping a dependent property was notified.
+    /// </summary>
+    public void NotifyVariantsChanged()
+    {
+        OnPropertyChanged(nameof(Variants));
+        OnPropertyChanged(nameof(HasBoth));
+        OnPropertyChanged(nameof(NeedsKaraoke));
+        OnPropertyChanged(nameof(KaraokeStatus));
+    }
+
     public string DurationText => Duration.TotalHours >= 1
         ? Duration.ToString(@"h\:mm\:ss")
         : Duration.ToString(@"m\:ss");
 
     public string BpmText => Bpm > 0 ? Bpm.ToString("0.#") : "";
+}
+
+/// <summary>
+/// One take of a track, the way a menu or a row wants to show it: the variant,
+/// the operator-facing label, whether its file is on disk, and the glyph that
+/// stands for it.
+///
+/// <para><b>Icon is a string, not art.</b> <see cref="VariantGlyphs"/> owns the
+/// four characters. The design lane replaces those constants (and may add a
+/// separate "absent" glyph); nothing else has to change, because every menu item
+/// and row badge binds <see cref="Icon"/>.</para>
+/// </summary>
+public sealed record VariantSlot(AudioVariant Variant, string Label, string Icon, bool Exists);
+
+/// <summary>
+/// The variant ledger for one track, in the stable menu order Original,
+/// Karaoke, Backing, Vocals. Built from disk every time it is asked for
+/// (<see cref="KaraokeNaming.DiscoverVariants"/>), so a render that lands while
+/// the row is on screen appears without anyone having to invalidate a cache.
+///
+/// <para>The deck's stem readers hold one instrumental at a time. Use
+/// <see cref="All"/> with its <see cref="VariantSlot.Exists"/> flag for a menu
+/// that keeps a fixed order and disables what is missing, and
+/// <see cref="Present"/> for a row badge strip that must not draw empty slots.</para>
+/// </summary>
+public sealed class VariantAvailability
+{
+    /// <summary>A track with no file: every slot absent.</summary>
+    public static VariantAvailability None { get; } = new(Array.Empty<VariantSlot>(), null);
+
+    private readonly IReadOnlyList<VariantSlot> _all;
+    private readonly IReadOnlyList<VariantSlot> _present;
+    private readonly string? _source;
+
+    private VariantAvailability(IReadOnlyList<VariantSlot> all, string? source)
+    {
+        _all = all;
+        _present = all.Where(slot => slot.Exists).ToArray();
+        _source = source;
+    }
+
+    /// <summary>Every variant in stable order, absent ones included and flagged.</summary>
+    public IReadOnlyList<VariantSlot> All => _all;
+
+    /// <summary>Only the variants whose file exists, for a badge strip.</summary>
+    public IReadOnlyList<VariantSlot> Present => _present;
+
+    /// <summary>How many variants this track actually has.</summary>
+    public int Count => _present.Count;
+
+    public bool Has(AudioVariant variant) =>
+        _all.Any(slot => slot.Variant == variant && slot.Exists);
+
+    /// <summary>The file for one variant, or null when it is not on disk.</summary>
+    public string? PathFor(AudioVariant variant) =>
+        Has(variant) ? KaraokeNaming.VariantPathFor(_source, variant) : null;
+
+    /// <summary>Read the ledger for a track's source file.</summary>
+    public static VariantAvailability From(string? musicPath)
+    {
+        if (string.IsNullOrWhiteSpace(musicPath)) return None;
+
+        var present = KaraokeNaming.DiscoverVariants(musicPath);
+        var all = new List<VariantSlot>(4);
+        foreach (var variant in Enum.GetValues<AudioVariant>())
+        {
+            var exists = present.Contains(variant);
+            all.Add(new VariantSlot(
+                variant,
+                KaraokeNaming.DisplayName(variant),
+                exists ? VariantGlyphs.For(variant) : "",
+                exists));
+        }
+
+        return new VariantAvailability(all, musicPath);
+    }
+}
+
+/// <summary>
+/// The characters that stand for each variant. Placeholders on purpose: the
+/// design lane owns the visual vocabulary and replaces these four values (and
+/// the row layout that binds them) without touching the model or the menus.
+/// </summary>
+public static class VariantGlyphs
+{
+    public const string Original = "\u25A0"; // the row's existing local-file glyph
+    public const string Karaoke = "\u25C6";  // the row's existing karaoke-ready glyph
+    public const string Backing = "\u25C7";
+    public const string Vocals = "\u25CB";
+
+    public static string For(AudioVariant variant) => variant switch
+    {
+        AudioVariant.Karaoke => Karaoke,
+        AudioVariant.Backing => Backing,
+        AudioVariant.Vocals => Vocals,
+        _ => Original,
+    };
 }

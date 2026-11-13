@@ -2660,6 +2660,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         PlayKaraokeSelectedCommand.NotifyCanExecuteChanged();
         QueueKaraokeSelectedCommand.NotifyCanExecuteChanged();
         NotifyMediaCommandStates();
+        RefreshTrackMenuVariants();
         if (value == null) return; // tree rebuild / filtered out: keep the key for restore
         _lastSelectedTrackKey = value.Track is { } track
             ? TrackKey(track.RelativeKey)
@@ -4230,10 +4231,25 @@ public partial class MainViewModel : ObservableObject, IDisposable
             }
         }
 
+        // A deck reaching Playing raises no channel event of its own (the channel
+        // only subscribes to failures), so this tick is where the app first learns
+        // the pair actually started. Logged before the release guard below, so a
+        // start is never missed by a pair that ends on the same tick.
+        MaybeLogPairStart();
+
         // Stopped with nothing loaded: the pair is over. Every ordinary load
         // releases inside LoadTrack; this covers the operator who stops and
         // loads nothing at all.
-        if (_karaokePairLoaded && !DeckA.IsLoaded && !DeckB.IsLoaded) ReleaseKaraokePair();
+        //
+        // Asked of the channels, not of the deck cards: a card's IsLoaded is a
+        // copy that only refreshes when the channel announces a state, so during
+        // the load it still reads false. Asking the copy released a pair that was
+        // one tick old, which took the deck titles and the lock with it and left
+        // one deck playing.
+        if (_karaokePairLoaded
+            && !DeckA.HasTrackInFlight && !DeckB.HasTrackInFlight
+            && !_transport.DeckA.IsLoaded && !_transport.DeckB.IsLoaded)
+            ReleaseKaraokePair();
     }
 
     private void OnTransportStateChanged()

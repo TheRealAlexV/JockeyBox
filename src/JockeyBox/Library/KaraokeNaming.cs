@@ -191,8 +191,60 @@ public static class KaraokeNaming
     }
 
     private static bool VariantExists(string folder, string stem, string marker) =>
-        File.Exists(Path.Combine(folder, stem + marker + RenderExtension))
-        || File.Exists(Path.Combine(folder, stem + marker + ".flac"));
+        VariantFile(folder, stem, marker) != null;
+
+    /// <summary>
+    /// The file one marker resolves to, or null. <see cref="DiscoverVariants"/>
+    /// and <see cref="VariantPathFor"/> both come through here, so the list a
+    /// caller is shown and the path it plays can never name different files.
+    /// </summary>
+    private static string? VariantFile(string folder, string stem, string marker)
+    {
+        var mp3 = Path.Combine(folder, stem + marker + RenderExtension);
+        if (File.Exists(mp3)) return mp3;
+        var flac = Path.Combine(folder, stem + marker + ".flac");
+        return File.Exists(flac) ? flac : null;
+    }
+
+    /// <summary>
+    /// Absolute path of one variant that exists on disk, or null. This is the
+    /// resolver behind <see cref="DiscoverVariants"/>: a caller that has already
+    /// seen a variant in that list asks for the file it describes, instead of
+    /// guessing from a single partner path. Note the deck's stem readers only
+    /// hold one instrumental at a time, so "Karaoke" and "Backing" can be two
+    /// distinct files that a caller must switch between explicitly.
+    /// </summary>
+    public static string? VariantPathFor(string? primaryAudioPath, AudioVariant variant)
+    {
+        if (string.IsNullOrWhiteSpace(primaryAudioPath)) return null;
+
+        if (variant == AudioVariant.Original)
+            return File.Exists(primaryAudioPath) ? primaryAudioPath : null;
+
+        var folder = Path.GetDirectoryName(primaryAudioPath) ?? "";
+        var stem = BaseFileName(primaryAudioPath);
+        if (folder.Length == 0 || stem.Length == 0) return null;
+
+        return VariantFile(folder, stem, MarkerOf(variant));
+    }
+
+    /// <summary>The marker a playback variant lives under ("" for the source file).</summary>
+    public static string MarkerOf(AudioVariant variant) => variant switch
+    {
+        AudioVariant.Karaoke => Marker,
+        AudioVariant.Backing => BackingMarker,
+        AudioVariant.Vocals => VocalsMarker,
+        _ => "",
+    };
+
+    /// <summary>The operator-facing name of a variant; menus and rows both use it.</summary>
+    public static string DisplayName(AudioVariant variant) => variant switch
+    {
+        AudioVariant.Karaoke => "Karaoke",
+        AudioVariant.Backing => "Keep backing",
+        AudioVariant.Vocals => "Vocals",
+        _ => "Original",
+    };
 
     private static string StemOf(string? fileName)
     {
