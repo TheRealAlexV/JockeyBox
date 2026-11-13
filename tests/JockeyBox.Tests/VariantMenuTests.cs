@@ -263,6 +263,84 @@ public sealed class VariantMenuTests : IDisposable
             variants.Present.Select(slot => slot.Variant).ToArray());
     }
 
+    // The Play submenu names the row's own file by what it is. Measured defect:
+    // a "Sing.vocals.mp3" row drew the note in its strip and then offered the
+    // same file as "Original" in its Play submenu.
+    [Fact]
+    public void PlayMenu_OnAPlainOriginal_StillSaysOriginal()
+    {
+        var source = Song("Menu2.mp3");
+        Song("Menu2.karaoke.mp3");
+        Song("Menu2.vocals.mp3");
+
+        var items = TrackMenuCapabilities.BuildVariantItems(
+            Track(source).Variants, _ => new StubCommand());
+
+        Assert.Equal(new[] { "Original", "Karaoke", "Vocals" },
+            items.Select(item => item.Header).ToArray());
+        Assert.Equal(VariantGlyphs.Original, items[0].Icon);
+    }
+
+    [Fact]
+    public void PlayMenu_OnAKaraokePrimary_CallsItKaraoke_AndKeepsTheOtherTakes()
+    {
+        var source = Song("Cue.karaoke.mp3");
+        Song("Cue.backing.mp3");
+
+        var items = TrackMenuCapabilities.BuildVariantItems(
+            Track(source).Variants, _ => new StubCommand());
+
+        // One entry for the row's own file, named for what it is, then the take
+        // that actually sits beside it. No square claiming a plain original.
+        Assert.Equal(new[] { "Karaoke", "Keep backing" },
+            items.Select(item => item.Header).ToArray());
+        Assert.Equal(new[] { VariantGlyphs.Karaoke, VariantGlyphs.Backing },
+            items.Select(item => item.Icon).ToArray());
+        Assert.All(items, item => Assert.NotNull(item.Command));
+    }
+
+    [Fact]
+    public void PlayMenu_OnAVocalsPrimary_CallsItVocals_AndKeepsTheOtherTakes()
+    {
+        // A vocals name is not a marker to DiscoverVariants (see MarkerIn: it
+        // reads .karaoke and .backing only), so a vocals row's siblings are probed
+        // off its own stem. That is the take that can actually sit beside it.
+        var source = Song("Sing2.vocals.mp3");
+        Song("Sing2.vocals.karaoke.mp3");
+
+        var items = TrackMenuCapabilities.BuildVariantItems(
+            Track(source).Variants, _ => new StubCommand());
+
+        Assert.Equal(new[] { "Vocals", "Karaoke" },
+            items.Select(item => item.Header).ToArray());
+        Assert.Equal(new[] { VariantGlyphs.Vocals, VariantGlyphs.Karaoke },
+            items.Select(item => item.Icon).ToArray());
+    }
+
+    // A remote (YouTube / Spotify) row shares the same TrackMenu.xaml but no
+    // surface calls SetVariantItems for it, so both take lists stay empty and the
+    // menu keeps one flat Play item. Remote rows have no stem files to offer.
+    [Fact]
+    public void RemoteRow_KeepsTheOneFlatPlayItem()
+    {
+        var caps = new TrackMenuCapabilities
+        {
+            Play = new StubCommand(),
+            AddToQueue = new StubCommand(),
+            Download = new StubCommand(),
+            MakeKaraoke = new StubCommand(),
+        };
+
+        Assert.Empty(caps.PlayVariants);
+        Assert.Empty(caps.QueueVariants);
+        Assert.True(caps.ShowFlatPlay);
+        Assert.False(caps.ShowVariantPlay);
+        Assert.True(caps.ShowFlatQueue);
+        Assert.False(caps.ShowVariantQueue);
+        Assert.True(caps.CanMakeKaraokeDirectly);
+        Assert.False(caps.CanChooseKaraokeMode);
+    }
+
     private sealed class StubCommand : System.Windows.Input.ICommand
     {
         public event EventHandler? CanExecuteChanged { add { } remove { } }

@@ -11,6 +11,7 @@ using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using JockeyBox.Activity;
 using JockeyBox.Downloads;
+using JockeyBox.Library;
 using JockeyBox.Playback;
 using JockeyBox.Tools;
 using JockeyBox.ViewModels;
@@ -597,11 +598,22 @@ internal static class UiShot
                         submenuY = submenuItem.TranslatePoint(new Point(0, 0), menu).Y;
 
                         // The icons are text, so the log can carry the proof: one line
-                        // per item with the mark it resolved to.
+                        // per item with the mark it resolved to. Play and Add to Queue
+                        // put their item records straight in Items; the Make Karaoke
+                        // modes are MenuItems whose Header is such a record. The code
+                        // point is printed beside the glyph because a console that
+                        // cannot encode ◆ prints "?", which would hide which mark the
+                        // item resolved to.
                         Console.Out.WriteLine(
                             $"uishot: submenu {which} items={submenuItem.Items.Count} " +
-                            string.Join(", ", submenuItem.Items.OfType<TrackVariantItem>()
-                                .Select(t => $"'{t.Icon}' {t.Header}")));
+                            string.Join(", ", submenuItem.Items.OfType<object>().Select(t => t switch
+                            {
+                                TrackVariantItem item =>
+                                    $"'{item.Icon}' {(item.Icon.Length == 1 ? $"U+{(int)item.Icon[0]:X4}" : "?")} {item.Header}",
+                                MenuItem { Header: KaraokeModeMenuItem mode } =>
+                                    $"'{mode.Icon}' {(mode.Icon.Length == 1 ? $"U+{(int)mode.Icon[0]:X4}" : "?")} {mode.Header}",
+                                _ => "?",
+                            })));
                         Console.Out.Flush();
                     }
                     else

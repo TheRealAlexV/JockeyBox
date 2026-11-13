@@ -1,5 +1,6 @@
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:lib="clr-namespace:JockeyBox.Library">
 
     <!-- ==========================================================================
          One right-click menu for every track list. The order is fixed:
@@ -22,6 +23,35 @@
 
     <BooleanToVisibilityConverter x:Key="MenuVisibility"/>
 
+    <!-- Mark then name, for every menu row that stands for a take: the Play and
+         Add to Queue submenus, and the three Make Karaoke Version modes. Drawn by
+         a template rather than a Setter.Value, because a style setter holds one
+         element and shares it, so a UIElement there can only ever appear on the
+         last item, while a template is built per item. Shared by all three so
+         there is one rendering path and that bug cannot come back. Binds Icon,
+         Header and Variant, which is what the item records carry. -->
+    <DataTemplate x:Key="VariantMenuItemHeader">
+        <StackPanel Orientation="Horizontal">
+            <TextBlock Text="{Binding Icon}" FontFamily="Consolas"
+                       FontSize="13" Width="16"
+                       TextAlignment="Center"
+                       VerticalAlignment="Center">
+                <TextBlock.Style>
+                    <Style TargetType="TextBlock">
+                        <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding Variant}" Value="Karaoke">
+                                <Setter Property="Foreground"
+                                        Value="{DynamicResource AccentABrush}"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </TextBlock.Style>
+            </TextBlock>
+            <TextBlock Text="{Binding Header}" VerticalAlignment="Center"/>
+        </StackPanel>
+    </DataTemplate>
+
     <ContextMenu x:Key="TrackMenu" x:Shared="False"
                  AutomationProperties.Name="Track actions">
 
@@ -42,38 +72,8 @@
                     <Setter Property="Header" Value="{Binding}"/>
                     <Setter Property="Command" Value="{Binding Command}"/>
                     <Setter Property="AutomationProperties.Name" Value="{Binding Header}"/>
-                    <!-- Mark then name, drawn by a template rather than a
-                         Setter.Value: a style setter holds one element and
-                         shares it, so a UIElement there can only ever appear on
-                         the last item. A template is built per item. -->
-                    <Setter Property="HeaderTemplate">
-                        <Setter.Value>
-                            <DataTemplate>
-                                <StackPanel Orientation="Horizontal">
-                                    <TextBlock Text="{Binding Icon}" FontFamily="Consolas"
-                                               FontSize="13" Width="16"
-                                               TextAlignment="Center"
-                                               VerticalAlignment="Center">
-                                        <TextBlock.Style>
-                                            <Style TargetType="TextBlock">
-                                                <Setter Property="Foreground"
-                                                        Value="{DynamicResource TextBrush}"/>
-                                                <Style.Triggers>
-                                                    <DataTrigger Binding="{Binding Variant}"
-                                                                 Value="Karaoke">
-                                                        <Setter Property="Foreground"
-                                                                Value="{DynamicResource AccentABrush}"/>
-                                                    </DataTrigger>
-                                                </Style.Triggers>
-                                            </Style>
-                                        </TextBlock.Style>
-                                    </TextBlock>
-                                    <TextBlock Text="{Binding Header}"
-                                               VerticalAlignment="Center"/>
-                                </StackPanel>
-                            </DataTemplate>
-                        </Setter.Value>
-                    </Setter>
+                    <Setter Property="HeaderTemplate"
+                            Value="{StaticResource VariantMenuItemHeader}"/>
                 </Style>
             </MenuItem.ItemContainerStyle>
         </MenuItem>
@@ -99,38 +99,8 @@
                     <Setter Property="Header" Value="{Binding}"/>
                     <Setter Property="Command" Value="{Binding Command}"/>
                     <Setter Property="AutomationProperties.Name" Value="{Binding Header}"/>
-                    <!-- Mark then name, drawn by a template rather than a
-                         Setter.Value: a style setter holds one element and
-                         shares it, so a UIElement there can only ever appear on
-                         the last item. A template is built per item. -->
-                    <Setter Property="HeaderTemplate">
-                        <Setter.Value>
-                            <DataTemplate>
-                                <StackPanel Orientation="Horizontal">
-                                    <TextBlock Text="{Binding Icon}" FontFamily="Consolas"
-                                               FontSize="13" Width="16"
-                                               TextAlignment="Center"
-                                               VerticalAlignment="Center">
-                                        <TextBlock.Style>
-                                            <Style TargetType="TextBlock">
-                                                <Setter Property="Foreground"
-                                                        Value="{DynamicResource TextBrush}"/>
-                                                <Style.Triggers>
-                                                    <DataTrigger Binding="{Binding Variant}"
-                                                                 Value="Karaoke">
-                                                        <Setter Property="Foreground"
-                                                                Value="{DynamicResource AccentABrush}"/>
-                                                    </DataTrigger>
-                                                </Style.Triggers>
-                                            </Style>
-                                        </TextBlock.Style>
-                                    </TextBlock>
-                                    <TextBlock Text="{Binding Header}"
-                                               VerticalAlignment="Center"/>
-                                </StackPanel>
-                            </DataTemplate>
-                        </Setter.Value>
-                    </Setter>
+                    <Setter Property="HeaderTemplate"
+                            Value="{StaticResource VariantMenuItemHeader}"/>
                 </Style>
             </MenuItem.ItemContainerStyle>
         </MenuItem>
@@ -166,20 +136,31 @@
                   AutomationProperties.Name="Make Karaoke Version"
                   Visibility="{Binding PlacementTarget.Tag.CanChooseKaraokeMode, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={StaticResource MenuVisibility}}">
             <!-- Each mode reads the row the surface selected, so no
-                 CommandParameter is needed here (see TrackMenuCapabilities). -->
-            <MenuItem Header="Instrumental (all vocals out)"
+                 CommandParameter is needed here (see TrackMenuCapabilities).
+                 Header is a record so the shared VariantMenuItemHeader template
+                 can draw the mark that stands for the take each mode renders. -->
+            <MenuItem Header="{x:Static lib:KaraokeModeMenuItem.AllVocalsOut}"
+                      HeaderTemplate="{StaticResource VariantMenuItemHeader}"
+                      AutomationProperties.Name="Instrumental (all vocals out)"
                       Command="{Binding PlacementTarget.Tag.MakeKaraoke, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
                       Visibility="{Binding PlacementTarget.Tag.CanMakeKaraoke, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={StaticResource MenuVisibility}}"/>
-            <MenuItem Header="Instrumental (keep backing vocals)"
+            <MenuItem Header="{x:Static lib:KaraokeModeMenuItem.KeepBacking}"
+                      HeaderTemplate="{StaticResource VariantMenuItemHeader}"
+                      AutomationProperties.Name="Instrumental (keep backing vocals)"
                       Command="{Binding PlacementTarget.Tag.MakeKaraokeKeepBacking, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
                       Visibility="{Binding PlacementTarget.Tag.CanMakeKaraokeKeepBacking, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={StaticResource MenuVisibility}}"/>
-            <MenuItem Header="Vocals only"
+            <MenuItem Header="{x:Static lib:KaraokeModeMenuItem.VocalsOnly}"
+                      HeaderTemplate="{StaticResource VariantMenuItemHeader}"
+                      AutomationProperties.Name="Vocals only"
                       Command="{Binding PlacementTarget.Tag.MakeKaraokeVocalsOnly, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
                       Visibility="{Binding PlacementTarget.Tag.CanMakeKaraokeVocalsOnly, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={StaticResource MenuVisibility}}"/>
         </MenuItem>
 
-        <!-- 6b. Make Karaoke Version, as one gesture, for surfaces with no mode choice -->
-        <MenuItem Header="Make Karaoke Version"
+        <!-- 6b. Make Karaoke Version, as one gesture, for surfaces with no mode choice.
+             It renders the all-vocals-out bed, so it carries that mode's mark
+             through the same shared template. -->
+        <MenuItem Header="{x:Static lib:KaraokeModeMenuItem.Direct}"
+                  HeaderTemplate="{StaticResource VariantMenuItemHeader}"
                   AutomationProperties.Name="Make Karaoke Version"
                   Command="{Binding PlacementTarget.Tag.MakeKaraoke, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
                   Visibility="{Binding PlacementTarget.Tag.CanMakeKaraokeDirectly, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={StaticResource MenuVisibility}}"/>

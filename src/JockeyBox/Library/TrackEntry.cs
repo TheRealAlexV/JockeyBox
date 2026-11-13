@@ -323,3 +323,34 @@ public static class VariantGlyphs
         _ => Original,
     };
 }
+
+/// <summary>
+/// One "Make Karaoke Version" mode as a menu row: the take it renders, the label
+/// the operator reads, and the mark that stands for that take.
+///
+/// <para>These are fixed rows, not per-track data, so the shared
+/// <c>VariantMenuItemHeader</c> template can draw them: it binds Icon, Header and
+/// Variant, which is exactly what <see cref="JockeyBox.ViewModels.TrackVariantItem"/>
+/// carries for the Play and Add to Queue submenus. One template therefore serves
+/// every marked menu row.</para>
+/// </summary>
+public sealed record KaraokeModeMenuItem(AudioVariant Variant, string Header, string Icon)
+{
+    /// <summary>All vocals out: produces the instrumental, the karaoke diamond.</summary>
+    public static KaraokeModeMenuItem AllVocalsOut { get; } =
+        new(AudioVariant.Karaoke, "Instrumental (all vocals out)", VariantGlyphs.Karaoke);
+
+    /// <summary>Keeps the backing voices, removes the bed.</summary>
+    public static KaraokeModeMenuItem KeepBacking { get; } =
+        new(AudioVariant.Backing, "Instrumental (keep backing vocals)", VariantGlyphs.Backing);
+
+    public static KaraokeModeMenuItem VocalsOnly { get; } =
+        new(AudioVariant.Vocals, "Vocals only", VariantGlyphs.Vocals);
+
+    /// <summary>
+    /// The single-gesture item for a surface with no mode choice: it renders the
+    /// all-vocals-out bed, so it carries that mode's mark.
+    /// </summary>
+    public static KaraokeModeMenuItem Direct { get; } =
+        new(AudioVariant.Karaoke, "Make Karaoke Version", VariantGlyphs.Karaoke);
+}

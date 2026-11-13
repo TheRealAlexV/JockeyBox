@@ -223,11 +223,29 @@ public sealed class TrackMenuCapabilities : ObservableObject
     /// a take whose file is missing is left out rather than drawn dead.
     /// </summary>
     internal static List<TrackVariantItem> BuildVariantItems(
-        VariantAvailability variants, Func<AudioVariant, ICommand> command) =>
-        variants.Present
-            .Select(slot => new TrackVariantItem(
-                slot.Variant, slot.Label, slot.Icon, command(slot.Variant)))
-            .ToList();
+        VariantAvailability variants, Func<AudioVariant, ICommand> command)
+    {
+        var primary = variants.Primary;
+        var items = new List<TrackVariantItem>(variants.Present.Count);
+
+        // The row's own file, named by what it actually is: on a "Song.vocals.mp3"
+        // row that entry reads "Vocals", not "Original", so it agrees with the
+        // mark the strip draws for the same file. The command is unchanged - it
+        // still resolves AudioVariant.Original, which is this row's own path.
+        if (variants.Present.Any(slot => slot.Variant == AudioVariant.Original))
+            items.Add(new TrackVariantItem(primary, KaraokeNaming.DisplayName(primary),
+                                           VariantGlyphs.For(primary), command(AudioVariant.Original)));
+
+        // Then every other take it actually has, each with its own mark. The
+        // primary's slot is skipped: it resolves to the same file as the entry
+        // above, so listing it would offer one file twice.
+        foreach (var slot in variants.Present)
+            if (slot.Variant != AudioVariant.Original && slot.Variant != primary)
+                items.Add(new TrackVariantItem(slot.Variant, slot.Label, slot.Icon,
+                                               command(slot.Variant)));
+
+        return items;
+    }
 
     /// <summary>
     /// The queue's takes. The queue stores one pair row per song and its mate is
