@@ -22,7 +22,7 @@ namespace JockeyBox.Playback;
 /// <para>Bindings are parsed from text ("F13", "Ctrl+Shift+1", "NumPad5") so the
 /// settings file stays readable and a pad can be re-bound without a rebuild.</para>
 /// </summary>
-public sealed class GlobalHotkeyService : ISoundboardHotkeyHost, IDisposable
+public sealed class GlobalHotkeyService : ISoundboardHotkeyHost, IHotkeyRegistrar, IDisposable
 {
     private const int WmHotkey = 0x0312;
     private const uint ModAlt = 0x0001;
@@ -47,6 +47,17 @@ public sealed class GlobalHotkeyService : ISoundboardHotkeyHost, IDisposable
 
     /// <summary>Raised (on the UI thread) when a registered hotkey fires.</summary>
     public event Action<string>? PadTriggered;
+
+    /// <summary>
+    /// The cue binder's view of the same hook: one WM_HOTKEY hook per window is
+    /// the only sane arrangement, so cue ids ride this event instead of a second
+    /// service.
+    /// </summary>
+    event Action<string>? IHotkeyRegistrar.Triggered
+    {
+        add => PadTriggered += value;
+        remove => PadTriggered -= value;
+    }
 
     /// <summary>Bindings that could not be registered, keyed by pad id ("already in use" etc).</summary>
     public IReadOnlyDictionary<string, string> Failures => _failures;

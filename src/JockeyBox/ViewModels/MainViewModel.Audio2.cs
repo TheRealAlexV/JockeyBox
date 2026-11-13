@@ -133,6 +133,7 @@ public partial class MainViewModel
         StartBeatAnalysis();
         StartLocalApi();
         StartHotkeys();
+        StartCueHotkeys();
     }
 
     // ---------------------------------------------------------------- beat analysis
@@ -407,7 +408,8 @@ public partial class MainViewModel
                 AnyDeckPlaying = IsPlaying,
                 Transition = TransitionText,
             },
-            addSound: async (path, url) => await AddSoundFromApiAsync(path, url));
+            addSound: async (path, url) => await AddSoundFromApiAsync(path, url),
+            cueRouter: CreateCueApiRouter());
 
         // ONE port: the Stream Deck plugin defaults to 17890 (LocalApiServer.DefaultPort).
         // AppSettings.ApiPort predates the plugin; if it disagrees we log it and use
@@ -418,6 +420,8 @@ public partial class MainViewModel
 
         if (!_api.Start(port) && _api.LastError != null)
             StatusText = $"Soundboard API unavailable: {_api.LastError}";
+        else if (_api.Port != port)
+            StatusText = $"Stream Deck API on port {_api.Port} (port {port} was busy)";
     }
 
     /// <summary>Register every pad hotkey; failures are surfaced in the pad tooltip, not silent.</summary>
@@ -450,12 +454,17 @@ public partial class MainViewModel
         // The board owns the pad→chord map; handing it the host registers every
         // stored binding and keeps bind/unbind in one place.
         Soundboard.HotkeyHost = _hotkeys;
+
+        // Cue chords need the same handle; registering before Attach would fail
+        // with "the app window is not ready yet" for all eighteen.
+        AttachCueHotkeys();
     }
 
     /// <summary>Re-register every pad binding (after a bind/unbind or a settings reload).</summary>
     public void RebindHotkeys()
     {
         Soundboard.ReloadHotkeys();
+        AttachCueHotkeys();
     }
 
     /// <summary>API <c>POST /sounds/add</c>: local path or URL, off the UI thread, off the request thread.</summary>
@@ -505,6 +514,7 @@ public partial class MainViewModel
         _bpmService = null;
         _bpmStore?.Dispose();
         _bpmStore = null;
+        StopCueHotkeys();
         _hotkeys?.Dispose();
         _hotkeys = null;
         _api?.Dispose();

@@ -34,7 +34,13 @@ public sealed class LocalApiServer : IDisposable
     /// <summary>Default port. Loopback only; the Stream Deck plugin reads it from its global settings.</summary>
     public const int DefaultPort = 17890;
 
-    private readonly HttpListener _listener = new();
+    /// <summary>
+    /// Largest request body accepted. Every body on this surface is a name or a
+    /// path; anything bigger is not a request this app knows how to answer.
+    /// </summary>
+    public const long MaxBodyBytes = 64_000;
+
+    private HttpListener _listener = new();
     private readonly CancellationTokenSource _cts = new();
     private readonly List<WebSocket> _sockets = new();
     private readonly object _socketGate = new();
@@ -44,6 +50,7 @@ public sealed class LocalApiServer : IDisposable
     private Action? _stopAll;
     private Func<ApiState>? _stateSource;
     private Func<string?, string?, Task<ApiAddResult>>? _addSound;
+    private CueApiRouter? _cueRouter;
     private string _token = string.Empty;
     private Task? _loop;
 
@@ -63,7 +70,8 @@ public sealed class LocalApiServer : IDisposable
         Action<string> playPad,
         Action stopAll,
         Func<ApiState> stateSource,
-        Func<string?, string?, Task<ApiAddResult>>? addSound = null)
+        Func<string?, string?, Task<ApiAddResult>>? addSound = null,
+        CueApiRouter? cueRouter = null)
     {
         _token = token ?? string.Empty;
         _padSource = padSource;
@@ -71,31 +79,55 @@ public sealed class LocalApiServer : IDisposable
         _stopAll = stopAll;
         _stateSource = stateSource;
         _addSound = addSound;
+        _cueRouter = cueRouter;
     }
 
     /// <summary>Start listening on 127.0.0.1:<paramref name="port"/> (falls back to the next free port).</summary>
     public bool Start(int port = DefaultPort)
     {
         if (IsRunning) return true;
+        if (_cts.IsCancellationRequested)
+        {
+            LastError = "the server was already disposed";
+            return false;
+        }
 
         for (int attempt = 0; attempt < 12; attempt++)
         {
             int candidate = port + attempt;
+
+            // A fresh listener per attempt: once http.sys refuses a prefix, that
+            // HttpListener instance stays unusable, so reusing it would make the
+            // walk-up fail for every remaining candidate and report the first
+            // conflict as if the whole range were taken.
+            var listener = new HttpListener();
+            listener.Prefixes.Add($"http://127.0.0.1:{candidate}/");
+
             try
             {
-                _listener.Prefixes.Clear();
-                _listener.Prefixes.Add($"http://127.0.0.1:{candidate}/");
-                _listener.Start();
-                Port = candidate;
-                IsRunning = true;
-                _loop = Task.Run(() => AcceptLoopAsync(_cts.Token));
-                Log.Info($"local api listening on http://127.0.0.1:{candidate}/");
-                return true;
+                listener.Start();
             }
             catch (Exception ex)
             {
                 LastError = ex.Message;
+                try { listener.Close(); } catch { }
+                continue;
             }
+
+            _listener = listener;
+            Port = candidate;
+            IsRunning = true;
+            _loop = Task.Run(() => AcceptLoopAsync(_cts.Token));
+            Log.Info($"local api listening on http://127.0.0.1:{candidate}/");
+
+            // Visible consequence, not an implicit one: with no token, anything
+            // running as this user (including a page's local request, once it can
+            // get past the JSON content-type rule) can drive the surface.
+            if (string.IsNullOrEmpty(_token))
+                Log.Warn($"local api: no token configured - any local process can drive "
+                    + $"http://127.0.0.1:{candidate}/; set ApiToken in settings to require one");
+
+            return true;
         }
 
         Log.Warn($"local api could not bind a port near {port}: {LastError}");
@@ -137,10 +169,11 @@ public sealed class LocalApiServer : IDisposable
     {
         try
         {
-            if (!IsAuthorised(context.Request))
+            string? denial = DenialReason(context.Request, out int denialStatus);
+            if (denial != null)
             {
-                context.Response.StatusCode = 401;
-                await WriteTextAsync(context.Response, "unauthorized").ConfigureAwait(false);
+                context.Response.StatusCode = denialStatus;
+                await WriteTextAsync(context.Response, denial).ConfigureAwait(false);
                 return;
             }
 
@@ -192,6 +225,31 @@ public sealed class LocalApiServer : IDisposable
                 return;
             }
 
+            // Cue and transport keys: the router owns the parsing and the 4xx
+            // refusals, this listener only supplies the transport.
+            if (_cueRouter != null && CueApiRouter.Handles(path))
+            {
+                string? body = null;
+                if (method == "POST")
+                {
+                    var read = await ReadBodyAsync(context.Request).ConfigureAwait(false);
+                    if (!read.Ok)
+                    {
+                        Log.Warn($"local api: refused {method} {path} ({read.Status}): {read.Error}");
+                        context.Response.StatusCode = read.Status;
+                        await WriteTextAsync(context.Response, read.Error).ConfigureAwait(false);
+                        return;
+                    }
+
+                    body = read.Body;
+                }
+
+                var outcome = _cueRouter.Handle(method, path, body);
+                context.Response.StatusCode = outcome.Status;
+                await WriteRawJsonAsync(context.Response, outcome.Json).ConfigureAwait(false);
+                return;
+            }
+
             context.Response.StatusCode = 404;
             await WriteTextAsync(context.Response, "not found").ConfigureAwait(false);
         }
@@ -216,14 +274,24 @@ public sealed class LocalApiServer : IDisposable
             return;
         }
 
+        // The body is read through the same 64 KB ceiling as every other route:
+        // /sounds/add used to be the one place a client could stream a body of
+        // any size into this process.
+        var body = await ReadBodyAsync(context.Request).ConfigureAwait(false);
+        if (!body.Ok)
+        {
+            Log.Warn($"local api: refused POST /sounds/add ({body.Status}): {body.Error}");
+            context.Response.StatusCode = body.Status;
+            await WriteTextAsync(context.Response, body.Error).ConfigureAwait(false);
+            return;
+        }
+
         SoundAddRequest? request;
         try
         {
-            using var reader = new StreamReader(context.Request.InputStream, context.Request.ContentEncoding ?? Encoding.UTF8);
-            string body = await reader.ReadToEndAsync().ConfigureAwait(false);
-            request = string.IsNullOrWhiteSpace(body)
+            request = string.IsNullOrWhiteSpace(body.Body)
                 ? null
-                : JsonSerializer.Deserialize<SoundAddRequest>(body, new JsonSerializerOptions
+                : JsonSerializer.Deserialize<SoundAddRequest>(body.Body, new JsonSerializerOptions
                 {
                     PropertyNameCaseInsensitive = true,
                 });
@@ -250,17 +318,83 @@ public sealed class LocalApiServer : IDisposable
         await WriteJsonAsync(context.Response, result).ConfigureAwait(false);
     }
 
-    private bool IsAuthorised(HttpListenerRequest request)
+    /// <summary>
+    /// Why this request is refused, or null when it may proceed. A reason plus a
+    /// status instead of a bool, so 401 (no token), 403 (a browser) and 415
+    /// (wrong content type) stay distinguishable instead of one opaque
+    /// "unauthorized".
+    /// </summary>
+    private string? DenialReason(HttpListenerRequest request, out int status)
     {
-        if (string.IsNullOrEmpty(_token)) return true; // token optional for local-only use
-        string? header = request.Headers["X-JockeyBox-Token"];
-        if (header == _token) return true;
+        status = 401;
+
+        // A page the operator merely opened must not reach this surface. Browsers
+        // attach Origin to cross-origin writes and to no-cors reads; nothing that
+        // is meant to call us sends either header.
+        if (!string.IsNullOrEmpty(request.Headers["Origin"]) || !string.IsNullOrEmpty(request.Headers["Referer"]))
+        {
+            status = 403;
+            return Refuse(request, status, "requests carrying Origin/Referer are not accepted");
+        }
+
+        // A browser can only send a cross-origin write as a "simple request"
+        // (text/plain, form-encoded, multipart). Demanding JSON forces a
+        // preflight this server never answers, so the request never leaves the
+        // browser. This matters most in the tokenless state, where it is the only
+        // thing between a random page and a persisted cue overwrite.
+        if (request.HttpMethod is "POST" or "PUT" or "PATCH" && !IsJson(request))
+        {
+            status = 415;
+            return Refuse(request, status, $"a request body must be sent as Content-Type: {JsonContentType}");
+        }
+
+        if (string.IsNullOrEmpty(_token)) return null; // token optional for local-only use
+
+        if (string.Equals(request.Headers["X-JockeyBox-Token"], _token, StringComparison.Ordinal)) return null;
 
         string? query = request.Url?.Query;
-        if (!string.IsNullOrEmpty(query) && query.Contains($"token={_token}", StringComparison.Ordinal)) return true;
+        if (!string.IsNullOrEmpty(query) && query.Contains($"token={_token}", StringComparison.Ordinal)) return null;
 
-        if (request.IsWebSocketRequest) return true; // the socket carries no custom headers
-        return false;
+        status = 401;
+        return Refuse(request, status, "unauthorized");
+    }
+
+    private const string JsonContentType = "application/json";
+
+    private static bool IsJson(HttpListenerRequest request) =>
+        request.ContentType?.StartsWith(JsonContentType, StringComparison.OrdinalIgnoreCase) == true;
+
+    private static string Refuse(HttpListenerRequest request, int status, string reason)
+    {
+        Log.Warn($"local api: refused {request.HttpMethod} {request.Url?.AbsolutePath} ({status}): {reason}");
+        return reason;
+    }
+
+    /// <summary>
+    /// Read a request body with a hard ceiling. The declared length is checked
+    /// before a byte is read, and the read is capped too, so a lying or absent
+    /// Content-Length cannot stream gigabytes into this process.
+    /// </summary>
+    private static async Task<(bool Ok, string Body, int Status, string Error)> ReadBodyAsync(
+        HttpListenerRequest request)
+    {
+        long declared = request.ContentLength64;
+        if (declared > MaxBodyBytes)
+            return (false, string.Empty, 413, $"body is {declared} bytes; the limit is {MaxBodyBytes}");
+
+        var builder = new StringBuilder();
+        var buffer = new char[8192];
+
+        using var reader = new StreamReader(request.InputStream, request.ContentEncoding ?? Encoding.UTF8);
+        int read;
+        while ((read = await reader.ReadAsync(buffer, 0, buffer.Length).ConfigureAwait(false)) > 0)
+        {
+            builder.Append(buffer, 0, read);
+            if (builder.Length > MaxBodyBytes)
+                return (false, string.Empty, 413, $"body is larger than the {MaxBodyBytes} byte limit");
+        }
+
+        return (true, builder.ToString(), 200, string.Empty);
     }
 
     private async Task PumpSocketAsync(WebSocket socket, CancellationToken token)
@@ -324,6 +458,14 @@ public sealed class LocalApiServer : IDisposable
         {
             try { response.Close(); } catch { }
         }
+    }
+
+    /// <summary>Write an already-serialized body (the cue router returns JSON, not objects).</summary>
+    private static async Task WriteRawJsonAsync(HttpListenerResponse response, string json)
+    {
+        response.ContentType = "application/json";
+        response.Headers["Cache-Control"] = "no-store";
+        await WriteTextAsync(response, json).ConfigureAwait(false);
     }
 
     public void Dispose()
