@@ -53,8 +53,8 @@ public sealed class DeckChannel : IDisposable
     private Task _ready = Task.CompletedTask;
 
     private int _loadGeneration;
-    private (string? Primary, string? Karaoke)? _pendingLoad;
-    private (string? Primary, string? Karaoke)? _lastLoad;
+    private (string? Primary, string? Karaoke, string? Vocals)? _pendingLoad;
+    private (string? Primary, string? Karaoke, string? Vocals)? _lastLoad;
 
     /// <summary>
     /// Guards the load/play handshake. <see cref="Load"/> starts the decode
@@ -108,6 +108,9 @@ public sealed class DeckChannel : IDisposable
 
     public bool HasKaraoke => _deck?.HasKaraoke == true;
 
+    /// <summary>True when a vocals-only take is resident on this deck.</summary>
+    public bool HasVocals => _deck?.HasVocals == true;
+
     public string? PrimaryPath => _deck?.TrackPath;
 
     public string? KaraokePath => _deck?.KaraokePath;
@@ -157,6 +160,14 @@ public sealed class DeckChannel : IDisposable
             _deck?.SetKaraokeGain((float)_karaokeGain);
         }
     }
+
+    /// <summary>
+    /// Choose which resident take is audible (Mix, Original, Karaoke, Vocals) as a
+    /// gain ramp in engine frames. All three readers stay open and frame-locked,
+    /// so the switch is gapless. Pass-through to <see cref="DeckSource.SetStemMode"/>.
+    /// </summary>
+    public void SetStemMode(StemKind kind, double rampMs = 0) =>
+        _deck?.SetStemMode(kind, rampMs);
 
     /// <summary>
     /// Equal-power crossfader gain for this side of the mix (0..1). Read-only
@@ -228,6 +239,14 @@ public sealed class DeckChannel : IDisposable
     }
 
     /// <summary>
+    /// The raw media clock: how much of the file the deck has consumed, with no
+    /// stretcher group delay and no bus delay subtracted. Deck sync cues the
+    /// slave from this rather than from <see cref="Position"/>, because the
+    /// audible clock is deliberately late and moves with the tempo.
+    /// </summary>
+    public double MediaPositionSeconds => _deck?.MediaPositionSeconds ?? 0;
+
+    /// <summary>
     /// Transport state of the deck. <see cref="TransportState.Failed"/> means the
     /// deck could not be loaded or the engine has no output; <see cref="Error"/>
     /// carries the reason.
@@ -284,7 +303,7 @@ public sealed class DeckChannel : IDisposable
     /// runs on a worker, the swap on the render thread, and a failure lands in
     /// <see cref="StateChanged"/> as <see cref="TransportState.Failed"/>.
     /// </summary>
-    public void Load(string? primaryPath, string? karaokePath)
+    public void Load(string? primaryPath, string? karaokePath, string? vocalsPath = null)
     {
         int generation = ++_loadGeneration;
         _fault = null;
@@ -302,7 +321,7 @@ public sealed class DeckChannel : IDisposable
         {
             // The ViewModel can ask for a track before the transport has bound the
             // engine deck (start-up restore); replay it once Bind() has run.
-            _pendingLoad = (primaryPath, karaokePath);
+            _pendingLoad = (primaryPath, karaokePath, vocalsPath);
             RaiseStateChanged();
             return;
         }
@@ -322,9 +341,9 @@ public sealed class DeckChannel : IDisposable
         if (string.Equals(karaokePath, primaryPath, StringComparison.OrdinalIgnoreCase))
             karaokePath = null;
 
-        _lastLoad = (primaryPath, karaokePath);
+        _lastLoad = (primaryPath, karaokePath, vocalsPath);
 
-        _ = LoadCoreAsync(deck, primaryPath, karaokePath, generation);
+        _ = LoadCoreAsync(deck, primaryPath, karaokePath, vocalsPath, generation);
         RaiseStateChanged(); // Loading is visible immediately
     }
 
@@ -356,7 +375,7 @@ public sealed class DeckChannel : IDisposable
             // Before the transport is bound: keep the request with the load so
             // Bind() replays it with the stem attached.
             if (_pendingLoad is { } pending)
-                _pendingLoad = (pending.Primary, karaokePath);
+                _pendingLoad = (pending.Primary, karaokePath, pending.Vocals);
             return _pendingLoad != null;
         }
 
@@ -379,7 +398,7 @@ public sealed class DeckChannel : IDisposable
 
         int generation = ++_loadGeneration;
         _fault = null;
-        _lastLoad = (primary, karaokePath);
+        _lastLoad = (primary, karaokePath, last.Vocals);
 
         lock (_playGate)
         {
@@ -423,7 +442,7 @@ public sealed class DeckChannel : IDisposable
                 // the deck back on the original-only load it would have had, so
                 // the mix keeps playing instead of the deck dying on the stem.
                 Log.Warn($"{Name}: karaoke stem could not be opened ({ex.Message}) - keeping the original mix");
-                _lastLoad = (primary, null);
+                _lastLoad = (primary, null, null);
                 try
                 {
                     await deck.LoadAsync(primary, null, _delayMs,
@@ -614,7 +633,7 @@ public sealed class DeckChannel : IDisposable
             bool armed;
             lock (_playGate) armed = _playWhenLoaded;
 
-            Load(pending.Primary, pending.Karaoke);
+            Load(pending.Primary, pending.Karaoke, pending.Vocals);
             if (armed) Play();
         }
     }
@@ -639,7 +658,7 @@ public sealed class DeckChannel : IDisposable
             _fault = null;
             if (_lastLoad is { } last && _deck != null && _deck.TrackPath == null)
             {
-                Load(last.Primary, last.Karaoke);
+                Load(last.Primary, last.Karaoke, last.Vocals);
                 return;
             }
 
@@ -656,7 +675,7 @@ public sealed class DeckChannel : IDisposable
 
     // ---------------------------------------------------------------- internals
 
-    private async Task LoadCoreAsync(DeckSource deck, string primary, string? karaoke, int generation)
+    private async Task LoadCoreAsync(DeckSource deck, string primary, string? karaoke, string? vocals, int generation)
     {
         try
         {
@@ -675,7 +694,8 @@ public sealed class DeckChannel : IDisposable
 
             try
             {
-                await deck.LoadAsync(primary, karaoke, _delayMs, startSeconds: 0, playWhenReady: false)
+                await deck.LoadAsync(primary, karaoke, _delayMs, startSeconds: 0, playWhenReady: false,
+                        vocalsPath: vocals)
                     .ConfigureAwait(false);
 
                 // The swap itself runs on the render thread. Wait for it so the state

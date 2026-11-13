@@ -28,6 +28,22 @@ public enum TransportState
 }
 
 /// <summary>
+/// Which decks a transport command applies to: the active one, or both at once
+/// (the mixer's A-B link). Deliberately not a third member of
+/// <see cref="PlaybackDeck"/>: that enum is persisted and every
+/// <c>deck == A ? x : y</c> in the app assumes exactly two values, so a third
+/// would silently map onto B.
+/// </summary>
+public enum TransportTarget
+{
+    /// <summary>Commands act on <see cref="DualDeckTransport.ActiveDeck"/>.</summary>
+    Active,
+
+    /// <summary>Commands act on every deck that has a track loaded.</summary>
+    Both,
+}
+
+/// <summary>
 /// The mixer's two decks and the crossfader between them.
 ///
 /// <para><b>What changed and why.</b> In 1.x this class owned no audio at all: it
@@ -65,6 +81,18 @@ public sealed class DualDeckTransport : IDisposable
     private bool _outputWarningLogged;
     private int _disposed;
     private PlaybackDeck _activeDeck = PlaybackDeck.A;
+
+    /// <summary>Which decks <see cref="Target"/> commands apply to.</summary>
+    private TransportTarget _target = TransportTarget.Active;
+
+    /// <summary>True while the active deck drives the other one (deck sync).</summary>
+    private bool _syncActive;
+
+    /// <summary>
+    /// Guards the sync mirror, so the slave command the mirror issues cannot
+    /// re-enter the mirror.
+    /// </summary>
+    private bool _mirroring;
 
     /// <summary>Device ids the mixer currently holds (reopen only when this changes).</summary>
     private string? _appliedMicIds;
@@ -184,6 +212,44 @@ public sealed class DualDeckTransport : IDisposable
 
     /// <summary>Shorthand for <see cref="Channel"/> of the <see cref="ActiveDeck"/>.</summary>
     public DeckChannel Active => Channel(ActiveDeck);
+
+    /// <summary>
+    /// Which decks the transport commands act on. Independent of
+    /// <see cref="ActiveDeck"/>: <see cref="TransportTarget.Both"/> links the
+    /// decks (the A-B button), while the active deck still names the master.
+    ///
+    /// <para>Set automatically by <see cref="LoadOnDeck"/> when a karaoke pair
+    /// fills both decks; pressing A or B is expected to put it back to
+    /// <see cref="TransportTarget.Active"/> (the ViewModel's job).</para>
+    /// </summary>
+    public TransportTarget Target
+    {
+        get => _target;
+        set
+        {
+            if (_target == value) return;
+            _target = value;
+            RaiseStateChanged();
+        }
+    }
+
+    /// <summary>Setter form of <see cref="Target"/> for callers that prefer a method.</summary>
+    public void SetTarget(TransportTarget target) => Target = target;
+
+    /// <summary>
+    /// The decks a command applies to: the active deck alone, or every deck that
+    /// holds a track. An empty second deck is simply skipped, so a fan-out never
+    /// touches (or throws on) a deck with nothing to play.
+    /// </summary>
+    private IReadOnlyList<PlaybackDeck> Targets()
+    {
+        if (_target == TransportTarget.Active) return new[] { ActiveDeck };
+
+        var decks = new List<PlaybackDeck>(2);
+        if (DeckA.IsLoaded) decks.Add(PlaybackDeck.A);
+        if (DeckB.IsLoaded) decks.Add(PlaybackDeck.B);
+        return decks;
+    }
 
     /// <summary>Transport state of the active deck.</summary>
     public TransportState State => Active.State;
@@ -325,26 +391,77 @@ public sealed class DualDeckTransport : IDisposable
 
     // ---------------------------------------------------------------- transport
 
-    /// <summary>Play the active deck.</summary>
-    public void Play() => PlayDeck(ActiveDeck);
+    /// <summary>Play every target deck (<see cref="Target"/>).</summary>
+    public void Play()
+    {
+        foreach (var deck in Targets()) PlayDeck(deck, autoCue: _target == TransportTarget.Active);
+    }
 
-    /// <summary>Pause the active deck.</summary>
-    public void Pause() => PauseDeck(ActiveDeck);
+    /// <summary>Pause every target deck.</summary>
+    public void Pause()
+    {
+        foreach (var deck in Targets()) PauseDeck(deck);
+    }
 
-    /// <summary>Play/pause the active deck.</summary>
-    public void TogglePlayPause() => TogglePlayPause(ActiveDeck);
+    /// <summary>
+    /// Play/pause every target deck.
+    ///
+    /// <para>Absolute, not a per-deck flip: with <see cref="TransportTarget.Both"/>
+    /// a cued B must follow a playing A instead of toggling the other way, so the
+    /// pair either all plays or all pauses. One deck playing and one paused ends
+    /// with both playing; both playing ends with both paused.</para>
+    /// </summary>
+    public void TogglePlayPause()
+    {
+        if (_target == TransportTarget.Active)
+        {
+            TogglePlayPause(ActiveDeck);
+            return;
+        }
 
-    /// <summary>Stop the active deck (media stays loaded).</summary>
-    public void Stop() => StopDeck(ActiveDeck);
+        var decks = Targets();
+        bool allPlaying = decks.Count > 0;
+        foreach (var deck in decks) allPlaying &= IsDeckPlaying(deck);
 
-    /// <summary>Seek the active deck.</summary>
-    public void Seek(TimeSpan position) => SeekDeck(ActiveDeck, position);
+        if (allPlaying)
+        {
+            foreach (var deck in decks) PauseDeck(deck);
+        }
+        else
+        {
+            foreach (var deck in decks) PlayDeck(deck, autoCue: false);
+        }
+    }
 
-    /// <summary>Nudge the active deck forward.</summary>
-    public void SkipForward(double seconds = 10) => Active.SkipForward(seconds);
+    /// <summary>Stop every target deck (media stays loaded).</summary>
+    public void Stop()
+    {
+        foreach (var deck in Targets()) StopDeck(deck);
+    }
 
-    /// <summary>Nudge the active deck backward.</summary>
-    public void SkipBack(double seconds = 10) => Active.SkipBack(seconds);
+    /// <summary>Seek every target deck.</summary>
+    public void Seek(TimeSpan position)
+    {
+        foreach (var deck in Targets()) SeekDeck(deck, position);
+    }
+
+    /// <summary>Nudge every target deck forward.</summary>
+    public void SkipForward(double seconds = 10) => SkipTo(Active.DisplayPosition + TimeSpan.FromSeconds(seconds));
+
+    /// <summary>Nudge every target deck backward.</summary>
+    public void SkipBack(double seconds = 10) => SkipTo(Active.DisplayPosition - TimeSpan.FromSeconds(seconds));
+
+    /// <summary>
+    /// Move every target deck to an absolute position. The commanded position is
+    /// used for the sync mirror rather than the master's clock: a deck seek is
+    /// posted to the render thread, so the master's clock has not moved yet when
+    /// the mirror runs.
+    /// </summary>
+    private void SkipTo(TimeSpan position)
+    {
+        foreach (var deck in Targets()) Channel(deck).Seek(position);
+        MirrorSeek(ActiveDeck, position);
+    }
 
     /// <summary>Nudge one deck forward (the deck controls' own buttons).</summary>
     public void SkipForwardDeck(PlaybackDeck deck, double seconds = 10) =>
@@ -377,6 +494,15 @@ public sealed class DualDeckTransport : IDisposable
     public void LoadOnDeck(PlaybackDeck deck, string? primaryPath, string? karaokePath)
     {
         Channel(deck).Load(primaryPath, karaokePath);
+
+        // The load funnel is the one place the A-B link self-selects: a karaoke
+        // pair filling both decks is the operator's "play it on both" case, and
+        // any ordinary load puts the transport back on the active deck alone.
+        // Pressing A or B clears it again (the ViewModel sets Target itself).
+        Target = !string.IsNullOrWhiteSpace(primaryPath) && !string.IsNullOrWhiteSpace(karaokePath)
+            ? TransportTarget.Both
+            : TransportTarget.Active;
+
         RaiseStateChanged();
     }
 
@@ -398,6 +524,7 @@ public sealed class DualDeckTransport : IDisposable
             Engine.SetFader(deck == PlaybackDeck.A ? 0.0 : 1.0);
         }
 
+        MirrorPlay(deck);
         RaiseStateChanged();
     }
 
@@ -405,6 +532,7 @@ public sealed class DualDeckTransport : IDisposable
     public void PauseDeck(PlaybackDeck deck)
     {
         Channel(deck).Pause();
+        MirrorPause(deck);
         RaiseStateChanged();
     }
 
@@ -419,6 +547,7 @@ public sealed class DualDeckTransport : IDisposable
     public void StopDeck(PlaybackDeck deck)
     {
         Channel(deck).Stop();
+        MirrorStop(deck);
         RaiseStateChanged();
     }
 
@@ -426,6 +555,107 @@ public sealed class DualDeckTransport : IDisposable
     public void SeekDeck(PlaybackDeck deck, TimeSpan position)
     {
         Channel(deck).Seek(position);
+        MirrorSeek(deck, position);
+        RaiseStateChanged();
+    }
+
+    // ---------------------------------------------------------------- deck sync
+
+    /// <summary>
+    /// Lock the two decks together with the active deck as master. Engaging
+    /// aligns the slave to the master's media clock and copies its tempo; from
+    /// then on play, pause, stop, seek, skip and the master's end of track are
+    /// mirrored to the slave.
+    ///
+    /// <para>No chasing loop is needed: both decks are pulled in the same
+    /// 480-frame block off one <c>FrameIndex</c>, so equal media position plus
+    /// equal tempo holds to within a block by construction. Disengaging leaves
+    /// both decks exactly as they are.</para>
+    /// </summary>
+    public bool SyncActive
+    {
+        get => _syncActive;
+        set
+        {
+            if (_syncActive == value) return;
+            _syncActive = value;
+
+            if (value) AlignSlave();
+
+            RaiseStateChanged();
+        }
+    }
+
+    /// <summary>Setter form of <see cref="SyncActive"/>.</summary>
+    public void SetSyncActive(bool active) => SyncActive = active;
+
+    /// <summary>
+    /// Bring the slave onto the master's playhead and tempo. Runs once, when
+    /// sync is engaged: after that the shared block clock keeps them together.
+    /// </summary>
+    private void AlignSlave()
+    {
+        var master = Channel(ActiveDeck);
+        var slave = Channel(Other(ActiveDeck));
+        if (!master.IsLoaded || !slave.IsLoaded) return;
+
+        slave.TempoRatio = master.TempoRatio;
+
+        // A deck seek clamps to that deck's own end, so a master longer than the
+        // slave parks the slave on its last frame (silent) rather than wrapping
+        // it back into a loop.
+        slave.Seek(TimeSpan.FromSeconds(master.MediaPositionSeconds));
+    }
+
+    /// <summary>
+    /// Run a slave command for a master command, when sync is on and the command
+    /// came from the master. <see cref="_mirroring"/> keeps the slave's own
+    /// state event from re-entering the mirror.
+    /// </summary>
+    private void Mirror(PlaybackDeck deck, Action<DeckChannel, DeckChannel> onSlave)
+    {
+        if (!_syncActive || _mirroring || deck != ActiveDeck) return;
+
+        var master = Channel(deck);
+        var slave = Channel(Other(deck));
+        if (!slave.IsLoaded) return;
+
+        _mirroring = true;
+        try { onSlave(master, slave); }
+        finally { _mirroring = false; }
+    }
+
+    private void MirrorPlay(PlaybackDeck deck) => Mirror(deck, (master, slave) =>
+    {
+        // Re-align on play: the master may have been paused (or cued) since the
+        // sync was engaged, and a pair that starts apart never catches up.
+        slave.Seek(TimeSpan.FromSeconds(master.MediaPositionSeconds));
+        slave.Play();
+    });
+
+    private void MirrorPause(PlaybackDeck deck) => Mirror(deck, (_, slave) => slave.Pause());
+
+    private void MirrorStop(PlaybackDeck deck) => Mirror(deck, (_, slave) => slave.Stop());
+
+    private void MirrorSeek(PlaybackDeck deck, TimeSpan position) =>
+        Mirror(deck, (_, slave) => slave.Seek(position));
+
+    // ---------------------------------------------------------------- fan-out controls
+
+    /// <summary>
+    /// Set the deck fader on every target in one call, so a VOL SYNC toggle does
+    /// not need one write per deck. Re-entrancy guarding belongs to the ViewModel.
+    /// </summary>
+    public void SetTargetVolume(double volume)
+    {
+        foreach (var deck in Targets()) Channel(deck).Volume = volume;
+        RaiseStateChanged();
+    }
+
+    /// <summary>Set the tempo ratio on every target in one call (TEMPO SYNC).</summary>
+    public void SetTargetTempo(double ratio)
+    {
+        foreach (var deck in Targets()) Channel(deck).TempoRatio = ratio;
         RaiseStateChanged();
     }
 
@@ -735,8 +965,24 @@ public sealed class DualDeckTransport : IDisposable
     private static PlaybackDeck Other(PlaybackDeck deck) =>
         deck == PlaybackDeck.A ? PlaybackDeck.B : PlaybackDeck.A;
 
-    private void OnDeckStateChanged(object? sender, EventArgs e) =>
+    private void OnDeckStateChanged(object? sender, EventArgs e)
+    {
+        // Sync: a master that ran out of media takes the slave with it, so the
+        // pair never leaves one deck playing into silence. The slave ending on
+        // its own needs no handling - it simply stops at its last frame.
+        if (_syncActive && !_mirroring && ReferenceEquals(sender, Active) && Active.ReachedEnd)
+        {
+            var slave = Channel(Other(ActiveDeck));
+            if (slave.State == TransportState.Playing)
+            {
+                _mirroring = true;
+                try { slave.Stop(); }
+                finally { _mirroring = false; }
+            }
+        }
+
         RaiseStateChanged();
+    }
 
     /// <summary>
     /// Announce a change to the UI. Deck events can arrive from the render thread
