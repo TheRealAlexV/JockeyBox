@@ -53,10 +53,16 @@
                         ToolTip="Open the lyrics in their own window"
                         Click="OnPopOutClick"/>
 
+                <!-- The diagnostic explains WHY lyrics are missing ("also tried:
+                     local .lrc, lrclib, ..."), so a single ellipsised line made
+                     it decorative: at 1400 it died mid-token and at 1040 after
+                     the artist. Wrap it, and carry the whole string in a tooltip
+                     so nothing is lost when the wrap still runs out of room. -->
                 <TextBlock Grid.Column="4" Text="{Binding LyricsStatus}" FontSize="11"
                            Margin="10,0,0,0" VerticalAlignment="Center"
                            HorizontalAlignment="Right" Foreground="{StaticResource TextDimBrush}"
-                           TextTrimming="CharacterEllipsis"/>
+                           TextWrapping="Wrap" TextAlignment="Right"
+                           MaxHeight="30" ToolTip="{Binding LyricsStatus}"/>
 
                 <!-- Every provider that returned lyrics for this track -->
                 <Popup Grid.Column="1" Grid.ColumnSpan="2"
@@ -154,7 +160,7 @@
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*" MinWidth="60"/>
+                    <ColumnDefinition Width="*" MinWidth="36"/>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="Auto"/>
