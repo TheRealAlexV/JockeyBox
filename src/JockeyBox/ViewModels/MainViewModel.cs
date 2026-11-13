@@ -2660,6 +2660,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         PlayKaraokeSelectedCommand.NotifyCanExecuteChanged();
         QueueKaraokeSelectedCommand.NotifyCanExecuteChanged();
         NotifyMediaCommandStates();
+        RefreshTrackMenuVariants();
         if (value == null) return; // tree rebuild / filtered out: keep the key for restore
         _lastSelectedTrackKey = value.Track is { } track
             ? TrackKey(track.RelativeKey)

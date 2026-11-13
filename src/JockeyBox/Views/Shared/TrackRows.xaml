@@ -185,6 +185,26 @@
                             </Style>
                         </TextBlock.Style>
                     </TextBlock>
+                    <!-- One slot per take that exists, straight from the model
+                         (TrackEntry.Variants.Present). The characters are
+                         VariantGlyphs; the design lane owns them and this row's
+                         final layout. -->
+                    <ItemsControl ItemsSource="{Binding Track.Variants.Present}"
+                                  VerticalAlignment="Center">
+                        <ItemsControl.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <StackPanel Orientation="Horizontal"/>
+                            </ItemsPanelTemplate>
+                        </ItemsControl.ItemsPanel>
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Style="{StaticResource BadgeSlot}"
+                                           Text="{Binding Icon}"
+                                           ToolTip="{Binding Label}"
+                                           AutomationProperties.Name="{Binding Label}"/>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
                 </StackPanel>
             </Grid>
         </Grid>

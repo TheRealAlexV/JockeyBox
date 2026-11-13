@@ -32,6 +32,8 @@ public partial class DeckViewModel : ObservableObject, IDisposable
     private bool _suppressApply;   // true while restoring saved settings
     private bool _isUserSeeking;   // view is dragging a seek bar
     private int _waveformGeneration;
+    private string? _residentKaraokePath; // the instrumental file the channel holds
+    private StemKind? _pendingStem;      // a stem pinned before the deck finished loading
 
     [ObservableProperty] private string _trackTitle = "No track loaded";
     [ObservableProperty] private string _trackDetail = "";
@@ -146,9 +148,20 @@ public partial class DeckViewModel : ObservableObject, IDisposable
         : "This track has only one version on disk";
 
     [RelayCommand]
-    private void SelectVersion(DeckVersion? version)
+    private async Task SelectVersionAsync(DeckVersion? version)
     {
         if (version is not { IsAvailable: true }) return;
+
+        // The channel holds one instrumental reader. Choosing the other render
+        // means re-opening the pair around that file first; the attach carries
+        // the playhead over, so the switch stays a crossfade in time instead of
+        // a reload that would jump the deck back to 0:00.
+        if (version.Kind is StemKind.Karaoke && version.Path is { } path
+            && !string.Equals(path, _residentKaraokePath, StringComparison.OrdinalIgnoreCase))
+        {
+            if (!await _channel.AttachKaraokeStemAsync(path)) return;
+            _residentKaraokePath = path;
+        }
 
         // 25 ms: short enough to feel instant, long enough that the switch is a
         // crossfade over the resident readers instead of a click.
@@ -159,21 +172,22 @@ public partial class DeckViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
-    /// Build the version submenu from what is on disk. The deck has one
-    /// instrumental reader, so the file that was loaded as the partner is the one
-    /// the menu offers: a track whose only render is a keep-backing file gets
-    /// "Keep backing", never a second instrumental the deck cannot reach.
+    /// Build the version submenu from what is on disk, in the stable order
+    /// Original, Karaoke, Keep backing, Vocals. Availability is never inferred
+    /// from the partner that happened to load: a track with both instrumental
+    /// renders offers both, and the deck attaches the one it does not hold when
+    /// the operator picks it.
     /// </summary>
-    private void SetVersions(string? musicPath, string? karaokePath, string? vocalsPath)
+    private void SetVersions(string? musicPath)
     {
         Versions.Clear();
         SelectedVersion = null;
 
-        foreach (var option in BuildVersions(musicPath, karaokePath, vocalsPath))
+        foreach (var option in BuildVersions(musicPath))
             Versions.Add(option);
 
         var current = Versions.FirstOrDefault(v => v.IsAvailable);
-        if (current != null) SelectVersion(current);
+        if (current != null) _ = SelectVersionAsync(current);
         else Versions.Clear();
 
         foreach (var option in Versions) option.SelectCommand = SelectVersionCommand;
@@ -187,43 +201,40 @@ public partial class DeckViewModel : ObservableObject, IDisposable
     /// (file on disk to menu entry) can be checked without a window or a channel.
     /// A track with only an original yields that one entry, unavailable, which the
     /// menu shows disabled with its reason rather than as an empty popup.
+    ///
+    /// <para>Every entry owns its own file, resolved through
+    /// <see cref="KaraokeNaming.VariantPathFor"/>. Validating the entries against
+    /// one shared partner path is what used to hide the second instrumental: with
+    /// both renders on disk only one of them could ever match, so the other was
+    /// dropped and the menu collapsed to a single entry.</para>
     /// </summary>
-    internal static List<DeckVersion> BuildVersions(string? musicPath, string? karaokePath,
-                                                   string? vocalsPath)
+    internal static List<DeckVersion> BuildVersions(string? musicPath)
     {
         var options = new List<DeckVersion>();
         if (string.IsNullOrWhiteSpace(musicPath)) return options;
 
         foreach (var variant in KaraokeNaming.DiscoverVariants(musicPath))
         {
-            var option = variant switch
-            {
-                AudioVariant.Original => new DeckVersion("Original", StemKind.Original, true),
-                AudioVariant.Karaoke => HasFile(karaokePath, KaraokeNaming.Marker)
-                    ? new DeckVersion("Karaoke", StemKind.Karaoke, true)
-                    : null,
-                AudioVariant.Backing => HasFile(karaokePath, KaraokeNaming.BackingMarker)
-                    ? new DeckVersion("Keep backing", StemKind.Karaoke, true)
-                    : null,
-                AudioVariant.Vocals => string.IsNullOrWhiteSpace(vocalsPath)
-                    ? null
-                    : new DeckVersion("Vocals", StemKind.Vocals, true),
-                _ => null,
-            };
+            var path = KaraokeNaming.VariantPathFor(musicPath, variant);
+            if (path == null) continue;
 
-            if (option != null) options.Add(option);
+            var (label, kind) = variant switch
+            {
+                AudioVariant.Karaoke => ("Karaoke", StemKind.Karaoke),
+                AudioVariant.Backing => ("Keep backing", StemKind.Karaoke),
+                AudioVariant.Vocals => ("Vocals", StemKind.Vocals),
+                _ => ("Original", StemKind.Original),
+            };
+            options.Add(new DeckVersion(label, kind, true, null, variant, path));
         }
 
         if (options.Count == 0)
-            options.Add(new DeckVersion("Original", StemKind.Original, false,
+            options.Add(new DeckVersion("Original", StemKind.Original, false, null,
+                                        AudioVariant.Original, null,
                                         "No version of this track was found on disk"));
 
         return options;
     }
-
-    private static bool HasFile(string? path, string marker) =>
-        !string.IsNullOrWhiteSpace(path)
-        && System.IO.Path.GetFileNameWithoutExtension(path).EndsWith(marker, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Card title. Normally the ctor's name ("DECK A"); a karaoke pair renames the
@@ -297,7 +308,7 @@ public partial class DeckViewModel : ObservableObject, IDisposable
             HasKaraoke = false;
             IsPlaying = false;
             PlayGlyph = "\u25B6";
-            SetVersions(null, null, null);
+            SetVersions(null);
             Cues.SetTrack(null);
             return;
         }
@@ -311,6 +322,7 @@ public partial class DeckViewModel : ObservableObject, IDisposable
                         ?? VariantPath(musicPath, AudioVariant.Backing);
         string? vocalsPath = VariantPath(musicPath, AudioVariant.Vocals);
 
+        _residentKaraokePath = karaokePath;
         _transport.LoadOnDeck(DeckTarget, musicPath, karaokePath, vocalsPath);
 
         TrackTitle = title;
@@ -323,34 +335,36 @@ public partial class DeckViewModel : ObservableObject, IDisposable
                   $"karaoke={System.IO.Path.GetFileName(karaokePath ?? "")} karaokeOnDisk={System.IO.File.Exists(karaokePath ?? "")} " +
                   $"IsLoaded={IsLoaded} HasKaraoke={HasKaraoke} duration={_channel.Duration.TotalSeconds:0.000}s");
 
-        SetVersions(musicPath, karaokePath, vocalsPath);
+        SetVersions(musicPath);
         Cues.SetTrack(musicPath);
     }
 
     /// <summary>The file a variant lives in beside the source, or null when none does.</summary>
-    internal static string? VariantPath(string? primaryPath, AudioVariant variant)
+    /// <summary>
+    /// Absolute path of one variant of a track, or null when it is not on disk.
+    /// Thin alias over <see cref="KaraokeNaming.VariantPathFor"/> so the deck, the
+    /// track model and the menus all resolve a variant through one rule.
+    /// </summary>
+    internal static string? VariantPath(string? primaryPath, AudioVariant variant) =>
+        KaraokeNaming.VariantPathFor(primaryPath, variant);
+
+    /// <summary>
+    /// Pin this deck to one stem now, or as soon as its load lands. A deck load
+    /// discovers the sibling render beside its file as a partner and then plays
+    /// the default Mix, which sums both: a caller that loaded this deck for one
+    /// file (the karaoke pair's original deck) says so here.
+    /// </summary>
+    internal void HoldStem(StemKind kind)
     {
-        if (string.IsNullOrWhiteSpace(primaryPath) || variant == AudioVariant.Original) return null;
+        _pendingStem = kind;
+        if (_channel.IsLoaded) ApplyPendingStem();
+    }
 
-        var mode = variant switch
-        {
-            AudioVariant.Backing => KaraokeStemMode.InstrumentalKeepBacking,
-            AudioVariant.Vocals => KaraokeStemMode.VocalsOnly,
-            _ => KaraokeStemMode.Instrumental,
-        };
-
-        string folder = System.IO.Path.GetDirectoryName(primaryPath) ?? "";
-        string stem = KaraokeNaming.BaseFileName(primaryPath);
-        if (folder.Length == 0 || stem.Length == 0) return null;
-
-        string marker = KaraokeNaming.MarkerOf(mode);
-        foreach (var extension in new[] { KaraokeNaming.RenderExtension, ".flac" })
-        {
-            string candidate = System.IO.Path.Combine(folder, stem + marker + extension);
-            if (System.IO.File.Exists(candidate)) return candidate;
-        }
-
-        return null;
+    private void ApplyPendingStem()
+    {
+        if (_pendingStem is not { } kind) return;
+        _pendingStem = null;
+        _channel.SetStemMode(kind, 0);
     }
 
     /// <summary>Apply generated waveforms unless a newer track was loaded meanwhile.</summary>
@@ -413,6 +427,10 @@ public partial class DeckViewModel : ObservableObject, IDisposable
         bool karaoke = _channel.HasKaraoke;
         DeckTrace($"StateChanged deck={DeckTarget} state={_channel.State} IsLoaded={loaded} " +
                   $"HasKaraoke={karaoke} duration={_channel.Duration.TotalSeconds:0.000}s");
+
+        // A stem pinned before the load was in flight only takes effect now.
+        if (loaded) ApplyPendingStem();
+
         if (IsLoaded == loaded && HasKaraoke == karaoke) return;
 
         IsLoaded = loaded;
@@ -584,18 +602,27 @@ public partial class DeckViewModel : ObservableObject, IDisposable
 /// </summary>
 public partial class DeckVersion : ObservableObject
 {
-    public DeckVersion(string label, StemKind kind, bool isAvailable, string? reason = null)
+    public DeckVersion(string label, StemKind kind, bool isAvailable, string? reason = null,
+                       AudioVariant variant = AudioVariant.Original, string? path = null)
     {
         Label = label;
         Kind = kind;
         IsAvailable = isAvailable;
         Reason = reason ?? label;
+        Variant = variant;
+        Path = path;
     }
 
     public string Label { get; }
 
     /// <summary>Which resident stem this entry crossfades to.</summary>
     public StemKind Kind { get; }
+
+    /// <summary>The take this entry is, so menus and rows can key an icon on it.</summary>
+    public AudioVariant Variant { get; }
+
+    /// <summary>The file this entry plays; null only on the unavailable placeholder.</summary>
+    public string? Path { get; }
 
     public bool IsAvailable { get; }
 

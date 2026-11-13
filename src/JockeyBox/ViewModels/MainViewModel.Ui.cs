@@ -185,7 +185,71 @@ public sealed class TrackMenuCapabilities : ObservableObject
         OnPropertyChanged(nameof(CanChoosePlaylist));
         OnPropertyChanged(nameof(CanAddToPlaylistDirectly));
     }
+
+    /// <summary>
+    /// "Play" and "Add to Queue" as one item per take. Empty on a surface with no
+    /// library row, and single-item on a plain track, so both keep the flat item
+    /// they had before. Refilled by <c>RefreshTrackMenuVariants</c> whenever the
+    /// selected row changes, because availability is read from disk for that row.
+    /// </summary>
+    public ObservableCollection<TrackVariantItem> PlayVariants { get; } = new();
+    public ObservableCollection<TrackVariantItem> QueueVariants { get; } = new();
+
+    public bool HasVariantChoice => PlayVariants.Count > 1;
+    public bool ShowFlatPlay => Play is not null && !HasVariantChoice;
+    public bool ShowVariantPlay => Play is not null && HasVariantChoice;
+    public bool ShowFlatQueue => AddToQueue is not null && QueueVariants.Count <= 1;
+    public bool ShowVariantQueue => AddToQueue is not null && QueueVariants.Count > 1;
+
+    /// <summary>Swap the take lists and re-evaluate which Play/Queue item is shown.</summary>
+    internal void SetVariantItems(IReadOnlyList<TrackVariantItem> play,
+                                 IReadOnlyList<TrackVariantItem> queue)
+    {
+        PlayVariants.Clear();
+        foreach (var item in play) PlayVariants.Add(item);
+        QueueVariants.Clear();
+        foreach (var item in queue) QueueVariants.Add(item);
+
+        OnPropertyChanged(nameof(HasVariantChoice));
+        OnPropertyChanged(nameof(ShowFlatPlay));
+        OnPropertyChanged(nameof(ShowVariantPlay));
+        OnPropertyChanged(nameof(ShowFlatQueue));
+        OnPropertyChanged(nameof(ShowVariantQueue));
+    }
+
+    /// <summary>
+    /// One menu item per take that exists, in the model's stable order. Pure
+    /// composition so the menu the operator sees can be checked without a window:
+    /// a take whose file is missing is left out rather than drawn dead.
+    /// </summary>
+    internal static List<TrackVariantItem> BuildVariantItems(
+        VariantAvailability variants, Func<AudioVariant, ICommand> command) =>
+        variants.Present
+            .Select(slot => new TrackVariantItem(
+                slot.Variant, slot.Label, slot.Icon, command(slot.Variant)))
+            .ToList();
+
+    /// <summary>
+    /// The queue's takes. The queue stores one pair row per song and its mate is
+    /// resolved by <c>PlaybackQueueItem.FromKaraokePair</c>, which cannot carry a
+    /// named take, so only the original and the karaoke take are offered here. A
+    /// keep-backing or vocals row would be a promise the queue cannot keep.
+    /// </summary>
+    internal static List<TrackVariantItem> BuildQueueVariantItems(
+        VariantAvailability variants, Func<AudioVariant, ICommand> command) =>
+        BuildVariantItems(variants, command)
+            .Where(item => item.Variant is AudioVariant.Original or AudioVariant.Karaoke)
+            .ToList();
 }
+
+/// <summary>
+/// One "Play" or "Add to Queue" submenu item: the take, its label, and the glyph
+/// that stands for it (see <see cref="VariantGlyphs"/>; the design lane owns the
+/// characters). The command is carried on the item, the same way
+/// <see cref="PlaylistTargetItem"/> does it, so the menu never reaches back up
+/// its own visual tree.
+/// </summary>
+public sealed record TrackVariantItem(AudioVariant Variant, string Header, string Icon, ICommand Command);
 
 public partial class MainViewModel
 {
@@ -240,6 +304,30 @@ public partial class MainViewModel
         RebuildPlaylistTargets(caps);
         InternalPlaylists.CollectionChanged += (_, _) => RebuildPlaylistTargets(caps);
         return caps;
+    }
+
+    private void RefreshTrackMenuVariants()
+    {
+        if (_trackMenu is not { } caps) return;
+
+        var track = SelectedTreeNode?.Track;
+        var variants = track?.Variants ?? VariantAvailability.None;
+
+        caps.SetVariantItems(
+            TrackMenuCapabilities.BuildVariantItems(variants,
+                variant => new RelayCommand(() => PlayVariant(track, variant))),
+            TrackMenuCapabilities.BuildQueueVariantItems(variants,
+                variant => new RelayCommand(() => QueueVariant(track, variant))));
+    }
+
+    /// <summary>Add one take of a row to the queue.</summary>
+    private void QueueVariant(TrackEntry? track, AudioVariant variant)
+    {
+        if (track == null) return;
+
+        // The original is today's single-row enqueue, untouched.
+        if (variant == AudioVariant.Original) AddToQueueCommand.Execute(null);
+        else EnqueueKaraokePair(track);
     }
 
     private void RebuildPlaylistTargets(TrackMenuCapabilities caps)

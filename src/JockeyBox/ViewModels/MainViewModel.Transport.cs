@@ -3,6 +3,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using JockeyBox.Audio;
 using JockeyBox.Playback;
+using JockeyBox.Tools;
 
 namespace JockeyBox.ViewModels;
 
@@ -131,6 +132,20 @@ public partial class MainViewModel
         // SetSyncActive lands on the transport through its own path, so the switch
         // can read stale after a transport-side change.
         OnPropertyChanged(nameof(IsDeckSync));
+
+        // A pair's both-decks start is asynchronous: two readers open on workers,
+        // so the arming line in LoadKaraokePair cannot know how it ended. Write
+        // the settled state once, from the same signal the operator hears, and
+        // from the transport's own fields so a stray release shows up here.
+        if (!_pairStartLogged && _karaokePairLoaded
+            && _transport.DeckA.State == TransportState.Playing
+            && _transport.DeckB.State == TransportState.Playing)
+        {
+            _pairStartLogged = true;
+            Log.Info($"karaoke pair: both decks Playing A={_transport.DeckA.State} " +
+                     $"B={_transport.DeckB.State} target={_transport.Target} " +
+                     $"sync={_transport.SyncActive}");
+        }
     }
 
     private void OnDeckPropertyChanged(object? sender, PropertyChangedEventArgs e)

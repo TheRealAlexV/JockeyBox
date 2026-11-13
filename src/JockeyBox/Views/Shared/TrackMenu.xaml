@@ -28,32 +28,62 @@
         <!-- 1. Play -->
         <MenuItem Header="Play"
                   Command="{Binding PlacementTarget.Tag.Play, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
-                  Visibility="{Binding PlacementTarget.Tag.CanPlay, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={StaticResource MenuVisibility}}"/>
+                  Visibility="{Binding PlacementTarget.Tag.ShowFlatPlay, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={StaticResource MenuVisibility}}"/>
 
-        <!-- 1a. Karaoke pair actions. Always present where the surface can express a
-             pair; disabled (not removed) when this row has no karaoke file on disk.
-             Play loads the instrumental on A and the original on B; Queue adds the
-             two rows as one unit. -->
-        <MenuItem Header="Play Karaoke Track"
-                  AutomationProperties.Name="Play Karaoke Track"
-                  Command="{Binding PlacementTarget.Tag.PlayKaraoke, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
-                  Visibility="{Binding PlacementTarget.Tag.CanPlayKaraoke, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={StaticResource MenuVisibility}}"/>
-
-        <MenuItem Header="Queue Karaoke Track"
-                  AutomationProperties.Name="Queue Karaoke Track"
-                  Command="{Binding PlacementTarget.Tag.QueueKaraoke, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
-                  Visibility="{Binding PlacementTarget.Tag.CanQueueKaraoke, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={StaticResource MenuVisibility}}"/>
+        <!-- 1a. Play, one item per take the row actually has. A row with a single
+             take keeps the flat item above and never sees this one, so nothing
+             about a plain track's menu changes. The items are built from disk
+             (TrackEntry.Variants), so a take that is not there is not offered. -->
+        <MenuItem Header="Play"
+                  ItemsSource="{Binding PlacementTarget.Tag.PlayVariants, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                  Visibility="{Binding PlacementTarget.Tag.ShowVariantPlay, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={StaticResource MenuVisibility}}">
+            <MenuItem.ItemContainerStyle>
+                <Style TargetType="MenuItem">
+                    <Setter Property="Header" Value="{Binding Header}"/>
+                    <Setter Property="Command" Value="{Binding Command}"/>
+                    <Setter Property="AutomationProperties.Name" Value="{Binding Header}"/>
+                    <!-- The variant icon slot. TrackVariantItem.Icon carries the
+                         glyph; the design lane owns the characters and the width. -->
+                    <Setter Property="Icon">
+                        <Setter.Value>
+                            <TextBlock Text="{Binding Icon}" FontFamily="Consolas"
+                                       FontSize="12" Width="16"/>
+                        </Setter.Value>
+                    </Setter>
+                </Style>
+            </MenuItem.ItemContainerStyle>
+        </MenuItem>
 
         <!-- 2. Preview (stream) -->
         <MenuItem Header="Preview"
                   Command="{Binding PlacementTarget.Tag.Preview, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
                   Visibility="{Binding PlacementTarget.Tag.CanPreview, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={StaticResource MenuVisibility}}"/>
 
-        <!-- 3. Add to Queue: local playback only, so remote tabs never show it -->
+        <!-- 3. Add to Queue: local playback only, so remote tabs never show it.
+             3a is the same split as Play: per-take items when the row has more
+             than one, the flat item otherwise. -->
         <MenuItem Header="Add to Queue"
                   InputGestureText="Ctrl+Q"
                   Command="{Binding PlacementTarget.Tag.AddToQueue, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
-                  Visibility="{Binding PlacementTarget.Tag.CanAddToQueue, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={StaticResource MenuVisibility}}"/>
+                  Visibility="{Binding PlacementTarget.Tag.ShowFlatQueue, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={StaticResource MenuVisibility}}"/>
+
+        <MenuItem Header="Add to Queue"
+                  ItemsSource="{Binding PlacementTarget.Tag.QueueVariants, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                  Visibility="{Binding PlacementTarget.Tag.ShowVariantQueue, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={StaticResource MenuVisibility}}">
+            <MenuItem.ItemContainerStyle>
+                <Style TargetType="MenuItem">
+                    <Setter Property="Header" Value="{Binding Header}"/>
+                    <Setter Property="Command" Value="{Binding Command}"/>
+                    <Setter Property="AutomationProperties.Name" Value="{Binding Header}"/>
+                    <Setter Property="Icon">
+                        <Setter.Value>
+                            <TextBlock Text="{Binding Icon}" FontFamily="Consolas"
+                                       FontSize="12" Width="16"/>
+                        </Setter.Value>
+                    </Setter>
+                </Style>
+            </MenuItem.ItemContainerStyle>
+        </MenuItem>
 
         <!-- 4a. Add to Playlist, as a submenu of the user's playlists -->
         <MenuItem Header="Add to Playlist"
