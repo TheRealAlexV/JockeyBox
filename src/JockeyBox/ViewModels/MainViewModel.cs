@@ -3447,6 +3447,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             if (_separation.Enqueue(track, KaraokeStemMode.Instrumental)) queued++;
         }
 
+        Log.Info($"Auto-karaoke: queued {queued} of {wanted.Count} downloaded track(s)");
         if (queued > 0)
             StatusText = $"Queued karaoke generation for {queued} downloaded track(s).";
     }
@@ -3479,24 +3480,26 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void EnqueueKaraoke(TrackEntry? track, KaraokeStemMode mode)
     {
-        if (track?.MusicPath == null || !track.NeedsKaraoke) return;
-
-        if (string.IsNullOrWhiteSpace(_settings.KaraokeDirectory))
+        // Every refusal logs one line naming the track, so a click that does
+        // nothing is still visible in the console's LOG list.
+        switch (KaraokeGate.Check(track, _settings.KaraokeDirectory, SeparationEngine.IsInstalled))
         {
-            StatusText = "Set a Karaoke folder in Settings before generating karaoke tracks.";
-            SettingsRequested?.Invoke();
-            return;
+            case KaraokeDenial.NoKaraokeFolder:
+                StatusText = "Set a Karaoke folder in Settings before generating karaoke tracks.";
+                SettingsRequested?.Invoke();
+                return;
+            case KaraokeDenial.EngineNotInstalled:
+                EngineInstallRequested?.Invoke(track!);
+                return;
+            case KaraokeDenial.Allowed:
+                break;
+            default:
+                return;
         }
 
-        if (!SeparationEngine.IsInstalled)
+        if (_separation.Enqueue(track!, mode))
         {
-            EngineInstallRequested?.Invoke(track);
-            return;
-        }
-
-        if (_separation.Enqueue(track, mode))
-        {
-            var title = string.IsNullOrWhiteSpace(track.Title) ? track.RelativePath : track.Title;
+            var title = string.IsNullOrWhiteSpace(track!.Title) ? track.RelativePath : track.Title;
             var modeNote = mode switch
             {
                 KaraokeStemMode.InstrumentalKeepBacking => " (backing vocals kept)",

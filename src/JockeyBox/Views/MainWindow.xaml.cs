@@ -11,6 +11,7 @@ using JockeyBox.Activity;
 using JockeyBox.Library;
 using JockeyBox.Playback;
 using JockeyBox.Separation;
+using JockeyBox.Tools;
 using JockeyBox.ViewModels;
 
 namespace JockeyBox.Views;
@@ -33,6 +34,34 @@ public partial class MainWindow : Window
     public IRelayCommand ClearFinishedActivityCommand { get; } =
         new RelayCommand(() => ActivityFeed.Shared.ClearFinished(),
                          () => ActivityFeed.Shared.Rows.Any(r => r.IsFinished));
+
+    // ---- console detail pane ------------------------------------------------
+    // Clipboard is a view concern, so these live in code-behind rather than on
+    // ActivityFeed: the feed formats the text, the view moves it.
+
+    private void CopyJobDetail_Click(object sender, RoutedEventArgs e)
+        => CopyToClipboard(ActivityFeed.DescribeRow(ActivityFeed.Shared.SelectedRow), "job detail");
+
+    private void CloseJobDetail_Click(object sender, RoutedEventArgs e)
+        => ActivityFeed.Shared.SelectedRow = null;
+
+    private void CopyLogLine_Click(object sender, RoutedEventArgs e)
+        => CopyToClipboard(ActivityFeed.Shared.SelectedLogLine, "log line");
+
+    private static void CopyToClipboard(string? text, string what)
+    {
+        if (string.IsNullOrEmpty(text)) return;
+        try
+        {
+            Clipboard.SetText(text);
+        }
+        catch (Exception ex)
+        {
+            // The clipboard is a shared OS resource; another app holding it is
+            // not a reason to take the app down.
+            Log.Warn($"Copy {what} failed: {ex.Message}");
+        }
+    }
 
     public MainWindow()
     {

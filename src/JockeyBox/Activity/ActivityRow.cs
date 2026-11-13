@@ -28,6 +28,18 @@ public partial class ActivityRow : ObservableObject
     /// <summary>The thing being worked on, e.g. "Artist - Title".</summary>
     public string Title { get; init; } = "";
 
+    /// <summary>Which subsystem reported this row, e.g. "karaoke" or "downloads".</summary>
+    public string Source { get; init; } = "";
+
+    /// <summary>
+    /// Where the producer writes its output, when it knows. The detail pane shows
+    /// it because the operator's question after a job is "what file did it make".
+    /// </summary>
+    public string? OutputPath { get; set; }
+
+    /// <summary>Why the row ended badly, in the producer's words; null otherwise.</summary>
+    public string? Error { get; set; }
+
     /// <summary>True when <see cref="ActivityFeed.Cancel"/> can stop this row.</summary>
     public bool CanCancel { get; init; }
 

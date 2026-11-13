@@ -207,10 +207,36 @@
         </Setter>
     </Style>
 
-    <!-- Log lines: monospace, no selection chrome, one line each. -->
+    <!-- Log lines: monospace, no selection chrome, one line each. Selection is
+         the only feedback the operator gets, because lines are clipped
+         horizontally: it names the line the Copy button will take. -->
     <Style x:Key="LogLine" TargetType="ListBoxItem">
         <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
         <Setter Property="Padding" Value="0,1"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ListBoxItem">
+                    <Border x:Name="bd" Background="Transparent" Padding="{TemplateBinding Padding}">
+                        <ContentPresenter/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsSelected" Value="True">
+                            <Setter TargetName="bd" Property="Background" Value="{StaticResource SelectionBrush}"/>
+                            <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Job rows: the row's own Border carries the look, so the container only
+         supplies click and arrow-key selection. A ListBox (not an ItemsControl)
+         is what makes a row clickable and reachable with the keyboard without
+         hand-rolling focus handling. -->
+    <Style x:Key="ConsoleJobItem" TargetType="ListBoxItem">
+        <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+        <Setter Property="Padding" Value="0"/>
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ListBoxItem">

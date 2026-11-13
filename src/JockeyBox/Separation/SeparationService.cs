@@ -5,6 +5,7 @@ using JockeyBox.Activity;
 using JockeyBox.Downloads;
 using JockeyBox.Library;
 using JockeyBox.Settings;
+using JockeyBox.Tools;
 
 namespace JockeyBox.Separation;
 
@@ -62,11 +63,28 @@ public class SeparationService : IDisposable
         }
     }
 
+    /// <summary>
+    /// Test seam: replaces the source probe and the separator so a test can drive
+    /// a job all the way to its "created" line without a real render. Null in
+    /// production, where the engine runs for real.
+    /// </summary>
+    internal Func<(string MusicPath, string OutputPath, KaraokeStemMode Mode), CancellationToken, Task<string>>? RenderOverride { get; set; }
+
     /// <summary>Queue a karaoke render for a track. No-op if already queued/running.
+    /// <paramref name="mode"/> decides both the model and the output file.</summary>
+
     /// <paramref name="mode"/> decides both the model and the output file.</summary>
     public bool Enqueue(TrackEntry track, KaraokeStemMode mode)
     {
-        if (track.MusicPath == null) return false;
+        if (track.MusicPath == null)
+        {
+            Log.Warn($"Karaoke skipped: no music path: {track.RelativeKey}");
+            return false;
+        }
+
+        var title = string.IsNullOrWhiteSpace(track.Title)
+            ? Path.GetFileNameWithoutExtension(track.MusicPath)
+            : track.Title;
 
         // The render is written beside its original ("Song.karaoke.mp3", or
         // "Song.vocals.mp3" for a vocals take), so no second root is involved;
@@ -74,7 +92,11 @@ public class SeparationService : IDisposable
         // the music folder is unknown.
         var outputPath = DownloadPaths.KaraokeOutputPath(
             _settings, track.MusicPath, mode, track.RelativeKey);
-        if (outputPath.Length == 0) return false;
+        if (outputPath.Length == 0)
+        {
+            Log.Warn($"Karaoke skipped: no output path: {title} ({track.RelativeKey})");
+            return false;
+        }
 
         var jobKey = JobKey(track.RelativeKey, mode);
         Job job;
@@ -82,7 +104,10 @@ public class SeparationService : IDisposable
         {
             if (_jobs.TryGetValue(jobKey, out var existing)
                 && existing.State is SeparationState.Queued or SeparationState.Running)
+            {
+                Log.Info($"Karaoke already queued: {title} [{mode}]");
                 return false;
+            }
 
             job = new Job(jobKey, track.MusicPath, outputPath, mode)
             {
@@ -97,11 +122,13 @@ public class SeparationService : IDisposable
         job.Activity = ActivityFeed.Shared.Start(
             ActivityKind.Karaoke,
             ActivityKey(job.Key),
-            string.IsNullOrWhiteSpace(track.Title)
-                ? Path.GetFileNameWithoutExtension(job.MusicPath)
-                : track.Title,
+            title,
             canCancel: true,
-            cancel: () => Cancel(job.Key));
+            cancel: () => Cancel(job.Key),
+            source: "karaoke",
+            outputPath: outputPath);
+
+        Log.Info($"Karaoke queued: {title} -> {outputPath} [{mode}]");
 
         track.Separation = SeparationState.Queued;
         track.SeparationProgress = 0;
@@ -179,12 +206,19 @@ public class SeparationService : IDisposable
 
         try
         {
-            var facts = SourceAudioFacts.Read(job.MusicPath);
-            var request = new SeparationEngine.SeparationRequest(
-                job.MusicPath, job.OutputPath, job.Mode,
-                facts.SampleRate, facts.Channels, facts.BitrateKbps);
-
-            var output = await _engine.SeparateAsync(request, progress, ct);
+            string output;
+            if (RenderOverride is { } render)
+            {
+                output = await render((job.MusicPath, job.OutputPath, job.Mode), ct);
+            }
+            else
+            {
+                var facts = SourceAudioFacts.Read(job.MusicPath);
+                var request = new SeparationEngine.SeparationRequest(
+                    job.MusicPath, job.OutputPath, job.Mode,
+                    facts.SampleRate, facts.Channels, facts.BitrateKbps);
+                output = await _engine.SeparateAsync(request, progress, ct);
+            }
 
             await _dispatcher.InvokeAsync(() =>
             {
@@ -201,6 +235,8 @@ public class SeparationService : IDisposable
                     + (PendingCount > 0 ? $" \u00b7 {PendingCount} in queue" : ""));
                 ActivityFeed.Shared.Finish(job.Activity, DownloadState.Done, "done");
             });
+
+            Log.Info($"Karaoke created: {Path.GetFileName(job.MusicPath)} -> {output} [{job.Mode}]");
         }
         catch (OperationCanceledException) when (!_shutdown.IsCancellationRequested)
         {
@@ -212,7 +248,8 @@ public class SeparationService : IDisposable
         {
             var message = Compact(ex.Message);
             UpdateJob(job, SeparationState.Failed, 0);
-            ActivityFeed.Shared.Finish(job.Activity, DownloadState.Failed, message);
+            ActivityFeed.Shared.Finish(job.Activity, DownloadState.Failed, message, message);
+            Log.Warn($"Karaoke failed: {Path.GetFileName(job.MusicPath)}: {message}");
             await _dispatcher.InvokeAsync(() =>
                 StatusChanged?.Invoke($"Karaoke failed for {Path.GetFileName(job.MusicPath)}: {message}"));
         }
@@ -246,6 +283,7 @@ public class SeparationService : IDisposable
             StatusChanged?.Invoke($"Karaoke cancelled: {Path.GetFileName(job.MusicPath)}");
         });
         ActivityFeed.Shared.Finish(job.Activity, DownloadState.Cancelled, "cancelled");
+        Log.Info($"Karaoke cancelled: {Path.GetFileName(job.MusicPath)} [{job.Mode}]");
     }
 
     private static string ActivityKey(string key) => "karaoke:" + key;
