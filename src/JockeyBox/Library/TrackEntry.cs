@@ -128,6 +128,14 @@ public partial class TrackEntry : ObservableObject
     public VariantAvailability Variants => VariantAvailability.From(MusicPath);
 
     /// <summary>
+    /// The take this row's own file is, read from its name
+    /// (<see cref="KaraokeNaming.VariantOf"/>). A render is also a row of its own,
+    /// so "Song.vocals.mp3" is a <see cref="AudioVariant.Vocals"/> row rather than
+    /// the original of itself. Derived, never stored: the name is the record.
+    /// </summary>
+    public AudioVariant PrimaryVariant => KaraokeNaming.VariantOf(MusicPath);
+
+    /// <summary>
     /// Raise the variant properties after a render lands. Callers on the
     /// separation path own no part of the model, so they ring this one bell
     /// instead of writing a path and hoping a dependent property was notified.
@@ -177,20 +185,59 @@ public sealed class VariantAvailability
 
     private readonly IReadOnlyList<VariantSlot> _all;
     private readonly IReadOnlyList<VariantSlot> _present;
+    private readonly VariantSlot[] _badges;
     private readonly string? _source;
 
     private VariantAvailability(IReadOnlyList<VariantSlot> all, string? source)
     {
         _all = all;
         _present = all.Where(slot => slot.Exists).ToArray();
+        Primary = KaraokeNaming.VariantOf(source);
+        _badges = BuildBadges(_present, Primary);
         _source = source;
     }
+
+    /// <summary>
+    /// The marks a row strip draws: the row's own take first, then every render
+    /// it also has. "Original" is left out of the tail because the primary mark
+    /// already stands for this row's file - on a "Song.karaoke.mp3" row the first
+    /// mark is the karaoke diamond, not a square claiming a plain original that
+    /// is not there. A row with no file draws nothing (the strip shows its own
+    /// absent glyph instead).
+    /// </summary>
+    private static VariantSlot[] BuildBadges(IReadOnlyList<VariantSlot> present, AudioVariant primary)
+    {
+        if (present.Count == 0) return Array.Empty<VariantSlot>();
+
+        var badges = new List<VariantSlot>(present.Count)
+        {
+            primary == AudioVariant.Original
+                ? present[0]
+                : new VariantSlot(primary, KaraokeNaming.DisplayName(primary),
+                                  VariantGlyphs.For(primary), true),
+        };
+
+        foreach (var slot in present)
+            if (slot.Variant != AudioVariant.Original && slot.Variant != primary)
+                badges.Add(slot);
+
+        return badges.ToArray();
+    }
+
+    /// <summary>The take this track's own file is (see <see cref="KaraokeNaming.VariantOf"/>).</summary>
+    public AudioVariant Primary { get; }
 
     /// <summary>Every variant in stable order, absent ones included and flagged.</summary>
     public IReadOnlyList<VariantSlot> All => _all;
 
     /// <summary>Only the variants whose file exists, for a badge strip.</summary>
     public IReadOnlyList<VariantSlot> Present => _present;
+
+    /// <summary>
+    /// The marks a row strip draws, in order: this row's own take, then the
+    /// renders it also has. See <see cref="BuildBadges"/>.
+    /// </summary>
+    public IReadOnlyList<VariantSlot> Badges => _badges;
 
     /// <summary>How many variants this track actually has.</summary>
     public int Count => _present.Count;

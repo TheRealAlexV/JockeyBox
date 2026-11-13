@@ -246,6 +246,26 @@ public static class KaraokeNaming
         _ => "Original",
     };
 
+    /// <summary>
+    /// The take a file's own name says it is: "Song.vocals.mp3" is a vocals
+    /// render, "Song.karaoke.mp3" a karaoke one, "Song.mp3" an original. Read
+    /// from the name only - no probe - because it answers "what is this file",
+    /// not "what sits beside it".
+    ///
+    /// <para>A row is built for every audio file, and a render is also a row of
+    /// its own (it has its own name and no pair to join), so the row must say
+    /// which take it is instead of calling itself the original of itself.</para>
+    /// </summary>
+    public static AudioVariant VariantOf(string? fileName)
+    {
+        if (string.IsNullOrWhiteSpace(fileName)) return AudioVariant.Original;
+
+        var stem = StemOf(Path.GetFileName(fileName));
+        if (stem.EndsWith(VocalsMarker, StringComparison.OrdinalIgnoreCase)) return AudioVariant.Vocals;
+        if (stem.EndsWith(BackingMarker, StringComparison.OrdinalIgnoreCase)) return AudioVariant.Backing;
+        return IsKaraokeStem(stem) ? AudioVariant.Karaoke : AudioVariant.Original;
+    }
+
     private static string StemOf(string? fileName)
     {
         if (string.IsNullOrEmpty(fileName)) return "";

@@ -183,16 +183,18 @@
                 <TextBlock Grid.Column="2" Style="{StaticResource TrackCellNum}"
                            Text="{Binding Track.DurationText}"/>
 
-                <!-- The whole icon column is the variant strip: one mark per
-                     take that exists, in the model's stable order (Original,
-                     Karaoke, Backing, Vocals). It replaced a two-slot statement
-                     (square = local file, diamond = karaoke yes/no), because on a
-                     scanned row the Original mark IS the local-file mark and the
-                     absence of a Karaoke mark IS "no karaoke". Four marks is the
-                     ceiling, so the column is 56 px of slot in 60 px. -->
+                <!-- The whole icon column is the variant strip: one mark per take
+                     this row carries, starting with what the row's own file is
+                     (Original, Karaoke, Backing or Vocals - read from its name,
+                     see VariantAvailability.Badges), then every other take that
+                     exists, in the model's stable order. It replaced a two-slot
+                     statement (square = local file, diamond = karaoke yes/no),
+                     because on a scanned row the first mark IS the local-file
+                     mark and the absence of a Karaoke mark IS "no karaoke". Four
+                     marks is the ceiling, so the column is 56 px of slot in 60 px. -->
                 <StackPanel Grid.Column="3" Orientation="Horizontal"
                             HorizontalAlignment="Center" VerticalAlignment="Center">
-                    <ItemsControl ItemsSource="{Binding Track.Variants.Present}"
+                    <ItemsControl ItemsSource="{Binding Track.Variants.Badges}"
                                   VerticalAlignment="Center">
                         <ItemsControl.ItemsPanel>
                             <ItemsPanelTemplate>

@@ -440,6 +440,18 @@ internal static class UiShot
             foreach (var child in node.Children.ToList()) ExpandFolders(child);
         }
 
+        // Every track node in the browser tree, folders flattened away. Read-only
+        // walk of the model, so it sees the same rows the tree binds.
+        static IEnumerable<JockeyBox.Library.BrowserNode> FlattenTrackNodes(
+            IEnumerable<JockeyBox.Library.BrowserNode> nodes)
+        {
+            foreach (var node in nodes)
+            {
+                if (node.Track is not null) yield return node;
+                foreach (var child in FlattenTrackNodes(node.Children)) yield return child;
+            }
+        }
+
         // The render is driven at an explicit size so the result does not depend
         // on the window station's virtual screen (a service session reports
         // 1024x768 and would otherwise clip the layout).
@@ -465,6 +477,9 @@ internal static class UiShot
         // normal shot or for the application itself: it is behind --uishot-menu.
         BitmapSource? menuShot = null;
         BitmapSource? submenuShot = null;
+        // Set when --uishot-menu could not open the submenu it was asked for: the
+        // capture then exists but proves nothing, so the run must not report success.
+        bool menuBlocked = false;
         double menuX = 0;
         double menuY = 0;
         double submenuX = 0;
@@ -472,6 +487,42 @@ internal static class UiShot
         if (Harness.Flag(args, "--uishot-menu") != null)
         {
             var live = window.Content as DependencyObject;
+
+            // Which submenu this run proves: "play", "queue" or "karaoke" (the bare
+            // flag, kept for the runs that already exist). One submenu per run,
+            // because the composite carries one submenu bitmap; the pair of PNGs is
+            // the evidence, and each run says in its log which one it opened.
+            var which = Harness.Flag(args, "--uishot-menu");
+            which = string.IsNullOrWhiteSpace(which) ? "karaoke" : which.Trim().ToLowerInvariant();
+
+            // Play and Add to Queue only become submenus when the row has more than
+            // one take, and the take lists are filled by OnSelectedTreeNodeChanged
+            // -> RefreshTrackMenuVariants. So select the richest row on the model,
+            // the way --uishot-expand expands folders: no click, no desktop, no
+            // product code in the path. Without it the menu carries the flat
+            // single-item Play and there is no submenu to open at all.
+            if (window.DataContext is MainViewModel menuVm)
+            {
+                var richest = FlattenTrackNodes(menuVm.BrowserRoots)
+                    .OrderByDescending(node => node.Track?.Variants.Count ?? 0)
+                    .FirstOrDefault(node => (node.Track?.Variants.Count ?? 0) > 1);
+                if (richest is not null)
+                {
+                    menuVm.SelectedTreeNode = richest;
+                    window.UpdateLayout();
+                    UiPump.Pump(150);
+                    Console.Out.WriteLine(
+                        $"uishot: menu row '{richest.Title}' takes={richest.Track!.Variants.Count}" +
+                        $" badges={string.Join(" ", richest.Track.Variants.Badges.Select(b => b.Icon))}" +
+                        $" play={menuVm.TrackMenu.PlayVariants.Count} queue={menuVm.TrackMenu.QueueVariants.Count}");
+                    Console.Out.Flush();
+                }
+                else
+                {
+                    Console.Error.WriteLine("uishot: --uishot-menu found no row carrying more than one take");
+                    Console.Error.Flush();
+                }
+            }
             // Pick the surface by the menu it carries, not by control type: several
             // trees in this window have their own menus (the queue's, the playlist
             // rail's) and only the track list carries the karaoke submenu. Choosing
@@ -501,30 +552,64 @@ internal static class UiShot
                 UiPump.Pump(300);
 
                 menuShot = RenderElement(menu);
-                var karaoke = menu.Items.OfType<MenuItem>().FirstOrDefault(i =>
-                    (i.Header as string)?.StartsWith("Make Karaoke", StringComparison.Ordinal) == true);
+                // Play / Add to Queue / Make Karaoke Version each render twice: a flat
+                // single item, and a submenu of takes. The submenu is the one holding
+                // items, so match on that and not on the header alone.
+                var submenuItem = menu.Items.OfType<MenuItem>().FirstOrDefault(i =>
+                    which switch
+                    {
+                        "play" => (i.Header as string) == "Play" && i.Items.Count > 0,
+                        "queue" => (i.Header as string) == "Add to Queue" && i.Items.Count > 0,
+                        _ => (i.Header as string)?.StartsWith("Make Karaoke", StringComparison.Ordinal) == true
+                             && i.Items.Count > 0,
+                    });
                 if (menuShot is null)
                 {
                     Console.Error.WriteLine("uishot: --uishot-menu opened but the menu laid out at zero size");
                     Console.Error.Flush();
                 }
-                else if (karaoke is not null)
+                else if (submenuItem is null)
                 {
-                    karaoke.IsSubmenuOpen = true;
+                    // A run that proved nothing must not read as a run that proved
+                    // the icons: name the menu it did get and fail.
+                    Console.Error.WriteLine(
+                        $"uishot: --uishot-menu={which} opened the menu but found no '{which}' submenu " +
+                        $"(items: {string.Join(" | ", menu.Items.OfType<MenuItem>().Select(i => $"{i.Header}[{i.Items.Count}]"))})");
+                    Console.Error.Flush();
+                    menuBlocked = true;
+                }
+                else
+                {
+                    submenuItem.IsSubmenuOpen = true;
                     UiPump.Pump(300);
                     // The theme's MenuItem template declares its submenu Popup with no
                     // x:Name, so FindName("PART_Popup") resolves to nothing and the
                     // three karaoke entries were silently dropped from the capture.
                     // Walk the template's visual tree to the Popup instead.
-                    var popup = Descendants<Popup>(karaoke).FirstOrDefault()
-                        ?? karaoke.Template?.FindName("PART_Popup", karaoke) as Popup;
+                    var popup = Descendants<Popup>(submenuItem).FirstOrDefault()
+                        ?? submenuItem.Template?.FindName("PART_Popup", submenuItem) as Popup;
                     if (popup?.Child is FrameworkElement submenu)
                     {
                         submenuShot = RenderElement(submenu);
                         // The submenu opens level with its own item, so anchor it there
                         // rather than at the top of the parent, which is where it would
                         // land if it were bolted to the corner.
-                        submenuY = karaoke.TranslatePoint(new Point(0, 0), menu).Y;
+                        submenuY = submenuItem.TranslatePoint(new Point(0, 0), menu).Y;
+
+                        // The icons are text, so the log can carry the proof: one line
+                        // per item with the mark it resolved to.
+                        Console.Out.WriteLine(
+                            $"uishot: submenu {which} items={submenuItem.Items.Count} " +
+                            string.Join(", ", submenuItem.Items.OfType<TrackVariantItem>()
+                                .Select(t => $"'{t.Icon}' {t.Header}")));
+                        Console.Out.Flush();
+                    }
+                    else
+                    {
+                        Console.Error.WriteLine(
+                            $"uishot: --uishot-menu={which} submenu popup had no child to render");
+                        Console.Error.Flush();
+                        menuBlocked = true;
                     }
                 }
 
@@ -757,6 +842,7 @@ internal static class UiShot
 
         window.Close();
         if (!settled) return 4;
+        if (menuBlocked) return 6;
         return clamped ? 3 : 0;
     }
 

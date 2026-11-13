@@ -192,6 +192,77 @@ public sealed class VariantMenuTests : IDisposable
         Assert.True(caps.ShowFlatPlay);
     }
 
+    // The strip a row draws. Its first mark says what the row's own file IS, then
+    // one mark per other take it also has. A render is a row of its own in the
+    // library (its file has its own name), so a vocals row used to draw the
+    // Original square and claim to be the original of itself.
+    [Fact]
+    public void PlainOriginal_DrawsItselfThenEveryRenderItHas()
+    {
+        var source = Song("Strip.mp3");
+        Song("Strip.karaoke.mp3");
+        Song("Strip.vocals.mp3");
+
+        var variants = Track(source).Variants;
+
+        Assert.Equal(AudioVariant.Original, variants.Primary);
+        Assert.Equal(
+            new[] { VariantGlyphs.Original, VariantGlyphs.Karaoke, VariantGlyphs.Vocals },
+            variants.Badges.Select(slot => slot.Icon).ToArray());
+    }
+
+    [Fact]
+    public void KaraokePrimary_DrawsOnlyTheDiamond()
+    {
+        var source = Song("Take.karaoke.mp3");
+
+        var variants = Track(source).Variants;
+
+        Assert.Equal(AudioVariant.Karaoke, variants.Primary);
+        Assert.Equal(new[] { VariantGlyphs.Karaoke },
+            variants.Badges.Select(slot => slot.Icon).ToArray());
+
+        // The menu still speaks paths relative to the row's own file, where
+        // "Original" is the file itself. A karaoke-named file is therefore listed
+        // twice there (Original and Karaoke resolve to the same path) - which is
+        // exactly why the strip cannot draw Present.
+        Assert.Equal(new[] { AudioVariant.Original, AudioVariant.Karaoke },
+            variants.Present.Select(slot => slot.Variant).ToArray());
+    }
+
+    [Fact]
+    public void VocalsPrimary_DrawsOnlyTheNote()
+    {
+        var source = Song("Sing.vocals.mp3");
+
+        var variants = Track(source).Variants;
+
+        Assert.Equal(AudioVariant.Vocals, variants.Primary);
+        Assert.Equal(new[] { VariantGlyphs.Vocals },
+            variants.Badges.Select(slot => slot.Icon).ToArray());
+    }
+
+    [Fact]
+    public void KaraokePrimaryWithBackingSibling_DrawsBothItsOwnMarks()
+    {
+        // A re-rendered track: the karaoke file is the row, the keep-backing one
+        // sits beside it. The row must not also claim a plain original.
+        var source = Song("Again.karaoke.mp3");
+        Song("Again.backing.mp3");
+
+        var variants = Track(source).Variants;
+
+        Assert.Equal(AudioVariant.Karaoke, variants.Primary);
+        Assert.Equal(
+            new[] { VariantGlyphs.Karaoke, VariantGlyphs.Backing },
+            variants.Badges.Select(slot => slot.Icon).ToArray());
+
+        // And the loop re-measured what the real defect was: "2 tracks" for one
+        // song comes from the vocals file being its own row, not from a lost pair.
+        Assert.Equal(new[] { AudioVariant.Original, AudioVariant.Karaoke, AudioVariant.Backing },
+            variants.Present.Select(slot => slot.Variant).ToArray());
+    }
+
     private sealed class StubCommand : System.Windows.Input.ICommand
     {
         public event EventHandler? CanExecuteChanged { add { } remove { } }
