@@ -194,10 +194,11 @@ public static class DownloadPaths
     /// <summary>
     /// Where a newly generated karaoke render for <paramref name="musicPath"/>
     /// belongs. The mode and the source path decide it, in one place
-    /// (<see cref="KaraokeNaming.RenderPathFor"/>): Instrumental and
-    /// InstrumentalKeepBacking give "Song.karaoke.mp3" in the music file's own
-    /// folder, VocalsOnly gives "Song.vocals.mp3" beside it, so a vocals take can
-    /// never overwrite the instrumental.
+    /// (<see cref="KaraokeNaming.RenderPathFor"/>), and each mode owns a distinct
+    /// marker: Instrumental writes "Song.karaoke.mp3", InstrumentalKeepBacking
+    /// writes "Song.backing.mp3" and VocalsOnly writes "Song.vocals.mp3", all in
+    /// the music file's own folder. Which marker a mode gets is owned by
+    /// <see cref="KaraokeNaming.MarkerOf"/>; do not re-derive it here.
     ///
     /// Returns "" only when no folder can be decided - no music path and no
     /// karaoke root to fall back to - which callers report as a setup problem.

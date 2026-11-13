@@ -29,6 +29,10 @@ public sealed record HotCue
 /// move but loses the cue when the file is replaced, and a cue on the wrong file
 /// is worse than no cue.</para>
 ///
+/// <para><b>Deck and slot numbering</b>: deck 0 is Deck A and deck 1 is Deck B,
+/// the order the audio layer's <c>PlaybackDeck</c> declares (A, then B); slots
+/// are 1..<see cref="SlotCount"/>.</para>
+///
 /// <para><b>The quick cue is not here</b>: the ephemeral cue on the transport bar
 /// is one position in memory and is never written, by design.</para>
 ///
