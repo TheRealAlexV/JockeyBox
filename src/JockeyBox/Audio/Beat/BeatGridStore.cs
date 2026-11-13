@@ -352,6 +352,12 @@ public sealed class BeatGridStore : IBeatGridStore, IDisposable
         /// <summary>True once the key pass has run (even when it found no key).</summary>
         public bool KeyAnalysed { get; set; }
 
+        /// <summary>
+        /// The estimator's reason when it reported no key. Optional on the wire:
+        /// entries written before this field existed have none and still load.
+        /// </summary>
+        public string? KeyReason { get; set; }
+
         public DateTime AnalysedUtc { get; set; }
 
         public static EntryDto From(Entry entry) => new()
@@ -367,6 +373,7 @@ public sealed class BeatGridStore : IBeatGridStore, IDisposable
             Key = entry.Grid.Key,
             KeyConfidence = entry.Grid.KeyConfidence,
             KeyAnalysed = entry.Grid.KeyAnalysed,
+            KeyReason = entry.Grid.KeyReason,
             AnalysedUtc = entry.AnalysedUtc,
         };
 
@@ -377,7 +384,7 @@ public sealed class BeatGridStore : IBeatGridStore, IDisposable
                 ? BeatsMs.Select(static b => b / 1000.0).ToArray()
                 : null;
             return new BeatGrid(Bpm, FirstBeatMs / 1000.0, beats, BpmP10, BpmP90, Confidence,
-                Key, KeyConfidence, KeyAnalysed);
+                Key, KeyConfidence, KeyAnalysed, KeyReason);
         }
     }
 

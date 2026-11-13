@@ -197,7 +197,13 @@ def main() -> int:
             job = json.loads(line)
             result = analyse(job["path"])
         except Exception as exc:  # one bad file must not kill the batch
-            result = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+            result = {
+                "ok": False,
+                "error": f"{type(exc).__name__}: {exc}",
+                # Same wording the in-process guard uses, so a caller can tell a
+                # crashed key stage from "this track has no tonal centre".
+                "keyReason": f"key stage failed: {type(exc).__name__}: {exc}",
+            }
         result["id"] = job.get("id")
         sys.stdout.write(json.dumps(result, separators=(",", ":")) + "\n")
         sys.stdout.flush()

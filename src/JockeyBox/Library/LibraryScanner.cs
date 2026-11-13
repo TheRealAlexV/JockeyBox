@@ -114,6 +114,10 @@ public class LibraryScanner
                 // marked as such on the grid so a later tag supersedes it.
                 if (!string.IsNullOrWhiteSpace(tags.Key)) BeatGridStore.Shared?.MarkTagKey(metaSource);
                 track.Key = TrackKeyResolver.Resolve(tags.Key, BeatGridStore.Shared?.Get(metaSource));
+                // Same write-back as the tempo above: a key only the grid knows
+                // must reach library.json, or it exists only in this row. SetKey
+                // refuses a non-blank cache entry, so a tag is never displaced.
+                if (track.Key != null) _tagCache.SetKey(metaSource, track.Key);
 
                 track.Duration = TimeSpan.FromMilliseconds(tags.DurationMs);
             }

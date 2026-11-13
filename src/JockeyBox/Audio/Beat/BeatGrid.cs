@@ -26,7 +26,8 @@ public sealed class BeatGrid
 
     public BeatGrid(double bpm, double firstBeatSeconds, IReadOnlyList<double>? beats = null,
         double bpmP10 = 0, double bpmP90 = 0, double confidence = 0,
-        string? key = null, double keyConfidence = 0, bool keyAnalysed = false)
+        string? key = null, double keyConfidence = 0, bool keyAnalysed = false,
+        string? keyReason = null)
     {
         Bpm = bpm > 0 ? bpm : 0;
         FirstBeatSeconds = Math.Max(0, firstBeatSeconds);
@@ -37,6 +38,7 @@ public sealed class BeatGrid
         Key = string.IsNullOrWhiteSpace(key) ? null : key.Trim();
         KeyConfidence = keyConfidence;
         KeyAnalysed = keyAnalysed;
+        KeyReason = string.IsNullOrWhiteSpace(keyReason) ? null : keyReason.Trim();
     }
 
     /// <summary>
@@ -60,6 +62,18 @@ public sealed class BeatGrid
     /// estimation existed", so the backfill runs once and never repeats.
     /// </summary>
     public bool KeyAnalysed { get; }
+
+    /// <summary>
+    /// Why the key pass produced no key, in the estimator's own words: "no tonal
+    /// centre (noise-like spectrum)", "ambiguous (best Am corr 0.41 margin
+    /// 0.02)", or "key stage failed: RuntimeError: ...". Null when a key was
+    /// found or when the entry predates this field.
+    ///
+    /// <para>Without it a thrown key stage and a below-threshold margin log the
+    /// same "no key", so nothing downstream can tell "undetectable" from
+    /// "broken".</para>
+    /// </summary>
+    public string? KeyReason { get; }
 
     /// <summary>Analysed tempo (as reported, not normalised).</summary>
     public double Bpm { get; }
@@ -151,7 +165,8 @@ public sealed class BeatGrid
     /// <summary>Build from analyser output; returns null when the tempo is unusable.</summary>
     public static BeatGrid? FromAnalysis(double bpm, double? firstBeatMs, IReadOnlyList<int>? beatsMs, double durationSeconds,
         double bpmP10 = 0, double bpmP90 = 0, double confidence = 0,
-        string? key = null, double keyConfidence = 0, bool keyAnalysed = false)
+        string? key = null, double keyConfidence = 0, bool keyAnalysed = false,
+        string? keyReason = null)
     {
         if (bpm <= 0) return null;
         if (firstBeatMs is double ms && (ms < 0 || ms / 1000.0 > durationSeconds + 1)) firstBeatMs = null;
@@ -166,7 +181,8 @@ public sealed class BeatGrid
         // tempo matcher refuses rather than inventing a phase.
         if (beats is { Length: >= 2 } && firstBeatMs is null) first = beats[0];
 
-        return new BeatGrid(bpm, first, beats, bpmP10, bpmP90, confidence, key, keyConfidence, keyAnalysed);
+        return new BeatGrid(bpm, first, beats, bpmP10, bpmP90, confidence, key, keyConfidence, keyAnalysed,
+            keyReason);
     }
 }
 

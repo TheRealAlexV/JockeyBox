@@ -724,7 +724,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
             if (_bpmStore is { Count: > 0 } gridStore)
             {
                 var db = Data.LibraryDatabase.Current;
-                await Task.Run(() => BpmBackfill.Run(gridStore, _tagCache, db), ct);
+                await Task.Run(() => AnalysisBackfill.Run(gridStore, _tagCache, db), ct);
             }
 
             _separation.RebindEntries(list);

@@ -255,10 +255,7 @@ public sealed class BpmAnalysisService : IBeatGridProvider, IDisposable
 
             _store.Save(path, grid);
             int done = Interlocked.Increment(ref _analysed);
-            string keyNote = grid.Key != null
-                ? $"key {grid.Key} ({grid.KeyConfidence:0.00})"
-                : grid.KeyAnalysed ? "no key" : "key n/a";
-            Log.Info($"bpm: analysed \"{Path.GetFileName(path)}\" {grid.Bpm:0.0} BPM, {keyNote} in " +
+            Log.Info($"bpm: analysed \"{Path.GetFileName(path)}\" {grid.Bpm:0.0} BPM, {KeyNote(grid)} in " +
                      $"{started.ElapsedMilliseconds} ms (grid {grid.Beats.Count} beats, " +
                      $"{done} done, {QueuedCount} queued)");
 
@@ -270,6 +267,21 @@ public sealed class BpmAnalysisService : IBeatGridProvider, IDisposable
             Interlocked.Increment(ref _failed);
             Log.Warn($"bpm analysis failed for {Path.GetFileName(path)}: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// How the log describes the key for one result. The estimator's own reason is
+    /// printed, so "no key" never covers both a below-threshold margin and a key
+    /// stage that threw; a failure says so with the exception text.
+    /// </summary>
+    internal static string KeyNote(BeatGrid grid)
+    {
+        if (grid.Key != null) return $"key {grid.Key} ({grid.KeyConfidence:0.00})";
+        if (grid.KeyReason is { Length: > 0 } why)
+            return why.StartsWith("key stage failed", StringComparison.OrdinalIgnoreCase)
+                ? why
+                : $"no key: {why}";
+        return grid.KeyAnalysed ? "no key" : "key n/a";
     }
 
     private async Task<BeatGrid?> AnalyseAsync(string path)
@@ -305,7 +317,12 @@ public sealed class BpmAnalysisService : IBeatGridProvider, IDisposable
             ? kc.GetDouble() : 0;
         // The key pass ran for this response, whether or not it found a key
         // (a null key with a keyReason is a deliberate "no tonal centre").
-        bool keyAnalysed = root.TryGetProperty("keyReason", out _) || key != null;
+        // The reason is kept, not just its presence: it is the only thing that
+        // separates a below-threshold margin from a key stage that threw.
+        string? keyReason = root.TryGetProperty("keyReason", out var kr) && kr.ValueKind == JsonValueKind.String
+            ? kr.GetString()?.Trim()
+            : null;
+        bool keyAnalysed = keyReason != null || key != null;
 
         List<int>? beats = null;
         if (root.TryGetProperty("beatsMs", out var arr) && arr.ValueKind == JsonValueKind.Array)
@@ -315,7 +332,7 @@ public sealed class BpmAnalysisService : IBeatGridProvider, IDisposable
         }
 
         return BeatGrid.FromAnalysis(bpm, firstMs, beats, durationMs / 1000.0, p10, p90, confidence,
-            key, keyConfidence, keyAnalysed);
+            key, keyConfidence, keyAnalysed, keyReason);
     }
 
     private async Task<string?> SendAsync(string line)

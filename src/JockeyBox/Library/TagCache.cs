@@ -188,6 +188,27 @@ public class TagCache
         lock (_lock) return _entries.TryGetValue(path, out var cached) ? cached.Bpm : 0;
     }
 
+    /// <summary>
+    /// Record an analysed key on an entry the scan already cached, the same way
+    /// <see cref="SetBpm"/> records a tempo - and for the same reason: the value
+    /// otherwise exists only in a row on screen.
+    ///
+    /// <para>Tag first: a TKEY tag (and any value already cached from one) wins,
+    /// and no entry is created, so a grid for a file the prune just removed
+    /// cannot resurrect it.</para>
+    /// </summary>
+    public bool SetKey(string path, string? key)
+    {
+        if (string.IsNullOrWhiteSpace(path) || string.IsNullOrWhiteSpace(key)) return false;
+        lock (_lock)
+        {
+            if (!_entries.TryGetValue(path, out var cached) || !string.IsNullOrWhiteSpace(cached.Key))
+                return false;
+            cached.Key = key.Trim();
+            return true;
+        }
+    }
+
     /// <summary>Drop cache entries for files that no longer exist in the library.</summary>
     public void Prune(IEnumerable<string> livingPaths)
     {

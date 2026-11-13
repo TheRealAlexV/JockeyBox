@@ -29,6 +29,25 @@ MAX_BEATS = 4000
 START_BPM = 128.0
 
 
+def _key_or_reason(estimator, y, sr) -> dict:
+    """Run the key estimator, turning a crash into a reason.
+
+    A key stage that throws must not cost the tempo: carrying the failure as
+    ``keyReason`` keeps the grid (the BPM is already measured) and lets the log
+    say "key stage failed: RuntimeError: ..." instead of the reasonless "no key"
+    that a below-threshold margin also produces.
+    """
+    try:
+        return estimator(y, sr)
+    except Exception as exc:  # noqa: BLE001 - reported, never swallowed
+        return {
+            "key": None,
+            "keyName": None,
+            "keyConfidence": 0.0,
+            "keyReason": f"key stage failed: {type(exc).__name__}: {exc}",
+        }
+
+
 def analyse(path: str) -> dict:
     import librosa
     from key_scan import estimate_key
@@ -65,8 +84,9 @@ def analyse(path: str) -> dict:
     suspect = bool(bpm < 90.0 and bpm * 2.0 <= 200.0) or bool(bpm > 170.0 and bpm / 2.0 >= 60.0)
 
     # Key rides the same decode. estimate_key() has its own guards and returns
-    # key=None when the track has no defensible tonal centre.
-    key = estimate_key(y, sr)
+    # key=None when the track has no defensible tonal centre; a crash in that
+    # stage comes back as a reason instead, so the tempo still lands.
+    key = _key_or_reason(estimate_key, y, sr)
 
     return {
         "ok": True,
