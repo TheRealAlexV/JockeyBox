@@ -13,6 +13,29 @@ public interface IDeckGainSource
 }
 
 /// <summary>
+/// Which resident take a deck is playing. Every mode is a gain vector over the
+/// same three open readers (<see cref="DeckSource.SetStemMode"/>), never a
+/// different set of readers, so switching cannot gap.
+/// </summary>
+public enum StemKind
+{
+    /// <summary>
+    /// Every loaded stem at its own gain — the mix a deck produced before modes
+    /// existed, kept as the default so the mixer's karaoke knob behaves as it did.
+    /// </summary>
+    Mix,
+
+    /// <summary>The primary file only (the original arrangement).</summary>
+    Original,
+
+    /// <summary>The karaoke variant only.</summary>
+    Karaoke,
+
+    /// <summary>The vocals-only take only.</summary>
+    Vocals,
+}
+
+/// <summary>
 /// One deck in the 2.0 graph: primary stem + optional karaoke stem, summed and
 /// then tempo-stretched as a unit.
 ///
@@ -49,6 +72,7 @@ public sealed class DeckSource : ISampleProvider, IDisposable
     private readonly int _rate;
     private readonly int _channels;
     private readonly float[] _karaokeScratch;
+    private readonly float[] _vocalsScratch;
     private readonly SumProvider _sum;
     private readonly TempoStage _tempo;
 
@@ -65,6 +89,7 @@ public sealed class DeckSource : ISampleProvider, IDisposable
 
     private StemReader? _primary;
     private StemReader? _karaoke;
+    private StemReader? _vocals;
 
     private DeckState _state = DeckState.Empty;
     private double _durationSeconds;
@@ -75,10 +100,27 @@ public sealed class DeckSource : ISampleProvider, IDisposable
     // Gains: written by the UI/transport, read by the render thread.
     private float _volume = 1.0f;
     private float _karaokeGain = 0.5f;
+    private float _vocalsGain = 1.0f;
     private float _duck = 1.0f;
     private float _karaokeSmooth = 0.5f;
+    private float _vocalsSmooth = 1.0f;
     private double _pendingSyncOffsetMs;
     private IDeckGainSource? _gainSource;
+
+    // Which resident take is audible. Three envelopes (the crossfader's own type)
+    // hold the per-reader mode weights, so a switch is a scheduled gain ramp in
+    // engine frames and never a re-point of the readers.
+    private readonly FaderEnvelope _stemPrimary = new();
+    private readonly FaderEnvelope _stemKaraoke = new();
+    private readonly FaderEnvelope _stemVocals = new();
+    private volatile int _stemMode = (int)StemKind.Mix;
+
+    // Mode weights sampled once per block, at the block's first frame: the summer
+    // runs inside the stretcher, which asks for chunks of its own choosing, so a
+    // per-block sample is the only place the three weights are unambiguous.
+    private float _blockPrimary = 1f;
+    private float _blockKaraoke = 1f;
+    private float _blockVocals;
 
     public DeckSource(int sampleRate, int channels)
     {
@@ -86,6 +128,7 @@ public sealed class DeckSource : ISampleProvider, IDisposable
         _channels = channels;
         WaveFormat = WaveFormat.CreateIeeeFloatWaveFormat(sampleRate, channels);
         _karaokeScratch = new float[channels * 8192];
+        _vocalsScratch = new float[channels * 8192];
         _sum = new SumProvider(this);
         _tempo = new TempoStage(_sum);
         Position = new DeckPosition(sampleRate);
@@ -109,8 +152,24 @@ public sealed class DeckSource : ISampleProvider, IDisposable
     /// <summary>Path of the loaded karaoke stem, if any.</summary>
     public string? KaraokePath { get; private set; }
 
+    /// <summary>Path of the loaded vocals-only stem, if any.</summary>
+    public string? VocalsPath { get; private set; }
+
     /// <summary>True when a karaoke stem is loaded.</summary>
     public bool HasKaraoke => _karaoke != null;
+
+    /// <summary>True when a vocals-only stem is loaded.</summary>
+    public bool HasVocals => _vocals != null;
+
+    /// <summary>The take the deck is playing (<see cref="SetStemMode"/>).</summary>
+    public StemKind StemMode => (StemKind)_stemMode;
+
+    /// <summary>
+    /// Mode weights the last rendered block was summed with. Published for the UI
+    /// and for tests: a switch that stepped instead of ramping would show here.
+    /// </summary>
+    public (float Primary, float Karaoke, float Vocals) StemWeights =>
+        (_blockPrimary, _blockKaraoke, _blockVocals);
 
     /// <summary>
     /// Duration of the loaded track in seconds. Published when the file is opened,
@@ -143,6 +202,23 @@ public sealed class DeckSource : ISampleProvider, IDisposable
             return Math.Clamp(p, 0, Math.Max(0, _durationSeconds));
         }
     }
+
+    /// <summary>
+    /// The raw media clock: how much of the file has been consumed, with nothing
+    /// subtracted. Use this for cueing, not <see cref="PositionSeconds"/>.
+    ///
+    /// <para><see cref="PositionSeconds"/> is the <i>audible</i> position and is
+    /// deliberately late: it drops the stretcher's group delay (which changes with
+    /// the tempo ratio), and <c>AudioEngine.AudibleSeconds</c> drops the main bus's
+    /// <c>OutputDelayMs</c> on top of that. Both are properties of the output path,
+    /// not of the media. A cue fired from the audible clock would therefore drift
+    /// as the tempo moves and land late by the bus delay — a lighting or lyric cue
+    /// keyed to bar 32 would fire after bar 32. A cue must be keyed to media
+    /// consumption, which is what this readout reports, and which is stable across
+    /// tempo, device and delay changes.</para>
+    /// </summary>
+    public double MediaPositionSeconds =>
+        Math.Clamp(Position.SourceSeconds, 0, Math.Max(0, _durationSeconds));
 
     /// <summary>Current tempo ratio (1.0 = original).</summary>
     public double TempoRatio => _splitActive ? (_splitKaraoke?.Ratio ?? _tempoRequested) : _tempo.Ratio;
@@ -191,16 +267,17 @@ public sealed class DeckSource : ISampleProvider, IDisposable
     /// valid when this task completes even if no block has rendered yet.
     /// </summary>
     public async Task LoadAsync(string primaryPath, string? karaokePath = null, double karaokeSyncOffsetMs = 0,
-        double startSeconds = 0, bool playWhenReady = true)
+        double startSeconds = 0, bool playWhenReady = true, string? vocalsPath = null)
     {
         Commands.Post(() => _state = DeckState.Loading);
         TrackPath = primaryPath;
         KaraokePath = karaokePath;
+        VocalsPath = vocalsPath;
 
         Prepared prepared;
         try
         {
-            prepared = await Task.Run(() => Prepared.Open(primaryPath, karaokePath, _rate, _channels, karaokeSyncOffsetMs))
+            prepared = await Task.Run(() => Prepared.Open(primaryPath, karaokePath, vocalsPath, _rate, _channels, karaokeSyncOffsetMs))
                 .ConfigureAwait(false);
         }
         catch (Exception ex)
@@ -237,12 +314,15 @@ public sealed class DeckSource : ISampleProvider, IDisposable
     {
         TrackPath = null;
         KaraokePath = null;
+        VocalsPath = null;
         Commands.Post(() =>
         {
             _primary?.Dispose();
             _karaoke?.Dispose();
+            _vocals?.Dispose();
             _primary = null;
             _karaoke = null;
+            _vocals = null;
             FlushStages();
             Position.SetTrack(0);
             _durationSeconds = 0;
@@ -279,6 +359,9 @@ public sealed class DeckSource : ISampleProvider, IDisposable
     /// <summary>Karaoke sub-stem gain (0 = backing only, 1 = original vocal).</summary>
     public void SetKaraokeGain(float gain) => _karaokeGain = Math.Clamp(gain, 0f, 1f);
 
+    /// <summary>Vocals-only sub-stem gain (0 = that take is silent, 1 = full).</summary>
+    public void SetVocalsGain(float gain) => _vocalsGain = Math.Clamp(gain, 0f, 1f);
+
     /// <summary>Temporary attenuation for ducking (soundboard, monitor dim).</summary>
     public void SetDuck(float duck) => _duck = Math.Clamp(duck, 0f, 1f);
 
@@ -299,6 +382,71 @@ public sealed class DeckSource : ISampleProvider, IDisposable
         _pendingSyncOffsetMs = milliseconds;
         _karaoke?.SetSyncOffset(milliseconds);
     });
+
+    /// <summary>
+    /// Switch which resident take is audible, as a gain ramp in engine frames.
+    ///
+    /// <para>Nothing is opened, seeked, flushed or disposed: all three readers stay
+    /// resident and frame-locked, which is exactly what makes the switch gapless —
+    /// a re-point of the readers would cut the stretcher's tail and click. The
+    /// ramp uses <see cref="FaderEnvelope"/>, the crossfader's own machinery, so it
+    /// is scheduled against the render thread's frame counter and cannot be starved
+    /// by the UI. The playhead is untouched: the same frames are consumed whether
+    /// one take or three are audible.</para>
+    ///
+    /// <para><paramref name="rampMs"/> ≤ 0 snaps, which is the right choice only
+    /// when the deck is silent (load, seek, stop).</para>
+    /// </summary>
+    public void SetStemMode(StemKind kind, double rampMs) => Commands.Post(() =>
+    {
+        long frames = (long)Math.Round(Math.Max(0, rampMs) * _rate / 1000.0);
+        RampStemWeights(kind, frames);
+    });
+
+    /// <summary>The gain vector a mode means: (primary, karaoke, vocals).</summary>
+    private static (double Primary, double Karaoke, double Vocals) WeightsFor(StemKind kind) => kind switch
+    {
+        StemKind.Original => (1, 0, 0),
+        StemKind.Karaoke => (0, 1, 0),
+        StemKind.Vocals => (0, 0, 1),
+        _ => (1, 1, 0), // Mix: what a deck did before modes existed.
+    };
+
+    private void RampStemWeights(StemKind kind, long frames)
+    {
+        long start = Position.OutputFrames;
+        var (p, k, v) = WeightsFor(kind);
+        _stemPrimary.Ramp(_stemPrimary.FaderAt(start), p, start, frames);
+        _stemKaraoke.Ramp(_stemKaraoke.FaderAt(start), k, start, frames);
+        _stemVocals.Ramp(_stemVocals.FaderAt(start), v, start, frames);
+        _stemMode = (int)kind;
+    }
+
+    private void SnapStemWeights(StemKind kind)
+    {
+        var (p, k, v) = WeightsFor(kind);
+        _stemPrimary.Snap(p, 0);
+        _stemKaraoke.Snap(k, 0);
+        _stemVocals.Snap(v, 0);
+        _blockPrimary = (float)p;
+        _blockKaraoke = (float)k;
+        _blockVocals = (float)v;
+        _stemMode = (int)kind;
+    }
+
+    /// <summary>
+    /// One weight sample per block, taken at the block's first frame. The summer
+    /// runs inside the stretcher, which asks for chunks of its own size, so this is
+    /// the only point where "the gains for this block" is unambiguous. It is also
+    /// how the karaoke gain has always reached the summer.
+    /// </summary>
+    private void SampleStemWeights()
+    {
+        long frame = Position.OutputFrames;
+        _blockPrimary = (float)_stemPrimary.FaderAt(frame);
+        _blockKaraoke = (float)_stemKaraoke.FaderAt(frame);
+        _blockVocals = (float)_stemVocals.FaderAt(frame);
+    }
 
     // ------------------------------------------------------------------ render thread
 
@@ -360,6 +508,9 @@ public sealed class DeckSource : ISampleProvider, IDisposable
 
         try
         {
+            // One weight sample per block, before the stretcher pulls the sum.
+            SampleStemWeights();
+
             // Sum + stretcher + per-frame gain in one pass.
             _tempo.Read(buffer, offset, count);
 
@@ -424,6 +575,12 @@ public sealed class DeckSource : ISampleProvider, IDisposable
     {
         _splitActive = false;
         FlushStages();
+
+        // Split mode only reads the primary and karaoke readers, so the vocals
+        // reader has been standing still while the playhead moved. Re-seat it on the
+        // current media frame before the summer includes it again, or the first
+        // switch to Vocals after a split would jump backwards by the split's length.
+        if (_vocals != null) _vocals.Seek(TimeSpan.FromSeconds(Position.SourceSeconds));
     }
 
     /// <summary>
@@ -490,9 +647,16 @@ public sealed class DeckSource : ISampleProvider, IDisposable
 
     private void ApplyGain(float[] buffer, int offset, int frames)
     {
-        // Karaoke gain is smoothed over ~5 ms so dragging the slider cannot click.
+        // Karaoke and vocals gains are smoothed over ~5 ms so dragging either slider
+        // cannot click. The sum consumes the smoothed value on the next block, which
+        // is the same lag the karaoke knob has always had.
         float target = _karaokeGain;
         float step = Math.Abs(target - _karaokeSmooth) < 1e-4f
+            ? 0f
+            : 1f / Math.Max(1f, 0.005f * _rate);
+
+        float vocalsTarget = _vocalsGain;
+        float vocalsStep = Math.Abs(vocalsTarget - _vocalsSmooth) < 1e-4f
             ? 0f
             : 1f / Math.Max(1f, 0.005f * _rate);
 
@@ -500,6 +664,9 @@ public sealed class DeckSource : ISampleProvider, IDisposable
         {
             if (_karaokeSmooth < target) _karaokeSmooth = Math.Min(target, _karaokeSmooth + step);
             else if (_karaokeSmooth > target) _karaokeSmooth = Math.Max(target, _karaokeSmooth - step);
+
+            if (_vocalsSmooth < vocalsTarget) _vocalsSmooth = Math.Min(vocalsTarget, _vocalsSmooth + vocalsStep);
+            else if (_vocalsSmooth > vocalsTarget) _vocalsSmooth = Math.Max(vocalsTarget, _vocalsSmooth - vocalsStep);
 
             float gain = _gainSource?.GainAt(FrameCursor + f) ?? _volume;
             int baseIdx = offset + f * _channels;
@@ -520,6 +687,11 @@ public sealed class DeckSource : ISampleProvider, IDisposable
             _karaoke.Seek(TimeSpan.FromSeconds(Math.Max(0, karaokeSeconds)));
             _karaoke.SetSyncOffset(Math.Max(0, _pendingSyncOffsetMs));
         }
+
+        // The vocals take has no offset of its own: it must land on the same media
+        // frame as the primary, or switching to it mid-track would jump.
+        _vocals?.Seek(TimeSpan.FromSeconds(clamped));
+
         FlushStages();
         Position.Seek(clamped);
     }
@@ -528,14 +700,18 @@ public sealed class DeckSource : ISampleProvider, IDisposable
     {
         _primary?.Dispose();
         _karaoke?.Dispose();
+        _vocals?.Dispose();
 
         _primary = prepared.Primary;
         _karaoke = prepared.Karaoke;
+        _vocals = prepared.Vocals;
         _pendingSyncOffsetMs = prepared.SyncOffsetMs;
         _karaoke?.SetSyncOffset(Math.Max(0, prepared.SyncOffsetMs));
 
         _durationSeconds = prepared.DurationSeconds;
         Position.SetTrack(_durationSeconds);
+        // A new pair starts in the mode the operator already chose, at rest.
+        SnapStemWeights(StemMode);
         FlushStages();
         _error = null;
 
@@ -543,31 +719,40 @@ public sealed class DeckSource : ISampleProvider, IDisposable
         _state = _startWhenReady ? DeckState.Playing : DeckState.Loaded;
     }
 
-    /// <summary>A file pair opened and normalised off the render thread.</summary>
+    /// <summary>A file trio opened and normalised off the render thread.</summary>
     private sealed record Prepared(
         StemReader Primary,
         StemReader? Karaoke,
+        StemReader? Vocals,
         double DurationSeconds,
         double SyncOffsetMs)
     {
-        public static Prepared Open(string primaryPath, string? karaokePath, int rate, int channels, double syncOffsetMs)
+        public static Prepared Open(string primaryPath, string? karaokePath, string? vocalsPath,
+            int rate, int channels, double syncOffsetMs)
         {
             var primary = StemReader.Open(primaryPath, rate, channels);
-            StemReader? karaoke = null;
+
+            return new Prepared(
+                primary,
+                OpenOptional(karaokePath, rate, channels, "karaoke"),
+                OpenOptional(vocalsPath, rate, channels, "vocals"),
+                primary.DurationSeconds,
+                syncOffsetMs);
+        }
+
+        /// <summary>A broken sub-stem must never stop the primary from playing.</summary>
+        private static StemReader? OpenOptional(string? path, int rate, int channels, string what)
+        {
+            if (string.IsNullOrEmpty(path) || !System.IO.File.Exists(path)) return null;
             try
             {
-                if (!string.IsNullOrEmpty(karaokePath) && System.IO.File.Exists(karaokePath))
-                    karaoke = StemReader.Open(karaokePath, rate, channels);
+                return StemReader.Open(path, rate, channels);
             }
             catch (Exception ex)
             {
-                // A broken karaoke file must not stop the original from playing.
-                Log.Warn($"karaoke stem failed to open ({karaokePath}): {ex.Message}");
-                karaoke?.Dispose();
-                karaoke = null;
+                Log.Warn($"{what} stem failed to open ({path}): {ex.Message}");
+                return null;
             }
-
-            return new Prepared(primary, karaoke, primary.DurationSeconds, syncOffsetMs);
         }
     }
 
@@ -596,18 +781,33 @@ public sealed class DeckSource : ISampleProvider, IDisposable
 
             Samples.ReadFull(primary, buffer, offset, count);
 
-            var karaoke = _deck._karaoke;
-            if (karaoke == null) return count;
+            // The mode weight gates the primary take (Original = 1, other takes = 0).
+            // Scaling in place keeps this a single pass; skipping it when the weight
+            // is 1 keeps the pre-modes path byte-identical.
+            if (_deck._blockPrimary < 1f) ScaleInPlace(buffer, offset, count, _deck._blockPrimary);
 
-            if (_deck._karaokeScratch.Length < count)
+            float karaokeGain = _deck._karaokeSmooth * _deck._blockKaraoke;
+            var karaoke = _deck._karaoke;
+            if (karaoke != null && karaokeGain > 0f && _deck._karaokeScratch.Length >= count)
             {
-                Array.Clear(buffer, offset, count);
-                return count;
+                Samples.ReadFull(karaoke, _deck._karaokeScratch, 0, count);
+                Samples.AddScaled(buffer, _deck._karaokeScratch, offset, count, karaokeGain);
             }
 
-            Samples.ReadFull(karaoke, _deck._karaokeScratch, 0, count);
-            Samples.AddScaled(buffer, _deck._karaokeScratch, offset, count, _deck._karaokeSmooth);
+            float vocalsGain = _deck._vocalsSmooth * _deck._blockVocals;
+            var vocals = _deck._vocals;
+            if (vocals != null && vocalsGain > 0f && _deck._vocalsScratch.Length >= count)
+            {
+                Samples.ReadFull(vocals, _deck._vocalsScratch, 0, count);
+                Samples.AddScaled(buffer, _deck._vocalsScratch, offset, count, vocalsGain);
+            }
+
             return count;
+        }
+
+        private static void ScaleInPlace(float[] buffer, int offset, int count, float gain)
+        {
+            for (int i = 0; i < count; i++) buffer[offset + i] *= gain;
         }
     }
 
