@@ -25,6 +25,18 @@ public partial class App : Application
         // They must stay first: the hooks rewrite argv and may exit the process.
         VelopackApp.Build().Run();
 
+        // A capture must refuse the live profile before anything resolves a store.
+        // The old guard was a note in a brief and it did not hold: a cmd.exe "set"
+        // never reached the child, so --uishot rewrote the operator's library.db,
+        // library.json, playlist-cache.json and settings.json in %APPDATA%\JockeyBox.
+        // The windowed app is deliberately exempt: that home is where it belongs.
+        if (CaptureHomeGuard.Refusal(e.Args) is { } homeRefusal)
+        {
+            Console.Error.WriteLine(homeRefusal);
+            Environment.Exit(CaptureHomeGuard.RefusalExitCode);
+            return;
+        }
+
         // One instance per resolved home, taken before any store is opened so a
         // refused launch never touches library.db. Two processes on one home are
         // two independent SQLite writers - the writer gate in Data/JockeyBoxDatabase

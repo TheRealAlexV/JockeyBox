@@ -413,15 +413,30 @@ public partial class MainViewModel
 
         // ONE port: the Stream Deck plugin defaults to 17890 (LocalApiServer.DefaultPort).
         // AppSettings.ApiPort predates the plugin; if it disagrees we log it and use
-        // the plugin's port, so "install the plugin and it works" stays true.
-        int port = LocalApiServer.DefaultPort;
-        if (_settings.ApiPort != port)
+        // the plugin's port, so "install the plugin and it works" stays true. An
+        // explicit override sits ahead of that, so a sandbox can bind its own port
+        // instead of answering the operator's plugin in place of their app.
+        var requested = ApiPortOption.Resolve();
+        int port = requested.Port;
+        if (requested.Origin != ApiPortOption.Origin.Default)
+            Log.Info($"local api: port {port} from {requested.Origin} (default {LocalApiServer.DefaultPort})");
+        else if (_settings.ApiPort != port)
             Log.Info($"local api: ignoring AppSettings.ApiPort={_settings.ApiPort}; the Stream Deck plugin uses {port}");
 
         if (!_api.Start(port) && _api.LastError != null)
             StatusText = $"Soundboard API unavailable: {_api.LastError}";
         else if (_api.Port != port)
             StatusText = $"Stream Deck API on port {_api.Port} (port {port} was busy)";
+
+        if (_api.IsRunning)
+        {
+            // Say the bound port, not the requested one: the walk-up can move it,
+            // and only the bound port tells the truth about who can reach us.
+            Log.Info(_api.Port == LocalApiServer.DefaultPort
+                ? $"local api: bound port {_api.Port}"
+                : $"local api: bound port {_api.Port}, not the Stream Deck default {LocalApiServer.DefaultPort}; " +
+                  "the plugin will not reach this instance");
+        }
     }
 
     /// <summary>Register every pad hotkey; failures are surfaced in the pad tooltip, not silent.</summary>
