@@ -30,7 +30,7 @@ namespace JockeyBox.Data;
 public sealed class JockeyBoxDatabase : IDisposable
 {
     /// <summary>Latest schema version this build understands.</summary>
-    public const int SchemaVersion = 5;
+    public const int SchemaVersion = 6;
 
     private const string AppFolderName = "JockeyBox";
     private const string DatabaseFileName = "library.db";
@@ -398,6 +398,7 @@ public sealed class JockeyBoxDatabase : IDisposable
         3 => Migration3Lookups,
         4 => Migration4PlaylistNames,
         5 => Migration5PlaylistOrder,
+        6 => Migration6HotCues,
         _ => throw new ArgumentOutOfRangeException(nameof(version), version, "No such migration"),
     };
 
@@ -604,5 +605,33 @@ public sealed class JockeyBoxDatabase : IDisposable
         UPDATE playlists SET sort_order = (
             SELECT COUNT(*) FROM playlists p2 WHERE p2.rowid < playlists.rowid
         );
+        """;
+
+    /// <summary>
+    /// v6: eight saved hot cues per deck per track.
+    ///
+    /// <para>Keyed on <c>tracks.id</c>, deliberately <b>not</b> on the path-based
+    /// key the beat grid uses (<c>Audio/Beat/BeatGridStore.cs</c> writes JSON keyed
+    /// by path). A cue belongs to a row, so a track that is moved and rescanned
+    /// loses its cues - the same trade <c>karaoke_assets</c> already makes, and the
+    /// reason the columns here stay in media milliseconds rather than something
+    /// derived from the file.</para>
+    ///
+    /// <para>The ephemeral quick cue is never stored: only one row per
+    /// (track, deck, slot) exists, and <c>UNIQUE</c> is what makes <c>Set</c> an
+    /// upsert instead of a pile of duplicates.</para>
+    /// </summary>
+    private const string Migration6HotCues = """
+        CREATE TABLE IF NOT EXISTS hot_cues (
+            id          INTEGER PRIMARY KEY,
+            track_id    INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+            deck        INTEGER NOT NULL,
+            slot        INTEGER NOT NULL,
+            position_ms INTEGER NOT NULL,
+            label       TEXT,
+            created_at  TEXT    NOT NULL,
+            UNIQUE (track_id, deck, slot)
+        );
+        CREATE INDEX IF NOT EXISTS ix_hot_cues_track ON hot_cues(track_id, deck);
         """;
 }

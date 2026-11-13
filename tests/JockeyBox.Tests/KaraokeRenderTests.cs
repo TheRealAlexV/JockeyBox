@@ -221,7 +221,7 @@ public sealed class KaraokeRenderTests
     // ---- naming ------------------------------------------------------------
 
     [Fact]
-    public void Instrumental_and_backing_share_the_karaoke_name_vocals_does_not()
+    public void Instrumental_backing_and_vocals_get_three_distinct_names()
     {
         const string source = @"C:\Music\Artist\Album\Song.mp3";
 
@@ -230,8 +230,9 @@ public sealed class KaraokeRenderTests
         var vocals = KaraokeNaming.RenderPathFor(KaraokeStemMode.VocalsOnly, source);
 
         Assert.Equal(@"C:\Music\Artist\Album\Song.karaoke.mp3", instrumental);
-        Assert.Equal(instrumental, backing);
+        Assert.Equal(@"C:\Music\Artist\Album\Song.backing.mp3", backing);
         Assert.Equal(@"C:\Music\Artist\Album\Song.vocals.mp3", vocals);
+        Assert.NotEqual(instrumental, backing);
         Assert.NotEqual(instrumental, vocals);
         Assert.NotEqual(backing, vocals);
     }
