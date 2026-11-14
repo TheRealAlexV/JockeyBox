@@ -49,8 +49,10 @@ public partial class MainViewModel
         DeckB.HoldStem(StemKind.Original);
 
         _karaokePairLoaded = true;
-        DeckA.SetKaraokeTitle("DECK A: KARAOKE");
-        DeckB.SetKaraokeTitle("DECK B: ORIGINAL");
+        // The take's own name from the variant, never a literal: "Deck A: Karaoke"
+        // is this deck's identity plus whatever take the operator picked.
+        DeckA.SetKaraokeTitle(KaraokeNaming.DisplayName(variant));
+        DeckB.SetKaraokeTitle(KaraokeNaming.DisplayName(AudioVariant.Original));
 
         _activeDeck = PlaybackDeck.A;
         _transport.ActivateDeck(PlaybackDeck.A);
@@ -93,6 +95,13 @@ public partial class MainViewModel
         => t != null
         && !string.IsNullOrWhiteSpace(t.MusicPath)
         && (StemOnDisk(t) ?? StemBeside(t.MusicPath)) != null;
+
+    /// <summary>
+    /// Selftest only: start a pair for a library row, exactly as the menu does.
+    /// The capture harness cannot select a tree node by title, and a pair is the
+    /// only state that renders both deck labels, so this is the one seam.
+    /// </summary>
+    internal void StartKaraokePairForCapture(TrackEntry track) => LoadKaraokePair(track);
 
     // ---- menu actions -------------------------------------------------------
     // Both resolve their row exactly like "Play": the tree selection, no command

@@ -7,6 +7,7 @@ using JockeyBox.Audio.Graph;
 using JockeyBox.Data;
 using JockeyBox.Library;
 using JockeyBox.Playback;
+using JockeyBox.Separation;
 using JockeyBox.ViewModels;
 using Xunit;
 
@@ -422,6 +423,44 @@ public sealed class DeckUiTests
         finally
         {
             try { Directory.Delete(folder, recursive: true); } catch { }
+        }
+    }
+
+    /// <summary>
+    /// The switcher on a real deck: every render on disk is listed and every row is
+    /// reachable (its command is wired), which is a different claim from the list
+    /// above - a menu whose rows carry no command renders perfectly and switches
+    /// nothing.
+    /// </summary>
+    [Fact]
+    public void VersionSwitcher_OnALoadedDeck_ListsAllFourRowsAndWiresEachOne()
+    {
+        string music = TestAudio.WriteConstantWav(0.2f);
+        string folder = Path.GetDirectoryName(music)!;
+        string stem = Path.GetFileNameWithoutExtension(music);
+        // The render names the separation pipeline writes, so the deck sees the
+        // four files a fully rendered track has.
+        string karaoke = Path.Combine(folder, KaraokeNaming.RenderName(KaraokeStemMode.Instrumental, stem));
+        string backing = Path.Combine(folder, KaraokeNaming.RenderName(KaraokeStemMode.InstrumentalKeepBacking, stem));
+        string vocals = Path.Combine(folder, KaraokeNaming.RenderName(KaraokeStemMode.VocalsOnly, stem));
+        File.Copy(music, karaoke, overwrite: true);
+        File.Copy(music, backing, overwrite: true);
+        File.Copy(music, vocals, overwrite: true);
+
+        try
+        {
+            var vm = UiThread.Run(() => new MainViewModel());
+            UiThread.Run(() => vm.DeckA.SetTrack(music, null, "Song", ""));
+
+            Assert.Equal(4, vm.DeckA.Versions.Count);
+            Assert.Equal(
+                new[] { "Original", "Karaoke", "Keep backing", "Vocals" },
+                vm.DeckA.Versions.Select(v => v.Label).ToArray());
+            Assert.All(vm.DeckA.Versions, v => Assert.NotNull(v.SelectCommand));
+        }
+        finally
+        {
+            try { Directory.Delete(Path.GetDirectoryName(music)!, recursive: true); } catch { }
         }
     }
 

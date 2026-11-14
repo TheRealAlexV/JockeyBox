@@ -39,8 +39,8 @@ public sealed class KaraokePairTests
 
             UiThread.Run(() => Invoke(vm, "LoadKaraokePair", pair, AudioVariant.Karaoke));
             Assert.True(PairLoaded(vm));
-            Assert.Equal("DECK A: KARAOKE", vm.DeckA.Title);
-            Assert.Equal("DECK B: ORIGINAL", vm.DeckB.Title);
+            Assert.Equal("Deck A: Karaoke", vm.DeckA.Title);
+            Assert.Equal("Deck B: Original", vm.DeckB.Title);
 
             // An ordinary load is the release choke point: it runs first, so the
             // lock and both titles are back before the new track lands.
@@ -62,12 +62,35 @@ public sealed class KaraokePairTests
     {
         var vm = UiThread.Run(() => new MainViewModel());
 
-        vm.DeckA.SetKaraokeTitle("DECK: KARAOKE");
+        vm.DeckA.SetKaraokeTitle("Karaoke");
         vm.DeckA.RestoreTitle();
         vm.DeckA.RestoreTitle();
 
         Assert.Equal("DECK A", vm.DeckA.Title);
         Assert.Equal("DECK B", vm.DeckB.Title);
+    }
+
+    /// <summary>
+    /// The operator reads the header as "Deck A: Karaoke" / "Deck B: Original":
+    /// the deck is the prefix, the take is the suffix, and the suffix is whatever
+    /// the caller passed, so a renamed deck keeps its own name after the prefix.
+    /// </summary>
+    [Fact]
+    public void KaraokeTitle_IsTheDeckPrefixPlusTheCallersOwnTake()
+    {
+        var vm = UiThread.Run(() => new MainViewModel());
+
+        vm.DeckA.SetKaraokeTitle("Karaoke");
+        vm.DeckB.SetKaraokeTitle("Original");
+        Assert.Equal("Deck A: Karaoke", vm.DeckA.Title);
+        Assert.Equal("Deck B: Original", vm.DeckB.Title);
+
+        // Not a hardcoded format: any take name keeps its own words.
+        vm.DeckA.SetKaraokeTitle("Keep backing");
+        Assert.Equal("Deck A: Keep backing", vm.DeckA.Title);
+
+        Assert.Equal("Deck A", vm.DeckA.DeckPrefix);
+        Assert.Equal("Deck B", vm.DeckB.DeckPrefix);
     }
 
     [Fact]
@@ -327,8 +350,8 @@ public sealed class KaraokePairTests
             Assert.True(karaokeRow.IsPlayed);
             Assert.True(originalRow.IsPlayed);
             Assert.Same(karaokeRow, vm.Queue[vm.CurrentIndex]);
-            Assert.Equal("DECK A: KARAOKE", vm.DeckA.Title);
-            Assert.Equal("DECK B: ORIGINAL", vm.DeckB.Title);
+            Assert.Equal("Deck A: Karaoke", vm.DeckA.Title);
+            Assert.Equal("Deck B: Original", vm.DeckB.Title);
 
             // A request for the original row starts the pair, never deck B alone.
             await (Task)UiThread.Run(() => Invoke(vm, "StartQueueItemAsync", originalRow, false))!;

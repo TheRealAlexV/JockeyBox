@@ -390,7 +390,34 @@ internal static class UiShot
             Console.Out.Flush();
         }
 
-        // --uishot-popout-check: drive the real pop-out button and prove the three
+        // --uishot-pair <title>: start the karaoke pair for a library row, because
+        // a pair is the only state that renders both deck labels ("Deck A:
+        // Karaoke" / "Deck B: Original"). The titles are printed here as text, so
+        // the capture carries the rendered strings, not just a picture of them.
+        if (Harness.Flag(args, "--uishot-pair") is { } pairTitle
+            && window.DataContext is MainViewModel pairVm)
+        {
+            var pairHit = pairVm.Tracks.FirstOrDefault(t =>
+                t.Title.Contains(pairTitle.Trim(), StringComparison.OrdinalIgnoreCase));
+            if (pairHit is null)
+            {
+                Console.Error.WriteLine($"uishot: no library track titled '{pairTitle}'");
+                Console.Error.Flush();
+                window.Close();
+                return 2;
+            }
+
+            pairVm.StartKaraokePairForCapture(pairHit);
+            bool bothLoaded = UiPump.PumpUntil(() => pairVm.DeckA.IsLoaded && pairVm.DeckB.IsLoaded, 30000);
+            UiPump.Pump(Harness.QuietMs);
+            Console.Out.WriteLine(
+                $"uishot: pair \"{pairHit.Title}\" loaded={bothLoaded} " +
+                $"A=\"{pairVm.DeckA.Title}\" (IsLoaded={pairVm.DeckA.IsLoaded}) " +
+                $"B=\"{pairVm.DeckB.Title}\" (IsLoaded={pairVm.DeckB.IsLoaded})");
+            Console.Out.Flush();
+        }
+
+
         // window rules - one instance however often it is asked for, and no
         // survivor once the main window closes. A capture cannot show this: the
         // pop-out is a second HWND and only one window is ever in the bitmap.

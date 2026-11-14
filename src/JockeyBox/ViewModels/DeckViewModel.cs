@@ -257,8 +257,18 @@ public partial class DeckViewModel : ObservableObject, IDisposable
 
     public PlaybackDeck DeckTarget { get; }
 
-    /// <summary>Rename this deck for a karaoke pair. Idempotent.</summary>
-    public void SetKaraokeTitle(string karaokeTitle) => Title = karaokeTitle;
+    /// <summary>
+    /// This deck's identity in the header: "Deck A" / "Deck B". The take that
+    /// follows it is the caller's, so the label is prefix + this deck's own name,
+    /// never a hardcoded "Karaoke".
+    /// </summary>
+    public string DeckPrefix => DeckTarget == PlaybackDeck.B ? "Deck B" : "Deck A";
+
+    /// <summary>
+    /// Rename this deck for a karaoke pair: identity first, the take's own name
+    /// after it. Idempotent, and a caller that passes its own take name keeps it.
+    /// </summary>
+    public void SetKaraokeTitle(string takeTitle) => Title = $"{DeckPrefix}: {takeTitle}";
 
     /// <summary>Back to the ctor's name. Idempotent, so a double release is harmless.</summary>
     public void RestoreTitle() => Title = _baseTitle;
