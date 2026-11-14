@@ -124,6 +124,9 @@ internal static class AudioTrace
 
             Console.WriteLine($"audiotrace: deck A {engine.DeckA.State} B {engine.DeckB.State} " +
                               $"fader={fader:0.00} mon={engine.MonitorEnabled}");
+            Console.WriteLine($"audiotrace: eq target low={engine.Eq.TargetDb(EqBand.Low):0.0} " +
+                              $"mid={engine.Eq.TargetDb(EqBand.Mid):0.0} " +
+                              $"high={engine.Eq.TargetDb(EqBand.High):0.0}");
 
             var deadline = DateTime.UtcNow.AddMilliseconds(ms);
             bool probed = false;
