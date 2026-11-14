@@ -41,6 +41,14 @@ internal static class CaptureHomeGuard
         "--selftest", "--lyrics-probe", "--linger-check",
     ];
 
+    /// <summary>True when <paramref name="args"/> name one of those modes.</summary>
+    internal static bool CaptureRequested(string[] args)
+    {
+        foreach (var flag in CaptureFlags)
+            if (Harness.Flag(args, flag) != null) return true;
+        return false;
+    }
+
     /// <summary>
     /// The home a real launch resolves with no override: <c>%APPDATA%\JockeyBox</c>.
     /// </summary>

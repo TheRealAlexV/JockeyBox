@@ -25,6 +25,33 @@ public partial class App : Application
         // They must stay first: the hooks rewrite argv and may exit the process.
         VelopackApp.Build().Run();
 
+        // A set-but-unusable JOCKEYBOX_HOME must not quietly become %APPDATA%\JockeyBox.
+        // That silent fallback is how a launcher carrying a trailing space in the
+        // value (or an unrooted relative path, an empty string, an absent drive)
+        // reached the operator's real profile. Refusing to start is the only choice
+        // that cannot write to data the operator did not name: every store, the log
+        // and the single-instance lock are all rooted at the home, so "start on the
+        // live profile" would be the same silent fallback with a warning nobody reads.
+        // Reported on both channels a launch can have: stderr for a console/CI run,
+        // and a modal dialog for the windowed launch that has no console at all.
+        // Deliberately no log file: the log lives under the home that just failed
+        // validation, and writing it is the one thing this guard exists to prevent.
+        if (Tools.AppPaths.HomeProblem is { } homeProblem)
+        {
+            Console.Error.WriteLine(homeProblem);
+            MessageBox.Show(homeProblem, "JockeyBox: JOCKEYBOX_HOME cannot be used",
+                MessageBoxButton.OK, MessageBoxImage.Error);
+            Environment.Exit(Tools.AppPaths.BadHomeExitCode);
+            return;
+        }
+
+        // The per-second audio trace is opt-in (a normal launch leaves it off: one
+        // line a second is 86 000 lines a day). The headless probes were built on
+        // it - --audiotrace prints it by design, the capture modes and the selftest
+        // read it to tell a device-side fault from a graph fault - so they keep it.
+        if (AudioTrace.Requested(e.Args) || CaptureHomeGuard.CaptureRequested(e.Args))
+            JockeyBox.Audio.Graph.AudioEngine.TraceEnabled = true;
+
         // A capture must refuse the live profile before anything resolves a store.
         // The old guard was a note in a brief and it did not hold: a cmd.exe "set"
         // never reached the child, so --uishot rewrote the operator's library.db,

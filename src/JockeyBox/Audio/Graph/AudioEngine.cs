@@ -159,6 +159,19 @@ public sealed class AudioEngine : IDisposable
     // was the 2.1 blind spot. These counters are cheap (one pass per block),
     // always on, and reported once a second, so a silent player says where it
     // went silent instead of leaving the operator with a moving clock.
+    /// <summary>
+    /// Opt-in switch for the per-second trace below. Off in a normal launch: the
+    /// line is emitted once a second for the life of the process (~86 000 a day
+    /// into a 2 MB log), which buries the lines it was meant to help read. Set
+    /// <c>JOCKEYBOX_AUDIO_TRACE</c>, or run a headless probe (<c>--audiotrace</c>,
+    /// <c>--selftest</c>, the capture modes), to turn it on.
+    /// </summary>
+    public const string TraceVariable = "JOCKEYBOX_AUDIO_TRACE";
+
+    /// <summary>Emit <see cref="TraceIfDue"/>'s line. See <see cref="TraceVariable"/>.</summary>
+    public static bool TraceEnabled { get; set; } =
+        !string.IsNullOrEmpty(Environment.GetEnvironmentVariable(TraceVariable));
+
     private long _traceLastFrame;
     private float _traceDeckPre;
     private float _traceDeckPost;
@@ -851,12 +864,14 @@ public sealed class AudioEngine : IDisposable
 
     /// <summary>
     /// Once a second, write one line that answers "is there signal, and did it get
-    /// to a device?". Always on: the numbers are the only thing that distinguishes
-    /// a device-side fault from a graph fault, and the render thread is the only
-    /// place that knows both.
+    /// to a device?". Opt-in (see <see cref="TraceEnabled"/>): the numbers are the
+    /// only thing that distinguishes a device-side fault from a graph fault, and the
+    /// render thread is the only place that knows both - but at one line a second
+    /// they are noise in a normal run.
     /// </summary>
     private void TraceIfDue(long frame)
     {
+        if (!TraceEnabled) return;
         if (frame - _traceLastFrame < Rate) return;
         _traceLastFrame = frame;
 
