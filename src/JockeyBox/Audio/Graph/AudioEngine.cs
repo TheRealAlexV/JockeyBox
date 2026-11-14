@@ -502,6 +502,19 @@ public sealed class AudioEngine : IDisposable
     /// </summary>
     public async Task SetRouteAsync(AudioRoute route)
     {
+        // Route audit first: substitute a device that is gone, and say out loud when
+        // an output is not the Windows default - a virtual DSP endpoint that is not
+        // the default is the combination that plays healthy-looking silence. One
+        // line per route change, never per bus and never per block.
+        var snapshot = AudioProbe.Snapshot();
+        var check = RouteAudit.Check(route, snapshot.Endpoints, snapshot.DefaultId);
+        foreach (var notice in check.Notices)
+        {
+            if (notice.IsWarning) Log.Warn(notice.Message);
+            else Log.Info(notice.Message);
+        }
+        route = check.Route;
+
         var built = await Task.Run(() =>
         {
             var outputs = new List<DeviceOutput>();

@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Linq;
 using System.Text;
 using NAudio.CoreAudioApi;
+using JockeyBox.Tools;
 
 namespace JockeyBox.Audio;
 
@@ -63,8 +64,62 @@ public static class AudioProbe
         return lines;
     }
 
-    private static string DescribeDevice(MMDevice device, string? defaultId)
+    /// <summary>
+    /// The endpoint facts the router needs, without opening anything: every render
+    /// endpoint's id, name and whether it is active, plus the current default.
+    /// Cheap enough to call once per route change.
+    /// </summary>
+    public static (string? DefaultId, string? DefaultName, IReadOnlyList<RouteEndpoint> Endpoints) Snapshot()
     {
+        var endpoints = new List<RouteEndpoint>();
+        string? defaultId = null;
+        string? defaultName = null;
+
+        try
+        {
+            using var enumerator = new MMDeviceEnumerator();
+            try
+            {
+                using var def = enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
+                defaultId = def.ID;
+                defaultName = def.FriendlyName;
+            }
+            catch (Exception ex)
+            {
+                Log.Warn($"audio route: Windows reports no default render endpoint ({ex.Message})");
+            }
+
+            foreach (var device in enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.All))
+            {
+                try
+                {
+                    string id = device.ID;
+                    endpoints.Add(new RouteEndpoint(
+                        id,
+                        device.FriendlyName,
+                        device.State == DeviceState.Active,
+                        string.Equals(id, defaultId, StringComparison.OrdinalIgnoreCase)));
+                }
+                catch
+                {
+                    // A disabled endpoint can throw on its own property reads; the
+                    // router treats it as absent, which is what it is.
+                }
+                finally
+                {
+                    try { device.Dispose(); } catch { }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Warn($"audio route: enumerating render endpoints failed ({ex.Message})");
+        }
+
+        return (defaultId, defaultName, endpoints);
+    }
+
+    private static string DescribeDevice(MMDevice device, string? defaultId)    {
         var sb = new StringBuilder(240);
         string name = "<unnamed>";
         DeviceState state = DeviceState.Unplugged;

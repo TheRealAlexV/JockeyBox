@@ -17,11 +17,17 @@ namespace JockeyBox.Tests;
 /// the three behaviours that make that recoverable - a pinned query reaches the
 /// provider, a pinned query never reads the file-tag cache entry, and a miss says
 /// what was searched instead of only "no lyrics".
+///
+/// <para>These tests repoint <c>JOCKEYBOX_HOME</c> at a private directory for their
+/// whole lifetime, so they belong to the home collection: xUnit runs that collection
+/// without overlapping any other collection, which is what keeps a home flip out of
+/// another test's two reads of the same path.</para>
 /// </summary>
+[Collection(nameof(JockeyBoxHomeCollection))]
 public class LyricsQueryTests : IDisposable
 {
     private readonly string _home;
-    private readonly string? _previousHome;
+    private readonly HomeLease _lease;
     private readonly string _cacheDir;
 
     public LyricsQueryTests()
@@ -31,13 +37,12 @@ public class LyricsQueryTests : IDisposable
         _cacheDir = Path.Combine(_home, "lyrics");
         Directory.CreateDirectory(_cacheDir);
 
-        _previousHome = Environment.GetEnvironmentVariable(AppPaths.HomeVariable);
-        Environment.SetEnvironmentVariable(AppPaths.HomeVariable, _home);
+        _lease = HomeLease.Enter(_home, nameof(LyricsQueryTests));
     }
 
     public void Dispose()
     {
-        Environment.SetEnvironmentVariable(AppPaths.HomeVariable, _previousHome);
+        _lease.Dispose();
         try { Directory.Delete(_home, recursive: true); } catch { /* test cleanup */ }
     }
 
