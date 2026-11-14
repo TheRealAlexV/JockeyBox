@@ -1125,10 +1125,20 @@
             </Grid.RowDefinitions>
 
         <!-- ================= Decks ================= -->
+        <!-- Three columns: a card, the mix EQ, a card. The middle column was a 12 px
+             gutter until the EQ needed a home; it is 108 now - a 96 px panel plus the
+             12 the gutter already gave, split 6/6 as the panel's margins - so the two
+             cards lose 48 each and keep an even share. Measured, not guessed: at
+             1518x900 the cards are 741 wide and the gutter 12; at 1040x880 the cards
+             are 500 and the gutter still 12. A 12 px column cannot hold three faders
+             at any orientation, which is why the column grew rather than the sliders
+             shrinking to fit it. The faders stay horizontal because the shared slider
+             style's tick bar (clickable marks, the recentre detent) is drawn along the
+             groove; a vertical fader would need a second implementation of it. -->
         <Grid Grid.Row="0" VerticalAlignment="Top">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="12"/>
+                <ColumnDefinition Width="108"/>
                 <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
 
@@ -1147,6 +1157,109 @@
                     <SolidColorBrush x:Key="DeckAccent" Color="#FF3DAD"/>
                 </ContentControl.Resources>
             </ContentControl>
+
+            <!-- ================= Mix EQ =================
+                 LOW / MID / HIGH in the column between the cards. The range is the
+                 mixer's, not the engine's: a club EQ boosts a little and cuts a lot,
+                 so -26…+6 with 0 dB as a true bypass rather than as the middle of
+                 the track. Each band is a label and its readout on one line, the
+                 shared fader under it, and the marks the fader can be clicked to.
+                 Centred in the column so it sits between the cards' header and the
+                 crossfader strip instead of crowding either. -->
+            <Border Grid.Column="1" Style="{StaticResource Card}" Padding="8,10"
+                    Margin="6,0" VerticalAlignment="Center">
+                <StackPanel>
+                    <TextBlock Text="EQ" FontSize="9" Margin="0,0,0,7"
+                               Foreground="{StaticResource TextDimBrush}"/>
+
+                    <Grid Margin="0,0,0,1">
+                        <TextBlock Text="LOW" FontSize="9" VerticalAlignment="Center"
+                                   Foreground="{StaticResource TextDimBrush}"/>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
+                                    VerticalAlignment="Center">
+                            <TextBlock Text="BYP" FontSize="8" Margin="0,0,4,0"
+                                       VerticalAlignment="Center"
+                                       Foreground="{StaticResource TextDimBrush}"
+                                       Visibility="{Binding IsEqLowBypassed, Converter={StaticResource BoolToVisibility}}"/>
+                            <TextBlock Text="{Binding EqLowText}" FontSize="10"
+                                       VerticalAlignment="Center">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Foreground" Value="{StaticResource AccentABrush}"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsEqLowBypassed}" Value="True">
+                                                <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </StackPanel>
+                    </Grid>
+                    <Slider Minimum="-26" Maximum="6" Margin="0,0,0,6"
+                            Value="{Binding EqLowDb, Mode=TwoWay}"
+                            views:SliderTickBar.Values="-26,-18,-10,0,6"
+                            ToolTip="Low shelf, 70 Hz. 0 dB takes the band out of circuit."/>
+
+                    <Grid Margin="0,0,0,1">
+                        <TextBlock Text="MID" FontSize="9" VerticalAlignment="Center"
+                                   Foreground="{StaticResource TextDimBrush}"/>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
+                                    VerticalAlignment="Center">
+                            <TextBlock Text="BYP" FontSize="8" Margin="0,0,4,0"
+                                       VerticalAlignment="Center"
+                                       Foreground="{StaticResource TextDimBrush}"
+                                       Visibility="{Binding IsEqMidBypassed, Converter={StaticResource BoolToVisibility}}"/>
+                            <TextBlock Text="{Binding EqMidText}" FontSize="10"
+                                       VerticalAlignment="Center">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Foreground" Value="{StaticResource AccentABrush}"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsEqMidBypassed}" Value="True">
+                                                <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </StackPanel>
+                    </Grid>
+                    <Slider Minimum="-26" Maximum="6" Margin="0,0,0,6"
+                            Value="{Binding EqMidDb, Mode=TwoWay}"
+                            views:SliderTickBar.Values="-26,-18,-10,0,6"
+                            ToolTip="Mid bell, 1 kHz (Q 0.6). 0 dB takes the band out of circuit."/>
+
+                    <Grid Margin="0,0,0,1">
+                        <TextBlock Text="HIGH" FontSize="9" VerticalAlignment="Center"
+                                   Foreground="{StaticResource TextDimBrush}"/>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
+                                    VerticalAlignment="Center">
+                            <TextBlock Text="BYP" FontSize="8" Margin="0,0,4,0"
+                                       VerticalAlignment="Center"
+                                       Foreground="{StaticResource TextDimBrush}"
+                                       Visibility="{Binding IsEqHighBypassed, Converter={StaticResource BoolToVisibility}}"/>
+                            <TextBlock Text="{Binding EqHighText}" FontSize="10"
+                                       VerticalAlignment="Center">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Foreground" Value="{StaticResource AccentABrush}"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsEqHighBypassed}" Value="True">
+                                                <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                        </StackPanel>
+                    </Grid>
+                    <Slider Minimum="-26" Maximum="6"
+                            Value="{Binding EqHighDb, Mode=TwoWay}"
+                            views:SliderTickBar.Values="-26,-18,-10,0,6"
+                            ToolTip="High shelf, 13 kHz. 0 dB takes the band out of circuit."/>
+                </StackPanel>
+            </Border>
         </Grid>
 
 

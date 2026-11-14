@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -83,6 +84,22 @@ public sealed class SliderTickBar : FrameworkElement
         set => SetValue(HoverBrushProperty, value);
     }
 
+    /// <summary>
+    /// Marks a slider declares by name, when its ladder is not evenly spaced from its
+    /// minimum: <c>views:SliderTickBar.Values="-26,-18,-10,0,6"</c> on the mix EQ,
+    /// whose recentre mark is 0 dB and sits about 81% up a -26…+6 track. The derived
+    /// ladder would land on -26, -18, -10, -2, +6 and put the detent at -2 dB - a
+    /// detent that leaves the band filtering. No marks without this: a slider that
+    /// declares nothing keeps the ladder it always had.
+    /// </summary>
+    public static readonly DependencyProperty ValuesProperty = DependencyProperty.RegisterAttached(
+        "Values", typeof(string), typeof(SliderTickBar), new FrameworkPropertyMetadata(null));
+
+    public static string? GetValues(DependencyObject element) => (string?)element.GetValue(ValuesProperty);
+
+    public static void SetValues(DependencyObject element, string? value) =>
+        element.SetValue(ValuesProperty, value);
+
     private Slider? _slider;
     private double[] _values = Array.Empty<double>();
     private int _center = -1;
@@ -144,6 +161,16 @@ public sealed class SliderTickBar : FrameworkElement
         double max = _slider.Maximum;
         if (!(max > min))
         {
+            return;
+        }
+
+        // A ladder the slider states itself wins outright: it is the only way to put
+        // the detent where the slider's own zero is, when that zero is not on an even
+        // step from the minimum.
+        if (ExplicitValues(_slider, min, max) is { Length: >= 3 } declared)
+        {
+            _values = declared;
+            _center = NearestIndex(RecenterValue(min, max, declared));
             return;
         }
 
@@ -237,6 +264,45 @@ public sealed class SliderTickBar : FrameworkElement
         }
 
         return values[index];
+    }
+
+    /// <summary>
+    /// The marks a slider declares in <see cref="ValuesProperty"/>, or null when it
+    /// declares none. Out-of-range and unparseable entries are dropped rather than
+    /// drawn, so a typo cannot put a mark past the end of the groove; fewer than
+    /// three surviving marks is not a ladder, so the caller falls back to the
+    /// derived one.
+    /// </summary>
+    private static double[]? ExplicitValues(Slider slider, double min, double max)
+    {
+        if (GetValues(slider) is not { Length: > 0 } text)
+        {
+            return null;
+        }
+
+        var parsed = new System.Collections.Generic.List<double>();
+        foreach (string part in text.Split(',', StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (!double.TryParse(part.Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out double value))
+            {
+                continue;
+            }
+
+            if (value < min || value > max)
+            {
+                continue;
+            }
+
+            parsed.Add(value);
+        }
+
+        if (parsed.Count < 3)
+        {
+            return null;
+        }
+
+        parsed.Sort();
+        return parsed.ToArray();
     }
 
     private int NearestIndex(double value)
