@@ -89,6 +89,9 @@ internal static class AudioTrace
             engine.MasterVolume = settings.MasterVolume;
             engine.DeckA.SetVolume(settings.DeckAVolume);
             engine.DeckB.SetVolume(settings.DeckBVolume);
+            // The same adoption the transport does at start-up: a diagnostic run has
+            // to measure the mix the operator would hear, EQ included.
+            engine.Eq.SetAll(settings.EqLowDb, settings.EqMidDb, settings.EqHighDb);
             engine.MonitorEnabled = Has(args, "--mon");
             if (float.TryParse(ValueOf(args, "--monA"), out float monA)) engine.MonitorAGain = monA;
             if (float.TryParse(ValueOf(args, "--monB"), out float monB)) engine.MonitorBGain = monB;

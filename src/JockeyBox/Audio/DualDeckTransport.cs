@@ -726,6 +726,7 @@ public sealed class DualDeckTransport : IDisposable
         AdoptTransitions(settings);
         ApplyMicSettings(settings);
         AdoptMonitorSettings(settings);
+        AdoptEqSettings(settings);
 
         var route = BuildRouteFromAppSettings(settings);
         if (!route.Equals(_appliedRoute))
@@ -818,6 +819,15 @@ public sealed class DualDeckTransport : IDisposable
         Engine.MonitorBGain = settings.MonitorBGain;
     }
 
+    /// <summary>
+    /// Mirror the persisted mix EQ onto the engine. Called from the engine's own
+    /// start-up and from a settings change, so a saved band is in circuit on the
+    /// first block whichever host built the engine - the window is not the only one.
+    /// The bands clamp themselves; nothing here can leave the engine outside -26…+6.
+    /// </summary>
+    private void AdoptEqSettings(AppSettings settings) =>
+        Engine.Eq.SetAll(settings.EqLowDb, settings.EqMidDb, settings.EqHighDb);
+
     private bool AdoptOutputDelay(int value)
     {
         int target = Math.Clamp(value, 0, 2000);
@@ -866,6 +876,7 @@ public sealed class DualDeckTransport : IDisposable
             _appliedMasterVolume = Engine.MasterVolume;
             _appliedDelayMs = Engine.OutputDelayMs;
             AdoptTransitions(settings);
+            AdoptEqSettings(settings);
 
             await Engine.SetRouteAsync(route).ConfigureAwait(false);
             _appliedRoute = route;
