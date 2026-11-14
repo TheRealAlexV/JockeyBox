@@ -16,7 +16,14 @@ namespace JockeyBox.Tests;
 /// the encode step does with it (one libmp3lame pass at the source's rate,
 /// channels and bitrate). A single trim or filter flag anywhere in either argv
 /// would break the operator's hard rule that a render has the source's duration.
+///
+/// <para>The launch test reads <c>JOCKEYBOX_HOME</c> twice - once to build the
+/// launch argv, once to build the expected separator argv - and asserts they match.
+/// <c>--model_file_dir</c> is the one element derived from the home, so a home flip
+/// between those two reads makes exactly that element differ. This class therefore
+/// belongs to the home collection, which xUnit never overlaps with anything else.</para>
 /// </summary>
+[Collection(nameof(JockeyBoxHomeCollection))]
 public sealed class KaraokeRenderTests
 {
     private const int Rate = 44_100;
