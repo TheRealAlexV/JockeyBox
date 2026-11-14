@@ -111,6 +111,11 @@ public sealed class AudioEngine : IDisposable
     private readonly float[] _micMonitor = new float[BlockFrames * Channels];
     private readonly float[] _programTap = new float[BlockFrames * Channels];
 
+    // The operator's three-band mix EQ. Applied to both deck blocks before the
+    // crossfade fan-out (see RenderBlock), so every bus fed from those blocks hears
+    // the same equalisation.
+    private readonly MixEq _eq = new();
+
     private Thread? _thread;
     private volatile bool _running;
     private long _frameIndex;
@@ -305,6 +310,13 @@ public sealed class AudioEngine : IDisposable
                 if (bus.Delayed) bus.SetDelayMs(value);
         }
     }
+
+    /// <summary>
+    /// The mix equaliser: low shelf 70 Hz, mid bell 1 kHz (Q 0.6), high shelf
+    /// 13 kHz, each -26…+6 dB. Its output is applied to both deck blocks before the
+    /// crossfade fan-out, so it equalises every bus fed from the decks.
+    /// </summary>
+    public MixEq Eq => _eq;
 
     /// <summary>Peak of every recording device's last block, index-stable for the mixer meters.</summary>
     public IReadOnlyList<float> MicPeaks
@@ -723,6 +735,17 @@ public sealed class AudioEngine : IDisposable
         //    original to KaraokeAid) but its clock advances once, inside ReadKaraoke.
         RenderDeck(DeckA, _deckABuffer, _karaokeABuffer, karaoke);
         RenderDeck(DeckB, _deckBBuffer, _karaokeBBuffer, karaoke);
+
+        // 1b. Three-band mix EQ, in place on both deck blocks. This is the earliest
+        //     point every consumer shares: the crossfade fan-out (step 4), the
+        //     monitor tap, the program sum and the recording tap all read these two
+        //     buffers, so one coefficient set here equalises the whole mix - Deck A
+        //     output, Deck B output and monitor alike - with no special case in the
+        //     bus model. Gains are smoothed and coefficients rebuilt once per block
+        //     inside BeginBlock; filter state is per path, so the decks stay independent.
+        _eq.BeginBlock();
+        _eq.Process(_deckABuffer, 0, BlockFrames, EqPath.DeckA);
+        _eq.Process(_deckBBuffer, 0, BlockFrames, EqPath.DeckB);
 
         // 2. Soundboard, always rendered so its own gain and meter stay live.
         Array.Clear(_soundboardBlock, 0, _soundboardBlock.Length);
