@@ -34,10 +34,15 @@ public static class Log
     private static void Write(string level, string message)
     {
         var line = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} [{level}] {message}";
+        // Diagnostic only (JOCKEYBOX_STALL_WATCH): time the gate wait and the append
+        // separately so the watchdog can tell a log-lock stall from a driver stall.
+        bool watch = StallWatch.Enabled;
+        long waitTs = watch ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
         try
         {
             lock (Gate)
             {
+                if (watch) StallWatch.RecordLogGate(waitTs);
                 Directory.CreateDirectory(DirectoryPath);
                 var info = new FileInfo(FilePath);
                 if (info.Exists && info.Length > MaxBytes)
@@ -46,7 +51,9 @@ public static class Log
                     if (File.Exists(previous)) File.Delete(previous);
                     File.Move(FilePath, previous);
                 }
+                long appendTs = watch ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
                 File.AppendAllText(FilePath, line + Environment.NewLine, Encoding.UTF8);
+                if (watch) StallWatch.RecordLogAppend(appendTs);
             }
         }
         catch

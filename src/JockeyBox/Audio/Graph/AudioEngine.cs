@@ -719,6 +719,8 @@ public sealed class AudioEngine : IDisposable
                 }
 
                 RenderBlock();
+                if (StallWatch.Enabled)
+                    System.Threading.Interlocked.Add(ref StallWatch.Frames, BlockFrames);
                 MaintainSinks();
             }
             catch (Exception ex)

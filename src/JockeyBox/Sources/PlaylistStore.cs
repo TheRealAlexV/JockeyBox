@@ -150,6 +150,9 @@ public class PlaylistStore : IDisposable
     /// </summary>
     public PlaylistLoadStats? LastLoadStats { get; private set; }
 
+    /// <summary>Writes waiting on the queue (stall-watch diagnostics only).</summary>
+    public int PendingWrites => _writeQueue?.PendingCount ?? 0;
+
     public PlaylistStore()
         : this(LibraryDatabase.Current)
     {
@@ -163,6 +166,10 @@ public class PlaylistStore : IDisposable
     {
         _database = database;
         _repository = database is null ? null : new PlaylistRepository(database);
+
+        // Allocated only when the stall watchdog is armed: unset means no closure.
+        if (Tools.StallWatch.Enabled)
+            Tools.StallWatch.QueueDepthProvider = () => PendingWrites;
 
         lock (Live) Live.Add(new WeakReference<PlaylistStore>(this));
 

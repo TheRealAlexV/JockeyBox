@@ -4162,6 +4162,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void OnUiTick()
     {
+        Tools.StallWatch.NoteUiTick();
         // The active deck's playhead drives the shared seek bar and lyric clock;
         // each deck card reads its own playhead independently.
         DeckA.UpdateReadout();
