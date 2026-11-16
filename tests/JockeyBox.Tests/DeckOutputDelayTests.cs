@@ -301,6 +301,54 @@ public sealed class DeckOutputDelayTests
         }
     }
 
+    /// <summary>
+    /// The audible clock reads <i>its own deck's</i> bus. Today one OutputDelayMs
+    /// fans to every delayed bus, so deck A's and deck B's bus values are always
+    /// equal and a shared read would look right; here they are made to diverge
+    /// (A 100 ms, B 300 ms) and each deck must still subtract only its own, plus
+    /// its own delay line (A 250 ms, B 0).
+    /// </summary>
+    [Fact]
+    public async Task Audible_clock_reads_its_own_bus_when_the_buses_diverge()
+    {
+        string path = TestAudio.WriteConstantWav(0.5f);
+        try
+        {
+            using var engine = new AudioEngine();
+
+            // Buses deliberately unequal: the value deck B must not inherit.
+            engine.Bus(BusKind.DeckA).SetDelayMs(100);
+            engine.Bus(BusKind.DeckB).SetDelayMs(300);
+            Assert.NotEqual(engine.Bus(BusKind.DeckA).DelayMs, engine.Bus(BusKind.DeckB).DelayMs);
+
+            engine.SetDeckOutputDelayMs(true, 250);
+            engine.SetDeckOutputDelayMs(false, 0);
+            await engine.DeckA.LoadAsync(path);
+            await engine.DeckB.LoadAsync(path);
+
+            var buffer = new float[Block * AudioEngine.Channels];
+            for (int i = 0; i < 100; i++)
+            {
+                engine.DeckA.Read(buffer, 0, buffer.Length);
+                engine.DeckB.Read(buffer, 0, buffer.Length);
+            }
+
+            // Frames, so the claim is not rounded: A = 4800 bus + 12000 line,
+            // B = 14400 bus + 0 line. Reading deck A's bus for deck B would give
+            // B 4800 frames, 9600 frames short of the truth.
+            double offA = (engine.DeckA.PositionSeconds - engine.AudibleSeconds(engine.DeckA)) * Rate;
+            double offB = (engine.DeckB.PositionSeconds - engine.AudibleSeconds(engine.DeckB)) * Rate;
+
+            Console.WriteLine($"audible offset frames: deckA={offA:0.####}, deckB={offB:0.####}");
+            Assert.InRange(offA, 16_800 - 1, 16_800 + 1);
+            Assert.InRange(offB, 14_400 - 1, 14_400 + 1);
+        }
+        finally
+        {
+            TestAudio.TryDelete(path);
+        }
+    }
+
     [Fact]
     public void Per_deck_output_delay_round_trips_and_is_clamped()
     {

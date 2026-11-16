@@ -702,11 +702,18 @@ public sealed class AudioEngine : IDisposable
     /// </summary>
     public double AudibleSeconds(DeckSource deck)
     {
-        double bus = _buses[(int)BusKind.DeckA].DelayMs / 1000.0;
+        // The same identity test picks the bus and the deck line: deck B must
+        // subtract deck B's bus delay, never deck A's. The two bus values happen to
+        // be equal while one OutputDelayMs fans to every delayed bus, but that is a
+        // property of the current wiring, not a licence for this function to assume
+        // it - if the buses ever diverge, a deck reading the other's bus would drift
+        // with nothing on screen to show it.
+        bool isDeckA = ReferenceEquals(deck, DeckA);
+        double bus = _buses[(int)(isDeckA ? BusKind.DeckA : BusKind.DeckB)].DelayMs / 1000.0;
         // Each deck adds its own shift on top of the global one, so a deck that is
         // delayed more reports a position further behind: the two decks read their
         // own delay line (frames, not the truncated ms) instead of one shared value.
-        var line = ReferenceEquals(deck, DeckA) ? _deckADelay : _deckBDelay;
+        var line = isDeckA ? _deckADelay : _deckBDelay;
         return Math.Max(0, deck.PositionSeconds - bus - line.DelayFrames / (double)Rate);
     }
 
