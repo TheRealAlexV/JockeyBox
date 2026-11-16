@@ -200,6 +200,104 @@ public sealed class DeckOutputDelayTests
         }
     }
 
+    /// <summary>
+    /// The proof the constant test above cannot give. A constant survives scaling,
+    /// fading and rounding, so it shows the path does not change the <i>level</i>; it
+    /// does not show that the block coming out is the block that went in. This drives
+    /// a non-constant stream through the stage at 0 ms and compares the output array
+    /// to the input array with <c>Assert.Equal</c> — the standard the EQ detent test
+    /// already meets. The reference <i>is</i> the delay stage bypassed: the bytes that
+    /// would reach the mix if the line were not there. A one-frame copy offset, a
+    /// partial write or a crossfade rounding leaves a different float.
+    ///
+    /// <para>200 blocks is 2.13 s, so the ring buffer wraps and the write-head seam is
+    /// inside the compared range as well.</para>
+    /// </summary>
+    [Fact]
+    public void Zero_delay_stage_emits_the_input_block_unchanged()
+    {
+        const int frames = AudioEngine.BlockFrames;
+        var line = new DelayBuffer(Rate, AudioEngine.Channels);
+        line.SnapDelayMs(0);
+
+        // Deterministic, so a failure reproduces bit for bit (Random is not stable
+        // across runtimes and a flaky assertion here would be worthless).
+        uint seed = 0x9E3779B9u;
+        var input = new float[frames * AudioEngine.Channels];
+        var bypassed = new float[input.Length];
+        var output = new float[input.Length];
+
+        for (int block = 0; block < 200; block++)
+        {
+            for (int i = 0; i < input.Length; i++)
+            {
+                seed = seed * 1664525u + 1013904223u;
+                input[i] = ((seed >> 8) / 16_777_216f - 0.5f) * 1.5f;   // -0.75…0.75
+            }
+            Array.Copy(input, bypassed, input.Length);
+
+            line.Write(input, 0, frames);
+            line.ReadDelayed(output, 0, frames);
+
+            Assert.Equal(bypassed, output);
+        }
+    }
+
+    /// <summary>
+    /// The same comparison where it matters for the feature: the <i>deck path</i>, not
+    /// the delay line alone. The reference is the identical file read through the same
+    /// deck with the delay stage bypassed — a second engine whose deck block is pulled
+    /// straight out of <see cref="DeckSource.Read"/>, so every stage the two runs share
+    /// (decode, tempo, volume, duck) cancels out and the only stage that could differ
+    /// is the delay line. Fader at deck A's unity, EQ flat: the remaining stages are
+    /// identity at these settings.
+    ///
+    /// <para>Deliberately <i>not</i> compared to the WAV bytes: the deck's decode path
+    /// already quantises the file (measured: the source value 1.96349531e-4 emerges as
+    /// 6/32768 = 1.83105469e-4), which is older than this feature and would make a
+    /// file-level reference fail for a reason that has nothing to do with delay.</para>
+    ///
+    /// <para>A non-constant source is the point: a constant would agree with itself
+    /// even if the stage shifted it by a frame.</para>
+    /// </summary>
+    [Fact]
+    public async Task Zero_delay_deck_path_emits_the_bypassed_block_unchanged()
+    {
+        string path = TestAudio.WriteRampWav(seconds: 2.0);
+        try
+        {
+            using var engine = new AudioEngine();
+            engine.Fader.Snap(0, 0);                // deck A at unity, deck B silent
+            engine.OutputDelayMs = 0;               // the global offset is not under test
+            engine.SetDeckOutputDelayMs(true, 0);
+            await engine.DeckA.LoadAsync(path);
+
+            const int blocks = 10;
+            var tap = Run(engine, blocks);
+            var bus = tap.Bus(BusKind.DeckA);
+            Assert.Equal(blocks, bus.Count);
+
+            // The bypassed reference: the same file through the same deck, block by
+            // block, with no delay line between the deck and the assertion.
+            using var bypass = new AudioEngine();
+            bypass.Fader.Snap(0, 0);
+            bypass.OutputDelayMs = 0;
+            await bypass.DeckA.LoadAsync(path);
+
+            var raw = new float[Block * AudioEngine.Channels];
+            for (int b = 0; b < blocks; b++)
+            {
+                int got = bypass.DeckA.Read(raw, 0, raw.Length);
+                Assert.Equal(raw.Length, got);
+                Assert.Equal(raw, bus[b]);
+            }
+        }
+        finally
+        {
+            TestAudio.TryDelete(path);
+        }
+    }
+
     [Fact]
     public async Task Changing_the_deck_delay_mid_stream_does_not_click()
     {
