@@ -1,0 +1,45 @@
+<Window x:Class="JockeyBox.Views.EditLyricLineDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Edit line text" Width="560" SizeToContent="Height"
+        ResizeMode="NoResize" WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
+        Background="{StaticResource WindowBrush}" Foreground="{StaticResource TextBrush}">
+
+    <Window.Resources>
+        <Style x:Key="PrimaryButton" TargetType="Button"
+               BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="Background" Value="{StaticResource AccentBBrush}"/>
+            <Setter Property="Foreground" Value="#12141A"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Padding" Value="18,6"/>
+            <Setter Property="MinWidth" Value="110"/>
+        </Style>
+
+        <Style x:Key="FieldLabel" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="10"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+            <Setter Property="Margin" Value="0,0,0,2"/>
+        </Style>
+    </Window.Resources>
+
+    <Border Style="{StaticResource Card}" Margin="16" Padding="18">
+        <StackPanel>
+            <TextBlock x:Name="HeadingLine" Text="Edit line text" FontSize="16"
+                       FontWeight="SemiBold" Foreground="{StaticResource TextBrush}"
+                       Margin="0,0,0,12"/>
+
+            <TextBlock Text="TEXT" Style="{StaticResource FieldLabel}"/>
+            <TextBox x:Name="TextLineBox" AcceptsReturn="False" TextWrapping="Wrap"
+                     MinHeight="30" Margin="0,2,0,0"/>
+            <TextBlock x:Name="HintLine" FontSize="11" TextWrapping="Wrap"
+                       Foreground="{StaticResource TextDimBrush}" Margin="0,8,0,0"/>
+
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,14,0,0">
+                <Button Content="Cancel" IsCancel="True" MinWidth="90" Margin="0,0,8,0"/>
+                <Button Content="Save" IsDefault="True" Click="OnOk"
+                        Style="{StaticResource PrimaryButton}"/>
+            </StackPanel>
+        </StackPanel>
+    </Border>
+</Window>

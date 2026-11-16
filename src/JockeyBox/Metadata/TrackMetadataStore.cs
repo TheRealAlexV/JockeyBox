@@ -107,6 +107,18 @@ public sealed class TrackMetadata
     /// </summary>
     public List<LyricOffsetSection> Sections { get; set; } = new();
 
+    /// <summary>
+    /// Operator line-text edits, ordered by <see cref="LyricLineEdit.TimeMs"/>.
+    /// Applied after the provider chain resolves a document, matched to the line
+    /// whose start time is nearest within ±250 ms, and only when the document's
+    /// source id equals the edit's (see <see cref="LyricEdits.Apply"/>).
+    /// <para>
+    /// Never empty-but-null: an older file without the array loads as an empty
+    /// list, so a missing array and "no edits" behave the same.
+    /// </para>
+    /// </summary>
+    public List<LyricLineEdit> LyricEdits { get; set; } = new();
+
     /// <summary>When the record was last written (UTC).</summary>
     public DateTime UpdatedUtc { get; set; }
 
@@ -122,6 +134,7 @@ public sealed class TrackMetadata
         LyricsArtist = LyricsArtist,
         LyricsFollowMode = LyricsFollowMode,
         Sections = new List<LyricOffsetSection>(Sections),
+        LyricEdits = new List<LyricLineEdit>(LyricEdits),
         UpdatedUtc = UpdatedUtc,
     };
 }
@@ -504,6 +517,88 @@ public sealed class TrackMetadataStore : IDisposable
 
         ScheduleSave();
         RaiseChanged(normalized, TrackMetadataChange.Property);
+    }
+
+    // ---- operator line edits ------------------------------------------------
+
+    /// <summary>
+    /// Replace the operator's line-text edits for a track; null/empty clears them,
+    /// which puts the provider's own text back. Stored sorted by time so the caller
+    /// gets a stable list, and compared by value so re-saving the same edits touches
+    /// neither the file nor the <see cref="Changed"/> listeners.
+    /// <para>
+    /// Nothing is pruned here: an edit that does not match the current document
+    /// (another source, or no line in range) is kept for when that source returns.
+    /// </para>
+    /// </summary>
+    public void SetLyricEdits(string? key, IEnumerable<LyricLineEdit>? edits)
+    {
+        var normalized = NormalizeKey(key);
+        if (normalized.Length == 0) return;
+
+        var next = NormalizeEdits(edits);
+
+        lock (_gate)
+        {
+            var record = EnsureLocked(normalized);
+            if (SameEdits(record.LyricEdits, next)) return;
+            record.LyricEdits = next;
+            record.UpdatedUtc = DateTime.UtcNow;
+            _dirty = true;
+        }
+
+        ScheduleSave();
+        RaiseChanged(normalized, TrackMetadataChange.Property);
+    }
+
+    /// <summary>Operator line edits for a track, sorted by time; empty when none. A copy.</summary>
+    public IReadOnlyList<LyricLineEdit> GetLyricEdits(string? key)
+    {
+        var normalized = NormalizeKey(key);
+        if (normalized.Length == 0) return Array.Empty<LyricLineEdit>();
+
+        lock (_gate)
+        {
+            return _tracks.TryGetValue(normalized, out var record) && record.LyricEdits.Count > 0
+                ? record.LyricEdits.ToArray()
+                : Array.Empty<LyricLineEdit>();
+        }
+    }
+
+    /// <summary>
+    /// Missing, null or empty input becomes an empty list - which is how an older
+    /// <c>track-metadata.json</c> without the array keeps loading. Blank entries are
+    /// dropped; the rest are trimmed and ordered by time.
+    /// </summary>
+    private static List<LyricLineEdit> NormalizeEdits(IEnumerable<LyricLineEdit>? raw)
+    {
+        if (raw is null) return new List<LyricLineEdit>();
+
+        var list = new List<LyricLineEdit>();
+        foreach (var edit in raw)
+        {
+            if (edit is null) continue;
+            list.Add(edit with
+            {
+                TimeMs = Math.Max(0, edit.TimeMs),
+                Text = edit.Text ?? "",
+                SourceId = edit.SourceId?.Trim() ?? "",
+            });
+        }
+        list.Sort((a, b) => a.TimeMs.CompareTo(b.TimeMs));
+        return list;
+    }
+
+    private static bool SameEdits(List<LyricLineEdit> a, List<LyricLineEdit> b)
+    {
+        if (a.Count != b.Count) return false;
+        for (int i = 0; i < a.Count; i++)
+        {
+            if (!string.Equals(a[i].Text, b[i].Text, StringComparison.Ordinal)
+                || a[i].TimeMs != b[i].TimeMs
+                || !string.Equals(a[i].SourceId, b[i].SourceId, StringComparison.Ordinal)) return false;
+        }
+        return true;
     }
 
     /// <summary>
@@ -1015,6 +1110,9 @@ public sealed class TrackMetadataStore : IDisposable
                     LyricsTitle = string.IsNullOrWhiteSpace(raw.LyricsTitle) ? null : raw.LyricsTitle.Trim(),
                     LyricsArtist = string.IsNullOrWhiteSpace(raw.LyricsArtist) ? null : raw.LyricsArtist.Trim(),
                     LyricsFollowMode = string.IsNullOrWhiteSpace(raw.LyricsFollowMode) ? null : raw.LyricsFollowMode.Trim(),
+                    // A missing array (older file) deserialises to null here and
+                    // becomes an empty list, so those files keep loading.
+                    LyricEdits = NormalizeEdits(raw.LyricEdits),
                     Sections = new List<LyricOffsetSection>(),
                     UpdatedUtc = raw.UpdatedUtc,
                 };

@@ -20,6 +20,13 @@ public record LyricLine(TimeSpan Time, string Text)
     /// do not overlap.
     /// </summary>
     public IReadOnlyList<LyricWord>? Words { get; init; }
+
+    /// <summary>
+    /// True when the text was not what the provider sent: the line was rebuilt by
+    /// an operator edit (see <see cref="LyricEdits"/>), so its words are estimated
+    /// across the line's unchanged window.
+    /// </summary>
+    public bool IsSynthetic { get; init; }
 }
 
 /// <summary>Parsed lyrics for a track, ready for the UI panel.</summary>
