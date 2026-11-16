@@ -3,10 +3,12 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using JockeyBox.Activity;
@@ -540,7 +542,18 @@ internal static class UiShot
         double menuY = 0;
         double submenuX = 0;
         double submenuY = 0;
-        if (Harness.Flag(args, "--uishot-menu") != null)
+        // The lyric sheet carries its own menu on LyricsList (Views/LyricsPanel.xaml),
+        // which is a different host from the track TreeView the karaoke branch walks,
+        // and its "Edit line text…" item is enabled from the selection and from the
+        // panel that owns the ball. So =lyrics is its own branch: pick that list,
+        // select a line, then open the same real menu by the same composite path.
+        if (string.Equals(Harness.Flag(args, "--uishot-menu")?.Trim(), "lyrics",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            menuShot = CaptureLyricsMenu(window, width, height, out menuX, out menuY);
+            if (menuShot is null) menuBlocked = true;
+        }
+        else if (Harness.Flag(args, "--uishot-menu") != null)
         {
             var live = window.Content as DependencyObject;
 
@@ -1385,6 +1398,123 @@ internal static class UiShot
 
         var shot = new RenderTargetBitmap(w, h, 96, 96, PixelFormats.Pbgra32);
         shot.Render(element);
+        return shot;
+    }
+
+    /// <summary>
+    /// Makes one window the active window of this window station. The non-interactive
+    /// session the harness runs in has no foreground window, so WPF never reports
+    /// <c>IsActive</c> there; this raises the same WM_ACTIVATE the operator's console
+    /// does, which is the state the lyric menu's enabled item depends on.
+    /// </summary>
+    [DllImport("user32.dll")]
+    private static extern IntPtr SetActiveWindow(IntPtr hWnd);
+
+    /// <summary>
+    /// <c>--uishot-menu=lyrics</c>: open the lyric sheet's line menu and report what
+    /// it carries - each item's header, enabled state and order - plus where the menu
+    /// actually lands. Returns null when the menu could not be opened, so the run
+    /// fails instead of shipping a picture of a menu that was never there.
+    /// </summary>
+    private static BitmapSource? CaptureLyricsMenu(
+        Window window, int width, int height, out double menuX, out double menuY)
+    {
+        menuX = 0;
+        menuY = 0;
+        var live = window.Content as DependencyObject;
+        var panel = live is null ? null : Descendants<LyricsPanel>(live).FirstOrDefault();
+        var list = panel is null ? null : Descendants<ListBox>(panel).FirstOrDefault();
+        if (list?.ContextMenu is null)
+        {
+            Console.Error.WriteLine(
+                "uishot: --uishot-menu=lyrics found no LyricsList carrying a context menu " +
+                $"(panel={(panel != null ? "found" : "missing")})");
+            Console.Error.Flush();
+            return null;
+        }
+
+        // A menu over an empty sheet proves nothing about the item, and the item's
+        // enabled state follows the selection (LyricsPanel.OnLineMenuOpened), so the
+        // row has to be selected before the menu is opened.
+        if (list.Items.Count == 0)
+        {
+            Console.Error.WriteLine(
+                "uishot: --uishot-menu=lyrics found an empty lyric sheet; pass --uishot-track <title>");
+            Console.Error.Flush();
+            return null;
+        }
+
+        list.SelectedIndex = 0;
+        // The item is enabled only for the host whose window is active
+        // (LyricsPanel.OnLineMenuOpened reads _isBallHost, set from IsActive). Nothing
+        // activates a window in a non-interactive session - Window.Activate() does not
+        // either - so a capture would photograph the disabled case and prove the
+        // opposite of the claim. SetActiveWindow is the window-station equivalent of
+        // the operator's foreground window: it raises WM_ACTIVATE, which is what makes
+        // WPF report IsActive and fire Activated. Report what came back, don't assume.
+        SetActiveWindow(new WindowInteropHelper(window).Handle);
+        UiPump.Pump(200);
+        Console.Out.WriteLine(
+            $"uishot: lyrics list rows={list.Items.Count} selected={list.SelectedItems.Count} " +
+            $"window-active={window.IsActive}");
+        Console.Out.Flush();
+
+        var menu = list.ContextMenu;
+        menu.PlacementTarget = list;
+        menu.Placement = PlacementMode.Relative;
+        menu.HorizontalOffset = 40;
+        menu.VerticalOffset = 60;
+        menu.IsOpen = true;
+        UiPump.Pump(300);
+
+        var shot = RenderElement(menu);
+        var items = menu.Items.OfType<MenuItem>().ToList();
+        for (int i = 0; i < items.Count; i++)
+        {
+            Console.Out.WriteLine(
+                $"uishot: lyrics menu[{i + 1}/{items.Count}] '{items[i].Header}' " +
+                $"enabled={items[i].IsEnabled} visibility={items[i].Visibility} " +
+                $"tag={(items[i].Tag as string) ?? "-"}");
+        }
+        Console.Out.Flush();
+
+        // The popup is its own HWND, so its rectangle is the placement asked for above
+        // plus the size it laid out at, scaled the way the render re-lays the content.
+        // A menu that only fits because it was moved is not evidence, so an overflow
+        // is reported as CLAMPED instead of being hidden by the composite clamp.
+        if (shot is not null && live is FrameworkElement liveElement
+            && liveElement.ActualWidth > 0 && liveElement.ActualHeight > 0)
+        {
+            Point anchor = list.TranslatePoint(new Point(0, 0), liveElement);
+            double rectX = (anchor.X + menu.HorizontalOffset) * (width / liveElement.ActualWidth);
+            double rectY = (anchor.Y + menu.VerticalOffset) * (height / liveElement.ActualHeight);
+            double rectW = shot.PixelWidth;
+            double rectH = shot.PixelHeight;
+            bool inside = rectX >= 0 && rectY >= 0
+                && rectX + rectW <= width && rectY + rectH <= height;
+            Console.Out.WriteLine(
+                $"uishot: lyrics menu rect {rectX:0},{rectY:0} {rectW:0}x{rectH:0} " +
+                $"at {width}x{height} inside={inside}");
+            if (!inside)
+            {
+                Console.Error.WriteLine(
+                    $"uishot: lyrics menu CLAMPED - rect {rectX:0},{rectY:0} {rectW:0}x{rectH:0} " +
+                    $"does not fit {width}x{height}");
+                Console.Error.Flush();
+            }
+
+            menuX = Math.Clamp(rectX, 8, Math.Max(8, width - rectW - 8));
+            menuY = Math.Clamp(rectY, 8, Math.Max(8, height - rectH - 8));
+        }
+
+        menu.IsOpen = false;
+        UiPump.Pump(50);
+
+        if (shot is null)
+        {
+            Console.Error.WriteLine("uishot: --uishot-menu=lyrics opened but the menu laid out at zero size");
+            Console.Error.Flush();
+        }
         return shot;
     }
 
