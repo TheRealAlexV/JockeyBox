@@ -39,8 +39,18 @@ namespace JockeyBox.Selftest;
 /// </summary>
 internal static class LingerCheck
 {
-    /// <summary>Whole-run deadline. The real close path is seconds, not minutes.</summary>
+    /// <summary>The exit path's deadline. The real close path is seconds, not minutes.</summary>
     internal const int DefaultDeadlineMs = 20000;
+
+    /// <summary>
+    /// Startup's own budget, not the exit path's. Measured on ADV-DT01: a cold
+    /// sandbox boot spent 12 s in audio device enumeration before the app logged
+    /// "no audio routing configured yet", and the close was reached after that.
+    /// Counting the 20 s exit deadline from Arm expired it before DriveCheck ran
+    /// and reported a teardown that had never been called, so boot gets its own,
+    /// larger budget and a report that says which phase ran out.
+    /// </summary>
+    internal const int StartupDeadlineMs = 60000;
 
     private const int SettleMs = 1500;
 
@@ -48,6 +58,11 @@ internal static class LingerCheck
     private const string ExitMarker = "library.json saved at shutdown";
 
     private static volatile bool _closeReturned;
+
+    /// <summary>Set just before <c>main.Close()</c>: the exit deadline starts here.</summary>
+    private static volatile bool _closeAttempted;
+
+    private static long _closeStarted;
 
     private static volatile bool _injected;
 
@@ -92,7 +107,7 @@ internal static class LingerCheck
 
         Say($"home     : {AppPaths.Home}");
         Say($"log      : {Log.FilePath}");
-        Say($"deadline : {deadlineMs} ms");
+        Say($"deadline : {deadlineMs} ms to exit, {StartupDeadlineMs} ms to reach the close");
         Say($"shutdown : {_shutdownMode} (the app default, never pinned)");
         Say($"throw    : {(_injected ? "yes - the teardown fails mid-way on purpose" : "no - the ordinary close path")}");
 
@@ -173,6 +188,9 @@ internal static class LingerCheck
         // the way it does in the real app, because surviving there is the defect.
         Application.Current.Dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
         {
+            // The exit deadline starts here, not at Arm: see StartupDeadlineMs.
+            _closeStarted = Environment.TickCount64;
+            _closeAttempted = true;
             main.Close();
             _closeReturned = true;
             _afterClose = DescribeWindows();
@@ -220,14 +238,33 @@ internal static class LingerCheck
     {
         var watchdog = new Thread(() =>
         {
-            Thread.Sleep(deadlineMs);
+            // Two phases, because they answer different questions. Until the close
+            // is attempted the only question is whether this check got far enough
+            // to measure anything; after it, whether the process ends by itself.
+            // One deadline over both made a 12 s cold boot look like a stranded
+            // teardown ("windows before: (not reached)" next to "the teardown threw
+            // inside it"), which is a false cause on a healthy app.
+            long armed = Environment.TickCount64;
+            bool closing;
+            while (true)
+            {
+                Thread.Sleep(200);
+                closing = _closeAttempted;
+                long from = closing ? _closeStarted : armed;
+                if (Environment.TickCount64 - from < (closing ? deadlineMs : StartupDeadlineMs)) continue;
+                break;
+            }
 
             var report = new StringBuilder();
-            report.AppendLine($"linger-check: FAIL the process is still running {deadlineMs} ms after the main window closed");
-            report.AppendLine($"  surviving pid  : {Environment.ProcessId} (no window, still holding this home's single-instance lock and port 17890)");
-            report.AppendLine(_closeReturned
-                ? "  close path     : returned - the window closed and no shutdown followed"
-                : "  close path     : never returned from main.Close() - the teardown threw inside it");
+            report.AppendLine(closing
+                ? $"linger-check: FAIL the process is still running {deadlineMs} ms after the main window closed"
+                : $"linger-check: FAIL the app did not reach its close path within {StartupDeadlineMs} ms of startup - the exit path was never exercised");
+            report.AppendLine($"  surviving pid  : {Environment.ProcessId} (still holding this home's single-instance lock and port 17890)");
+            report.AppendLine(!closing
+                ? "  close path     : not attempted - DriveCheck never reached main.Close()"
+                : _closeReturned
+                    ? "  close path     : returned - the window closed and no shutdown followed"
+                    : "  close path     : never returned from main.Close() - a Closed handler is still running or threw");
             report.AppendLine($"  clean exit     : the '{ExitMarker}' marker was {MarkerState()}");
             report.AppendLine($"  shutdown mode  : {_shutdownMode}");
             report.AppendLine($"  windows before : {_beforeClose}");
@@ -239,7 +276,7 @@ internal static class LingerCheck
 
             Console.Error.Write(report.ToString());
             Console.Error.Flush();
-            Environment.Exit(4);
+            Environment.Exit(closing ? 4 : 5);
         })
         {
             IsBackground = true,
