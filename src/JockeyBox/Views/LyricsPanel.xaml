@@ -234,11 +234,16 @@
                          tree, so it reaches the view model through the
                          ListBox it is placed on. -->
                     <ListBox.ContextMenu>
-                        <ContextMenu DataContext="{Binding PlacementTarget.DataContext,
+                        <ContextMenu Opened="OnLineMenuOpened"
+                                     DataContext="{Binding PlacementTarget.DataContext,
                             RelativeSource={RelativeSource Self}}">
                             <MenuItem Header="Set timing for selected lines"
                                       Click="OnSetLyricTimingForSelection"
                                       ToolTip="Give the selected lines their own offset; the next nudge then moves just this part"/>
+                            <MenuItem Header="Edit line text…"
+                                      Tag="edit-line-text"
+                                      Click="OnEditLyricLineText"
+                                      ToolTip="Replace the text of the selected line(s); the line's start time and its word timing window stay put"/>
                             <MenuItem Header="Remove timing for this section"
                                       Command="{Binding RemoveLyricTimingSectionCommand}"
                                       Visibility="{Binding HasSectionAtPlayhead,

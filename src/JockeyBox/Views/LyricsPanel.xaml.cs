@@ -42,6 +42,13 @@ public partial class LyricsPanel : UserControl
     private bool _isBallHost = true;
 
     /// <summary>
+    /// Set while the line-text editor is open: recentring the list on every
+    /// <c>CurrentLyricChanged</c> would scroll the line being edited out from under
+    /// the operator.
+    /// </summary>
+    private bool _suppressLyricScroll;
+
+    /// <summary>
     /// First-pass reserve: what must stay on screen under the lyric list before the
     /// layout has been measured (the folders strip plus the shell's own padding).
     /// <see cref="ApplyListCap"/> replaces it with the measured depth of the rows
@@ -284,9 +291,70 @@ public partial class LyricsPanel : UserControl
         _vm.SetTimingForSelectedLines(indexes);
     }
 
+    /// <summary>
+    /// Enable the line-text item only on the host whose window is active. Both
+    /// hosts show the same <c>LyricLines</c> collection, so two editors over one
+    /// document would be two edits of the same line; the active window owns it, the
+    /// same rule the bouncing ball already follows.
+    /// </summary>
+    private void OnLineMenuOpened(object sender, RoutedEventArgs e)
+    {
+        if (sender is not ContextMenu menu) return;
+
+        foreach (var item in menu.Items)
+        {
+            if (item is MenuItem { Tag: "edit-line-text" } editItem) editItem.IsEnabled = _isBallHost;
+        }
+    }
+
+    /// <summary>
+    /// "Edit line text…": one modal text box over the selected line(s), prefilled
+    /// with the first selected line. The list stays in Extended selection and keeps
+    /// its one context menu, so there is no per-word target and no inline editor
+    /// fighting the selection.
+    /// </summary>
+    private void OnEditLyricLineText(object sender, RoutedEventArgs e)
+    {
+        if (_vm == null || !_isBallHost) return;
+
+        var indexes = new List<int>(LyricsList.SelectedItems.Count);
+        foreach (var item in LyricsList.SelectedItems)
+        {
+            var index = LyricsList.Items.IndexOf(item);
+            if (index >= 0) indexes.Add(index);
+        }
+        if (indexes.Count == 0) return;
+
+        indexes.Sort();
+        if (LyricsList.Items[indexes[0]] is not LyricLineViewModel first) return;
+
+        var dialog = new EditLyricLineDialog(first.Text, indexes.Count)
+        {
+            Owner = Window.GetWindow(this),
+        };
+
+        // CurrentLyricChanged recentres the list at 30 Hz while the track plays, so
+        // the line under the editor would scroll away mid-edit. Pause the recentring
+        // for exactly the time the dialog is up; the next change recentres again.
+        _suppressLyricScroll = true;
+        try
+        {
+            if (dialog.ShowDialog() != true) return;
+        }
+        finally
+        {
+            _suppressLyricScroll = false;
+        }
+
+        _vm.SetLyricLineText(indexes, dialog.LineText);
+    }
+
     /// <summary>Smoothly scroll the lyrics list so the current line sits centered.</summary>
     private void ScrollLyricIntoCenter(LyricLineViewModel line)
     {
+        // An open line-text editor owns the row the operator is looking at.
+        if (_suppressLyricScroll) return;
+
         var container = LyricsList.ItemContainerGenerator.ContainerFromItem(line) as FrameworkElement;
         var scrollViewer = FindScrollViewer(LyricsList);
         if (container == null || scrollViewer == null)

@@ -111,6 +111,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private LyricsDocument? _lyricsDocument;
 
     /// <summary>
+    /// The provider's document, before the operator's line edits are laid over it.
+    /// Re-applying an edit starts from this one, so a second edit is not applied on
+    /// top of the first. Null when no provider answered (the lines then come from
+    /// the edits alone).
+    /// </summary>
+    private LyricsDocument? _lyricsBaseDocument;
+
+    /// <summary>Why the last lookup missed, kept so a re-render after an edit says the same thing.</summary>
+    private string? _lyricsMissStatus;
+
+    /// <summary>True once a document (or an all-edits sheet) has been rendered for the loaded track.</summary>
+    private bool _lyricsApplied;
+
+    /// <summary>
     /// Sections of the loaded track, fetched once per track/metadata change:
     /// <c>GetSections</c> hands out a copy, and the 30 Hz tick must not copy.
     /// </summary>
@@ -3567,6 +3581,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _currentLyricIndex = -1;
         _lyricsSynced = false;
         _lyricsDocument = null;
+        _lyricsBaseDocument = null;
+        _lyricsMissStatus = null;
+        _lyricsApplied = false;
         LyricsStatus = "Fetching lyrics\u2026";
 
         try
@@ -3586,21 +3603,47 @@ public partial class MainViewModel : ObservableObject, IDisposable
     /// <summary>
     /// Rebuild the rendered lines from a document. Unsynced documents still
     /// render, just without a highlight (the tick skips them).
+    /// <para>
+    /// The provider's document is kept as-is in <see cref="_lyricsBaseDocument"/> and
+    /// the operator's line edits are laid over a copy last, after the word spans the
+    /// provider chain produced. Nothing here writes the lyrics cache: that write
+    /// happens upstream in <see cref="LyricsService"/>, whose key is
+    /// <c>artist|title|seconds|sourceId</c>, so edited text stored there would leak
+    /// onto every other file with the same tags and duration.
+    /// </para>
     /// </summary>
     private void ApplyLyricsDocument(LyricsDocument? doc, string? missStatus = null)
     {
+        _lyricsBaseDocument = doc;
+        _lyricsMissStatus = missStatus;
+        _lyricsApplied = true;
+
+        var edits = _trackMeta.GetLyricEdits(CurrentLyricsKey);
+
         LyricLines.Clear();
         _currentLyricIndex = -1;
+        // The word spans are rebuilt from the edited text, so the old index points
+        // into a word list that no longer exists: reset it here, before the rebuild,
+        // or a different word stays lit.
         _currentWordIndex = -1;
         _lyricsSynced = false;
-        // The section command reads the document's line times, so keep the one
-        // behind the rendered lines (cleared when the lines are cleared).
-        _lyricsDocument = doc;
         ClearLyricWordGeometry();
         OnPropertyChanged(nameof(CurrentLyricLine));
 
+        bool fromEditsOnly = false;
         if (doc == null)
         {
+            // No provider answered, but the operator's edits still make a sheet.
+            // Unsynced on purpose: there are no timestamps to follow.
+            doc = LyricEdits.FromEdits(edits);
+            fromEditsOnly = doc != null;
+        }
+
+        if (doc == null)
+        {
+            // The section command reads the document's line times, so keep the one
+            // behind the rendered lines (cleared when the lines are cleared).
+            _lyricsDocument = null;
             // Name the query that was actually searched: the usual reason for a
             // miss is that the file tags belong to a cover, so the text has to say
             // which title/artist went out.
@@ -3608,13 +3651,21 @@ public partial class MainViewModel : ObservableObject, IDisposable
             return;
         }
 
-        // Word-follow needs per-word spans. Documents that already carry real
-        // word timings (A2 enhanced LRC, providers with word data) are used as
-        // is; line-only synced documents get an even split bounded by the next
-        // line. Unsynced documents stay line-only.
-        if (doc.Synced && !doc.HasWordTimings)
-            WordTimeline.Synthesize(doc, LoadedTrack?.Duration);
+        if (!fromEditsOnly)
+        {
+            // Word-follow needs per-word spans. Documents that already carry real
+            // word timings (A2 enhanced LRC, providers with word data) are used as
+            // is; line-only synced documents get an even split bounded by the next
+            // line. Unsynced documents stay line-only.
+            if (doc.Synced && !doc.HasWordTimings)
+                WordTimeline.Synthesize(doc, LoadedTrack?.Duration);
 
+            // Operator edits last, on a copy: line times, offsets and sections stay
+            // exactly as resolved, and the cache never sees the new text.
+            doc = LyricEdits.Apply(doc, edits, LoadedTrack?.Duration) ?? doc;
+        }
+
+        _lyricsDocument = doc;
         foreach (var line in doc.Lines)
             LyricLines.Add(new LyricLineViewModel(line.Time, line.Text, line.Words));
         _lyricsSynced = doc.Synced;
@@ -3925,6 +3976,77 @@ public partial class MainViewModel : ObservableObject, IDisposable
     /// at now as a section, so the next nudge moves only that span. The indexes
     /// come from the view (the ListBox owns the selection).
     /// </summary>
+    /// <summary>
+    /// Re-render the lyrics after an operator edit changed, without asking a
+    /// provider again. Starts from the provider's document, so a second edit is laid
+    /// over the provider's text rather than over the first edit's result.
+    /// </summary>
+    public void RefreshLyricEdits()
+    {
+        if (!_lyricsApplied) return;
+        ApplyLyricsDocument(_lyricsBaseDocument, _lyricsMissStatus);
+    }
+
+    /// <summary>
+    /// Set the text of the selected lyric lines of the loaded track, as one
+    /// operator edit per line.
+    /// <para>
+    /// Each edit records the current document's source id and the line's start
+    /// time, so it only ever applies to the same provider's timing. An existing
+    /// edit for that line (same source, inside the match window) is replaced; edits
+    /// for other lines and other sources are kept untouched.
+    /// </para>
+    /// </summary>
+    public void SetLyricLineText(IReadOnlyList<int>? lineIndexes, string? text)
+    {
+        var key = CurrentLyricsKey;
+        if (key == null)
+        {
+            StatusText = "Load a track before editing lyric text.";
+            return;
+        }
+
+        if (LyricLines.Count == 0)
+        {
+            StatusText = "Load lyrics first \u2014 there is no line to edit.";
+            return;
+        }
+
+        var replacement = text ?? "";
+        // The document on screen decides which source these edits belong to, so an
+        // all-edits sheet records the "edit" marker and stays self-consistent.
+        var sourceId = _lyricsDocument?.SourceId is { Length: > 0 } current
+            ? current
+            : LyricEdits.EditSourceId;
+
+        var merged = new List<LyricLineEdit>(_trackMeta.GetLyricEdits(key));
+        int edited = 0;
+
+        if (lineIndexes != null)
+        {
+            foreach (var index in lineIndexes)
+            {
+                if (index < 0 || index >= LyricLines.Count) continue;
+
+                var timeMs = (int)Math.Round(LyricLines[index].Time.TotalMilliseconds);
+                merged.RemoveAll(e => string.Equals(e.SourceId, sourceId, StringComparison.Ordinal)
+                                      && Math.Abs(e.TimeMs - timeMs) <= LyricEdits.MatchWindowMs);
+                merged.Add(new LyricLineEdit { TimeMs = timeMs, Text = replacement, SourceId = sourceId });
+                edited++;
+            }
+        }
+
+        if (edited == 0)
+        {
+            StatusText = "Select one or more lyric lines first.";
+            return;
+        }
+
+        _trackMeta.SetLyricEdits(key, merged);
+        RefreshLyricEdits();
+        StatusText = edited == 1 ? "Line text saved." : $"{edited} line texts saved.";
+    }
+
     public void SetTimingForSelectedLines(IReadOnlyList<int>? lineIndexes)
     {
         var key = CurrentLyricsKey;

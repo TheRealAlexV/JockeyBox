@@ -65,7 +65,7 @@ public static class WordTimeline
             // second call a no-op.
             if (line.Words is { Count: > 0 }) continue;
 
-            var (start, end) = Window(lines, i, trackDuration);
+            var (start, end) = LineWindow(lines, i, trackDuration);
             var words = BuildLineWords(line.Text, start, end);
             if (words.Count == 0) continue;
 
@@ -144,10 +144,14 @@ public static class WordTimeline
     }
 
     /// <summary>
-    /// Start/end of the window estimated for line <paramref name="index"/>.
+    /// Start/end of the window estimated for line <paramref name="index"/>: the
+    /// line's own start to the next line's start, the last line bounded by
+    /// <see cref="LastLineWindowMs"/> (and by the track duration when known).
+    /// Shared with <see cref="LyricEdits"/> so an edited line keeps the same window
+    /// its words were estimated in before the edit.
     /// </summary>
-    private static (TimeSpan Start, TimeSpan End) Window(
-        List<LyricLine> lines, int index, TimeSpan? trackDuration)
+    public static (TimeSpan Start, TimeSpan End) LineWindow(
+        IReadOnlyList<LyricLine> lines, int index, TimeSpan? trackDuration)
     {
         var start = lines[index].Time;
 
