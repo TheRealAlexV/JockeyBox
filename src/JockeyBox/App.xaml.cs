@@ -157,6 +157,14 @@ public partial class App : Application
             return;
         }
 
+        if (NullRender.Requested(e.Args))
+        {
+            int nullExit = NullRender.Run(e.Args);
+            Console.Out.Flush();
+            Shutdown(nullExit);
+            return;
+        }
+
         if (SelftestRequested(e.Args))
         {
             int exitCode = SelftestRunner.Run(Console.Out, verbose: HasFlag(e.Args, "--selftest-verbose"));
