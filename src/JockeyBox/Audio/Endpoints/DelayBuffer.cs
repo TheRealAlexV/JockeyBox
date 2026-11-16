@@ -87,6 +87,19 @@ public sealed class DelayBuffer
         _xfadeRemaining = _xfadeFrames;
     }
 
+    /// <summary>
+    /// Apply a delay with no crossfade. For a change made while the line holds no
+    /// audible history (before a deck starts, or while it is stopped): there is no
+    /// old tap worth fading from, and fading would briefly leak the newest frames -
+    /// the head of the track - at full gain.
+    /// </summary>
+    public void SnapDelayMs(int milliseconds)
+    {
+        _delayFrames = Math.Clamp(milliseconds, 0, MaxDelayMs) * _rate / 1000;
+        _fromDelayFrames = _delayFrames;
+        _xfadeRemaining = 0;
+    }
+
     /// <summary>Stage one block. <paramref name="frames"/> is a frame count, not a sample count.</summary>
     public void Write(float[] interleaved, int offset, int frames)
     {

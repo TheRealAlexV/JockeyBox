@@ -102,6 +102,13 @@ public sealed class AudioEngine : IDisposable
 
     private readonly float[] _deckABuffer = new float[BlockFrames * Channels];
     private readonly float[] _deckBBuffer = new float[BlockFrames * Channels];
+
+    // Per-deck output delay. One delay line per deck, applied to the deck's Main
+    // block right after the read (see RenderDeck) and therefore before the two
+    // decks are summed at step 4. It cannot be a bus delay: the decks share one
+    // program sum and AudioBus.Input is the pre-delay signal by contract.
+    private readonly DelayBuffer _deckADelay = new(Rate, Channels);
+    private readonly DelayBuffer _deckBDelay = new(Rate, Channels);
     private readonly float[] _karaokeABuffer = new float[BlockFrames * Channels];
     private readonly float[] _karaokeBBuffer = new float[BlockFrames * Channels];
     private readonly float[] _deckMix = new float[BlockFrames * Channels];
@@ -323,6 +330,30 @@ public sealed class AudioEngine : IDisposable
                 if (bus.Delayed) bus.SetDelayMs(value);
         }
     }
+
+    /// <summary>
+    /// One deck's own output delay in ms (0…2000). Unlike <see cref="OutputDelayMs"/>
+    /// this shifts a single deck: it is applied to the deck block before the decks
+    /// are summed, so deck A's offset never moves deck B.
+    /// </summary>
+    public int DeckOutputDelayMs(bool isDeckA) => DeckDelayLine(isDeckA).DelayMs;
+
+    /// <summary>
+    /// Set one deck's output delay. The change is crossfaded over
+    /// <see cref="DelayBuffer.CrossfadeMs"/> like the global one, so moving it
+    /// mid-song cannot click.
+    /// </summary>
+    public void SetDeckOutputDelayMs(bool isDeckA, int milliseconds)
+    {
+        var line = DeckDelayLine(isDeckA);
+        var deck = isDeckA ? DeckA : DeckB;
+        // A playing deck has history to fade between; anything else has none, so the
+        // value is snapped in rather than faded in from the head of the track.
+        if (deck.State == DeckSource.DeckState.Playing) line.SetDelayMs(milliseconds);
+        else line.SnapDelayMs(milliseconds);
+    }
+
+    private DelayBuffer DeckDelayLine(bool isDeckA) => isDeckA ? _deckADelay : _deckBDelay;
 
     /// <summary>
     /// The mix equaliser: low shelf 70 Hz, mid bell 1 kHz (Q 0.6), high shelf
@@ -578,6 +609,8 @@ public sealed class AudioEngine : IDisposable
         // A reopened device starts with an empty history; keeping the old tail
         // would replay up to OutputDelayMs of audio into the new device.
         foreach (var bus in _buses) bus.ResetDelay();
+        _deckADelay.Reset();
+        _deckBDelay.Reset();
 
         if (built.Outputs.Count > 0)
             Log.Info($"audio route: {built.Outputs.Count} device session(s) for " +
@@ -669,8 +702,12 @@ public sealed class AudioEngine : IDisposable
     /// </summary>
     public double AudibleSeconds(DeckSource deck)
     {
-        double delay = _buses[(int)BusKind.DeckA].DelayMs / 1000.0;
-        return Math.Max(0, deck.PositionSeconds - delay);
+        double bus = _buses[(int)BusKind.DeckA].DelayMs / 1000.0;
+        // Each deck adds its own shift on top of the global one, so a deck that is
+        // delayed more reports a position further behind: the two decks read their
+        // own delay line (frames, not the truncated ms) instead of one shared value.
+        var line = ReferenceEquals(deck, DeckA) ? _deckADelay : _deckBDelay;
+        return Math.Max(0, deck.PositionSeconds - bus - line.DelayFrames / (double)Rate);
     }
 
     // ------------------------------------------------------------------ render loop
@@ -746,8 +783,8 @@ public sealed class AudioEngine : IDisposable
 
         // 1. Decks. In karaoke mode a deck is read twice (karaoke stem to Main,
         //    original to KaraokeAid) but its clock advances once, inside ReadKaraoke.
-        RenderDeck(DeckA, _deckABuffer, _karaokeABuffer, karaoke);
-        RenderDeck(DeckB, _deckBBuffer, _karaokeBBuffer, karaoke);
+        RenderDeck(DeckA, _deckABuffer, _karaokeABuffer, karaoke, _deckADelay);
+        RenderDeck(DeckB, _deckBBuffer, _karaokeBBuffer, karaoke, _deckBDelay);
 
         // 1b. Three-band mix EQ, in place on both deck blocks. This is the earliest
         //     point every consumer shares: the crossfade fan-out (step 4), the
@@ -949,9 +986,11 @@ public sealed class AudioEngine : IDisposable
 
     /// <summary>
     /// Read one deck into its Main content and (in karaoke mode, when it has a
-    /// karaoke stem) its KaraokeAid content.
+    /// karaoke stem) its KaraokeAid content, then apply that deck's own output
+    /// delay to Main.
     /// </summary>
-    private static void RenderDeck(DeckSource deck, float[] mainBuffer, float[] aidBuffer, bool karaoke)
+    private static void RenderDeck(DeckSource deck, float[] mainBuffer, float[] aidBuffer,
+                                   bool karaoke, DelayBuffer delay)
     {
         if (karaoke && deck.HasKaraoke)
         {
@@ -964,6 +1003,15 @@ public sealed class AudioEngine : IDisposable
             deck.Read(mainBuffer, 0, mainBuffer.Length);
             Array.Clear(aidBuffer, 0, aidBuffer.Length);
         }
+
+        // The deck's own output delay, on Main only and as soon as the read has
+        // filled it: every consumer of this block (EQ, crossfade fan-out, monitor
+        // tap, program sum, capture taps) then sees the same shift, and the other
+        // deck reads its own delay line so the two never move together. Writing
+        // from mainBuffer and reading back into it is safe because Write copies
+        // the block into the ring before ReadDelayed runs.
+        delay.Write(mainBuffer, 0, BlockFrames);
+        delay.ReadDelayed(mainBuffer, 0, BlockFrames);
     }
 
     private void MaintainSinks()

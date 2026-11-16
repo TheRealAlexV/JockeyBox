@@ -40,6 +40,7 @@ public static class SelftestRunner
             ("crossfade-law", CrossfadeLaw),
             ("no-zero-reads", NoZeroReads),
             ("end-of-track-handoff", EndOfTrackHandoff),
+            ("deck-output-delay", DeckOutputDelay),
         };
 
         output.WriteLine("JockeyBox selftest - offline audio graph, no sound device");
@@ -444,10 +445,92 @@ public static class SelftestRunner
     /// gets a fresh engine so a stuck envelope, a stale queue or a leftover delay tap
     /// in one case cannot make another pass.
     /// </summary>
+    /// <summary>
+    /// 8. A deck's own output delay, in frames. Deck A is delayed 250 ms and deck B
+    /// is not, in one render: 12 000 frames apart at 48 kHz, with deck B unmoved -
+    /// the whole point of a per-deck delay, which one shared number cannot express.
+    /// The monitor tap and the program sum are read out of the same run, because a
+    /// shift that stopped at the deck bus would be inaudible.
+    /// </summary>
+    private static void DeckOutputDelay(Case test)
+    {
+        var a = Tones.Impulse(0.6, 0.0);              // 0.5 at frame 0
+        var b = Tones.Impulse(0.6, 0.0);
+        for (int i = 0; i < b.Length; i++) b[i] *= 0.5f; // 0.25 at frame 0
+
+        using var delayed = new Rig("deck-delay-250");
+        delayed.Engine.Fader.Snap(0.5, 0);
+        delayed.Engine.MonitorEnabled = true;
+        delayed.Engine.MonitorAGain = 1f;
+        delayed.Engine.MonitorBGain = 1f;
+        delayed.Engine.SetDeckOutputDelayMs(true, 250);
+        delayed.Engine.SetDeckOutputDelayMs(false, 0);
+        delayed.Load(Deck.A, a);
+        delayed.Load(Deck.B, b);
+        delayed.Run(0.4);
+
+        var busA = delayed.BusBuffer(BusKind.DeckA);
+        var busB = delayed.BusBuffer(BusKind.DeckB);
+        var mon = delayed.MonitorBuffer;
+        var prog = delayed.Buffer;
+
+        int frameA = SelftestSignals.FirstNonZeroFrame(busA);
+        int frameB = SelftestSignals.FirstNonZeroFrame(busB);
+        test.Note($"deckA={frameA}", $"deckB={frameB}",
+            $"monitor={PeakAround(mon, 12_000):0.000}",
+            $"program={PeakAround(prog, 12_000):0.000}");
+
+        Require(frameA == 12_000, $"deck A impulse at frame {frameA}, expected 12 000 (250 ms)");
+        Require(frameB == 0, $"deck B impulse at frame {frameB}: deck A's delay moved deck B");
+        Require(Math.Abs(PeakAround(mon, 12_000) - 0.5) < 1e-3,
+            $"monitor tap does not carry deck A's shift (peak {PeakAround(mon, 12_000):0.000})");
+        Require(Math.Abs(PeakAround(prog, 12_000) - 0.5 * 0.70710678) < 1e-3,
+            $"program sum does not carry deck A's shift (peak {PeakAround(prog, 12_000):0.000})");
+
+        // 0 ms is the identity: the same file's impulse at frame 0, and the 250 ms
+        // bus equals it sample for sample once shifted back by 12 000 frames.
+        using var plain = new Rig("deck-delay-0");
+        plain.Engine.Fader.Snap(0.5, 0);
+        plain.Engine.SetDeckOutputDelayMs(true, 0);
+        plain.Engine.SetDeckOutputDelayMs(false, 0);
+        plain.Load(Deck.A, a);
+        plain.Load(Deck.B, b);
+        plain.Run(0.4);
+
+        var zero = plain.BusBuffer(BusKind.DeckA);
+        int frameZero = SelftestSignals.FirstNonZeroFrame(zero);
+        int shift = 12_000 * AudioEngine.Channels;
+        int common = Math.Min(zero.Length, busA.Length - shift);
+        int mismatch = -1;
+        for (int i = 0; i < common; i++)
+            if (zero[i] != busA[i + shift]) { mismatch = i; break; }
+
+        test.Note($"zero={frameZero}", $"shiftCompare={common} samples");
+        Require(frameZero == 0, $"deck at 0 ms put its impulse at frame {frameZero}");
+        Require(Math.Abs(zero[0] - 0.5f * 0.70710678f) < 1e-4,
+            $"0 ms impulse is {zero[0]:0.000000}, expected the source amplitude");
+        Require(mismatch < 0,
+            $"the 250 ms deck is not the 0 ms deck shifted by 12 000 frames (first mismatch at sample {mismatch})");
+    }
+
+    /// <summary>Peak of a stereo buffer in the two frames either side of <paramref name="frame"/>.</summary>
+    private static double PeakAround(float[] interleaved, int frame)
+    {
+        double peak = 0;
+        for (int f = Math.Max(0, frame - 1); f <= frame + 1; f++)
+        {
+            int i = f * AudioEngine.Channels;
+            if (i + 1 >= interleaved.Length) break;
+            peak = Math.Max(peak, Math.Max(Math.Abs(interleaved[i]), Math.Abs(interleaved[i + 1])));
+        }
+        return peak;
+    }
+
     private sealed class Rig : IDisposable
     {
         private readonly List<float> _captured = new();
         private readonly List<float> _monitored = new();
+        private readonly Dictionary<BusKind, List<float>> _buses = new();
         private readonly string _directory;
 
         public Rig(string name)
@@ -489,10 +572,11 @@ public static class SelftestRunner
         {
             _captured.Clear();
             _monitored.Clear();
+            _buses.Clear();
             Frames = 0;
             CaptureOrigin = -1;
 
-            Engine.StartOffline(Capture, seconds, MonitorCapture);
+            Engine.StartOffline(Capture, seconds, MonitorCapture, BusCapture);
 
             var spin = new SpinWait();
             while (Engine.IsRunning) spin.SpinOnce(1);
@@ -511,6 +595,16 @@ public static class SelftestRunner
         {
             for (int i = 0; i < frames * AudioEngine.Channels; i++) _monitored.Add(monitor[i]);
         }
+
+        private void BusCapture(BusKind kind, float[] buffer, int frames)
+        {
+            if (!_buses.TryGetValue(kind, out var list)) _buses[kind] = list = new List<float>();
+            for (int i = 0; i < frames * AudioEngine.Channels; i++) list.Add(buffer[i]);
+        }
+
+        /// <summary>One bus's rendered frames from the last <see cref="Run"/>, interleaved.</summary>
+        public float[] BusBuffer(BusKind kind) =>
+            _buses.TryGetValue(kind, out var list) ? list.ToArray() : Array.Empty<float>();
 
         public void Dispose()
         {

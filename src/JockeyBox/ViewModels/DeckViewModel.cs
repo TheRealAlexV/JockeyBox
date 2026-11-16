@@ -50,6 +50,13 @@ public partial class DeckViewModel : ObservableObject, IDisposable
     [ObservableProperty] private string _trackDetail = "";
     [ObservableProperty] private AudioDeviceInfo? _selectedDevice;
     [ObservableProperty] private double _delayMs;
+
+    /// <summary>
+    /// This deck's output delay in ms: how far its audio lags the deck, applied by
+    /// the engine after the read. Separate from <see cref="DelayMs"/>, which trims
+    /// the karaoke stem inside this deck.
+    /// </summary>
+    [ObservableProperty] private double _outputDelayMs;
     [ObservableProperty] private float _volume = 1.0f;
     [ObservableProperty] private double _karaokeGain = 0.5;
     [ObservableProperty] private string _timeReadout = "0:00 / 0:00";
@@ -279,7 +286,7 @@ public partial class DeckViewModel : ObservableObject, IDisposable
     public int WaveformGeneration => _waveformGeneration;
 
     /// <summary>Restore persisted device/delay/volume without triggering resyncs.</summary>
-    public void RestoreSettings(string? deviceId, double delayMs, float volume)
+    public void RestoreSettings(string? deviceId, double delayMs, float volume, double outputDelayMs = 0)
     {
         _suppressApply = true;
         try
@@ -287,6 +294,7 @@ public partial class DeckViewModel : ObservableObject, IDisposable
             _channel.DeviceId = deviceId;
             DelayMs = delayMs;
             Volume = volume;
+            OutputDelayMs = outputDelayMs;
         }
         finally { _suppressApply = false; }
     }
@@ -600,6 +608,27 @@ public partial class DeckViewModel : ObservableObject, IDisposable
     {
         if (double.TryParse(step, out var delta))
             DelayMs = Math.Clamp(DelayMs + delta, DeckChannel.MinDelayMs, DeckChannel.MaxDelayMs);
+    }
+
+    /// <summary>Nudge this deck's output delay from the +/- repeat buttons (step in ms).</summary>
+    [RelayCommand]
+    private void NudgeOutputDelay(string step)
+    {
+        if (double.TryParse(step, out var delta))
+            OutputDelayMs = Math.Clamp(OutputDelayMs + delta, 0, DeckChannel.MaxOutputDelayMs);
+    }
+
+    partial void OnOutputDelayMsChanged(double value)
+    {
+        var clamped = Math.Clamp(value, 0, DeckChannel.MaxOutputDelayMs);
+        if (clamped != value)
+        {
+            OutputDelayMs = clamped;
+            return;
+        }
+        _channel.OutputDelayMs = clamped;
+        if (_suppressApply) return;
+        _persistSettings();
     }
 
     partial void OnSelectedDeviceChanged(AudioDeviceInfo? value)

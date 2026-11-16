@@ -37,6 +37,9 @@ public sealed class DeckChannel : IDisposable
     /// <summary>Largest karaoke offset a user may dial in (ms).</summary>
     public const double MaxDelayMs = 5000;
 
+    /// <summary>Largest per-deck output delay a user may dial in (ms).</summary>
+    public const double MaxOutputDelayMs = 2000;
+
     /// <summary>The engine's deck fader ceiling (matches the VOL slider and the mixer).</summary>
     private const double MaxVolume = 1.2;
 
@@ -74,6 +77,7 @@ public sealed class DeckChannel : IDisposable
     private string? _fault;
     private string? _deviceId;
     private double _delayMs;
+    private double _outputDelayMs;
     private double _volume = 1.0;
     private double _karaokeGain = 0.5;
     private double _tempoRatio = 1.0;
@@ -134,6 +138,21 @@ public sealed class DeckChannel : IDisposable
         {
             _delayMs = Math.Clamp(value, MinDelayMs, MaxDelayMs);
             _deck?.SetKaraokeSyncOffset(_delayMs);
+        }
+    }
+
+    /// <summary>
+    /// This deck's own output delay in ms (0…2000). It shifts what the audience
+    /// hears from this deck alone; the karaoke stem offset above is a different
+    /// thing and stays inside the deck.
+    /// </summary>
+    public double OutputDelayMs
+    {
+        get => _outputDelayMs;
+        set
+        {
+            _outputDelayMs = Math.Clamp(value, 0, MaxOutputDelayMs);
+            _engine?.SetDeckOutputDelayMs(_isDeckA, (int)Math.Round(_outputDelayMs));
         }
     }
 
@@ -595,6 +614,7 @@ public sealed class DeckChannel : IDisposable
         _deck?.SetKaraokeSyncOffset(_delayMs);
         _deck?.SetKaraokeGain((float)_karaokeGain);
         _deck?.SetTempo(_tempoRatio);
+        _engine?.SetDeckOutputDelayMs(_isDeckA, (int)Math.Round(_outputDelayMs));
         ApplyVolume();
         RaiseStateChanged();
     }
@@ -619,6 +639,7 @@ public sealed class DeckChannel : IDisposable
         _deck.SetTempo(_tempoRatio);
         _deck.SetKaraokeGain((float)_karaokeGain);
         _deck.SetKaraokeSyncOffset(_delayMs);
+        _engine.SetDeckOutputDelayMs(_isDeckA, (int)Math.Round(_outputDelayMs));
         ApplyVolume();
 
         _snapshot = Snapshot();

@@ -292,37 +292,61 @@
                                 CommandParameter="{Binding}"/>
                         </StackPanel>
 
-                        <!-- DELAY MS, moved here whole: the 20 px nudges against an
-                             18 px field are untouched (a field smaller than its own
-                             steppers was the bug that made the glyphs unreadable at
-                             18 against 20), and the play glyph that sat beside them
-                             is gone - the deck's play button is the third button on
-                             the left of this same line, so the second one was a second
-                             handle on one command. Shown only with a stem, so a deck
-                             without one keeps this line at the buttons' height. -->
-                        <StackPanel Grid.Column="1" Orientation="Horizontal"
-                                    HorizontalAlignment="Right" VerticalAlignment="Center"
-                                    Visibility="{Binding HasKaraoke, Converter={StaticResource BoolToVisibility}}">
-                            <TextBlock Text="DELAY MS" FontSize="9" Margin="12,0,6,0"
-                                       Foreground="{StaticResource TextDimBrush}"
-                                       VerticalAlignment="Center"/>
-                            <RepeatButton Style="{StaticResource StepperNudge}"
-                                          Delay="400" Interval="150"
-                                          Content="&#x2212;"
-                                          Command="{Binding NudgeDelayCommand}" CommandParameter="-5"
-                                          ToolTip="Trim the karaoke stem 5 ms earlier"/>
-                            <TextBox Width="56" Margin="3,0"
-                                     TextAlignment="Center" FontSize="10"
-                                     MinHeight="18" Padding="4,0"
-                                     VerticalAlignment="Center"
-                                     Text="{Binding DelayMs, UpdateSourceTrigger=LostFocus, StringFormat=F0}"
-                                     ToolTip="Karaoke stem offset in milliseconds"/>
-                            <RepeatButton Style="{StaticResource StepperNudge}"
-                                          Delay="400" Interval="150"
-                                          Content="+"
-                                          Command="{Binding NudgeDelayCommand}" CommandParameter="5"
-                                          ToolTip="Trim the karaoke stem 5 ms later"/>
-                        </StackPanel>
+                        <!-- Two millisecond fields live on this line and they are
+                             different jobs, so each one names its own: DELAY MS
+                             holds this deck's OUTPUT back (audible, always shown -
+                             it is not a karaoke feature), STEM MS trims the karaoke
+                             stem inside the deck (only meaningful with a stem, so
+                             only shown then). The 20 px nudges against the 18 px
+                             field are untouched. A WrapPanel, not a StackPanel: at
+                             the narrow window the second group drops to its own
+                             line inside the card instead of being clipped. -->
+                        <WrapPanel Grid.Column="1" Orientation="Horizontal"
+                                   HorizontalAlignment="Right" VerticalAlignment="Center">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="DELAY MS" FontSize="9" Margin="12,0,6,0"
+                                           Foreground="{StaticResource TextDimBrush}"
+                                           VerticalAlignment="Center"/>
+                                <RepeatButton Style="{StaticResource StepperNudge}"
+                                              Delay="400" Interval="150"
+                                              Content="&#x2212;"
+                                              Command="{Binding NudgeOutputDelayCommand}" CommandParameter="-5"
+                                              ToolTip="Delay this deck 5 ms less"/>
+                                <TextBox Width="56" Margin="3,0"
+                                         TextAlignment="Center" FontSize="10"
+                                         MinHeight="18" Padding="4,0"
+                                         VerticalAlignment="Center"
+                                         Text="{Binding OutputDelayMs, UpdateSourceTrigger=LostFocus, StringFormat=F0}"
+                                         ToolTip="Output delay: this deck's audio reaches the output this many milliseconds late"/>
+                                <RepeatButton Style="{StaticResource StepperNudge}"
+                                              Delay="400" Interval="150"
+                                              Content="+"
+                                              Command="{Binding NudgeOutputDelayCommand}" CommandParameter="5"
+                                              ToolTip="Delay this deck 5 ms more"/>
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal"
+                                        Visibility="{Binding HasKaraoke, Converter={StaticResource BoolToVisibility}}">
+                                <TextBlock Text="STEM MS" FontSize="9" Margin="12,0,6,0"
+                                           Foreground="{StaticResource TextDimBrush}"
+                                           VerticalAlignment="Center"/>
+                                <RepeatButton Style="{StaticResource StepperNudge}"
+                                              Delay="400" Interval="150"
+                                              Content="&#x2212;"
+                                              Command="{Binding NudgeDelayCommand}" CommandParameter="-5"
+                                              ToolTip="Trim the karaoke stem 5 ms earlier"/>
+                                <TextBox Width="56" Margin="3,0"
+                                         TextAlignment="Center" FontSize="10"
+                                         MinHeight="18" Padding="4,0"
+                                         VerticalAlignment="Center"
+                                         Text="{Binding DelayMs, UpdateSourceTrigger=LostFocus, StringFormat=F0}"
+                                         ToolTip="Karaoke stem: trims the stem inside this deck. Not an output delay."/>
+                                <RepeatButton Style="{StaticResource StepperNudge}"
+                                              Delay="400" Interval="150"
+                                              Content="+"
+                                              Command="{Binding NudgeDelayCommand}" CommandParameter="5"
+                                              ToolTip="Trim the karaoke stem 5 ms later"/>
+                            </StackPanel>
+                        </WrapPanel>
                     </Grid>
 
                     <!-- Scrub sits on its own line so it starts at the control

@@ -72,6 +72,14 @@ public class AppSettings
     public string? DeckBDeviceId { get; set; }
     public double DeckADelayMs { get; set; }
     public double DeckBDelayMs { get; set; }
+
+    /// <summary>
+    /// Per-deck output delay in ms (0…2000): how far this deck's audio lags what
+    /// the deck produces. Distinct from <see cref="DeckADelayMs"/> /
+    /// <see cref="DeckBDelayMs"/>, which trim the karaoke stem inside the deck.
+    /// </summary>
+    public double DeckAOutputDelayMs { get; set; }
+    public double DeckBOutputDelayMs { get; set; }
     public float DeckAVolume { get; set; } = 1.0f;
     public float DeckBVolume { get; set; } = 1.0f;
 
@@ -567,6 +575,12 @@ public class AppSettings
         settings.EqLowDb = ClampEqDb(settings.EqLowDb);
         settings.EqMidDb = ClampEqDb(settings.EqMidDb);
         settings.EqHighDb = ClampEqDb(settings.EqHighDb);
+
+        // A per-deck output delay outside 0…2000 ms is not something the engine can
+        // represent (its delay line is 2 s), so keep the persisted value honest the
+        // same way the EQ does - without dropping the key.
+        settings.DeckAOutputDelayMs = ClampDeckOutputDelayMs(settings.DeckAOutputDelayMs);
+        settings.DeckBOutputDelayMs = ClampDeckOutputDelayMs(settings.DeckBOutputDelayMs);
         if (string.IsNullOrWhiteSpace(settings.MicDeviceId)) settings.MicDeviceId = null;
 
         // Unprotect OAuth access token
@@ -707,6 +721,13 @@ public class AppSettings
     /// </summary>
     private static double ClampEqDb(double db)
         => double.IsNaN(db) ? 0.0 : Math.Clamp(db, -26.0, 6.0);
+
+    /// <summary>
+    /// Clamp one deck's output delay to the range the engine's delay line can hold.
+    /// NaN/±∞ map to "no delay", so a corrupt file cannot poison the buffer.
+    /// </summary>
+    private static double ClampDeckOutputDelayMs(double ms)
+        => double.IsFinite(ms) ? Math.Clamp(ms, 0, JockeyBox.Audio.DeckChannel.MaxOutputDelayMs) : 0.0;
 
     public void NormalizeKaraokeRoot()
     {
