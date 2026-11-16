@@ -292,41 +292,90 @@
                                 CommandParameter="{Binding}"/>
                         </StackPanel>
 
-                        <!-- Two millisecond fields live on this line and they are
-                             different jobs, so each one names its own: DELAY MS
-                             holds this deck's OUTPUT back (audible, always shown -
-                             it is not a karaoke feature), STEM MS trims the karaoke
-                             stem inside the deck (only meaningful with a stem, so
-                             only shown then). The 20 px nudges against the 18 px
-                             field are untouched. A WrapPanel, not a StackPanel: at
-                             the narrow window the second group drops to its own
-                             line inside the card instead of being clipped. -->
-                        <WrapPanel Grid.Column="1" Orientation="Horizontal"
-                                   HorizontalAlignment="Right" VerticalAlignment="Center">
-                            <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="DELAY MS" FontSize="9" Margin="12,0,6,0"
-                                           Foreground="{StaticResource TextDimBrush}"
-                                           VerticalAlignment="Center"/>
-                                <RepeatButton Style="{StaticResource StepperNudge}"
-                                              Delay="400" Interval="150"
-                                              Content="&#x2212;"
-                                              Command="{Binding NudgeOutputDelayCommand}" CommandParameter="-5"
-                                              ToolTip="Delay this deck 5 ms less"/>
-                                <TextBox Width="56" Margin="3,0"
-                                         TextAlignment="Center" FontSize="10"
-                                         MinHeight="18" Padding="4,0"
-                                         VerticalAlignment="Center"
-                                         Text="{Binding OutputDelayMs, UpdateSourceTrigger=LostFocus, StringFormat=F0}"
-                                         ToolTip="Output delay: this deck's audio reaches the output this many milliseconds late"/>
-                                <RepeatButton Style="{StaticResource StepperNudge}"
-                                              Delay="400" Interval="150"
-                                              Content="+"
-                                              Command="{Binding NudgeOutputDelayCommand}" CommandParameter="5"
-                                              ToolTip="Delay this deck 5 ms more"/>
-                            </StackPanel>
+                        <!-- One millisecond field on this line, and it is this
+                             deck's OUTPUT: DELAY MS holds this deck's audio back
+                             (audible, always shown - not a karaoke feature). The
+                             stem trim lives in the KARAOKE strip below, where a
+                             deck that has no stem shows nothing for it.
+
+                             No WrapPanel: a second group on this line wrapped onto
+                             its own 18 px line at 1040 and made one deck's card
+                             taller than the other's, which is the invariant the
+                             pair of cards is supposed to hold. With one group
+                             there is nothing left to wrap. -->
+                        <StackPanel Grid.Column="1" Orientation="Horizontal"
+                                    HorizontalAlignment="Right" VerticalAlignment="Center">
+                            <TextBlock Text="DELAY MS" FontSize="9" Margin="12,0,6,0"
+                                       Foreground="{StaticResource TextDimBrush}"
+                                       VerticalAlignment="Center"/>
+                            <RepeatButton Style="{StaticResource StepperNudge}"
+                                          Delay="400" Interval="150"
+                                          Content="&#x2212;"
+                                          Command="{Binding NudgeOutputDelayCommand}" CommandParameter="-5"
+                                          ToolTip="Delay this deck 5 ms less"/>
+                            <TextBox Width="56" Margin="3,0"
+                                     TextAlignment="Center" FontSize="10"
+                                     MinHeight="18" Padding="4,0"
+                                     VerticalAlignment="Center"
+                                     Text="{Binding OutputDelayMs, UpdateSourceTrigger=LostFocus, StringFormat=F0}"
+                                     ToolTip="Output delay: this deck's audio reaches the output this many milliseconds late"/>
+                            <RepeatButton Style="{StaticResource StepperNudge}"
+                                          Delay="400" Interval="150"
+                                          Content="+"
+                                          Command="{Binding NudgeOutputDelayCommand}" CommandParameter="5"
+                                          ToolTip="Delay this deck 5 ms more"/>
+                        </StackPanel>
+                    </Grid>
+
+                    <!-- Scrub sits on its own line so it starts at the control
+                         column, not under the last transport button. -->
+                    <Slider Grid.Row="6" Grid.Column="2" Margin="0,3,0,0" VerticalAlignment="Center"
+                            Minimum="0" Maximum="{Binding DurationSeconds}"
+                            Value="{Binding PositionSeconds, Mode=TwoWay}"
+                            PreviewMouseLeftButtonDown="OnDeckSeekStart"
+                            PreviewMouseLeftButtonUp="OnDeckSeekEnd"
+                            LostMouseCapture="OnDeckSeekLostCapture"
+                            ToolTip="Seek this deck"/>
+
+                    <!-- The KARAOKE strip holds both halves of "this deck's stem":
+                         STEM MS trims the karaoke stem inside this deck, and the
+                         sentence says why there is no stem to trim. A stem trim
+                         means nothing on a deck without a stem, so it belongs here
+                         and not on the transport line, which is about this deck's
+                         audio reaching the output and now carries exactly one field
+                         (DELAY MS) at every width.
+
+                         MinHeight is 18, the height of the stepper beside the field,
+                         so the strip is the same line whether the trim is showing or
+                         only the sentence is: two cards cannot end on different
+                         lines even when only one of them holds a stem. The row is
+                         laid out on both decks, always, so a deck with no stem says
+                         why the section is empty rather than reserving silence. -->
+                    <Border Grid.Row="7" Grid.ColumnSpan="3" Margin="0,5,0,0" Padding="0,4,0,0"
+                            BorderBrush="{DynamicResource DeckAccent}" BorderThickness="0,1,0,0">
+                        <Grid MinHeight="18">
+                            <TextBlock FontSize="9" VerticalAlignment="Center"
+                                       Foreground="{StaticResource TextDimBrush}"
+                                       TextTrimming="CharacterEllipsis">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Text" Value=""/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding HasKaraoke}" Value="False">
+                                                <Setter Property="Text" Value="no karaoke stem in this file"/>
+                                            </DataTrigger>
+                                            <!-- An unloaded deck is empty, not stemless. -->
+                                            <DataTrigger Binding="{Binding IsLoaded}" Value="False">
+                                                <Setter Property="Text" Value=""/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
                             <StackPanel Orientation="Horizontal"
+                                        HorizontalAlignment="Right" VerticalAlignment="Center"
                                         Visibility="{Binding HasKaraoke, Converter={StaticResource BoolToVisibility}}">
-                                <TextBlock Text="STEM MS" FontSize="9" Margin="12,0,6,0"
+                                <TextBlock Text="STEM MS" FontSize="9" Margin="0,0,6,0"
                                            Foreground="{StaticResource TextDimBrush}"
                                            VerticalAlignment="Center"/>
                                 <RepeatButton Style="{StaticResource StepperNudge}"
@@ -346,51 +395,7 @@
                                               Command="{Binding NudgeDelayCommand}" CommandParameter="5"
                                               ToolTip="Trim the karaoke stem 5 ms later"/>
                             </StackPanel>
-                        </WrapPanel>
-                    </Grid>
-
-                    <!-- Scrub sits on its own line so it starts at the control
-                         column, not under the last transport button. -->
-                    <Slider Grid.Row="6" Grid.Column="2" Margin="0,3,0,0" VerticalAlignment="Center"
-                            Minimum="0" Maximum="{Binding DurationSeconds}"
-                            Value="{Binding PositionSeconds, Mode=TwoWay}"
-                            PreviewMouseLeftButtonDown="OnDeckSeekStart"
-                            PreviewMouseLeftButtonUp="OnDeckSeekEnd"
-                            LostMouseCapture="OnDeckSeekLostCapture"
-                            ToolTip="Seek this deck"/>
-
-                    <!-- What is left of the karaoke strip is the one thing the strip
-                         was holding for a reason: the sentence that explains an empty
-                         karaoke section. Its gain slider went with the karaoke gain
-                         control and its delay trim moved up to the transport line, so
-                         this row is now a single 12 px line instead of a 25 px label
-                         stack with a 44 px slider beside it - height the lyrics box
-                         gets instead of the card.
-
-                         Still laid out on both decks, always, and MinHeight holds the
-                         line with no text in it, so two cards cannot end on different
-                         lines and a deck with no stem says why the section is empty
-                         rather than reserving silence. -->
-                    <Border Grid.Row="7" Grid.ColumnSpan="3" Margin="0,5,0,0" Padding="0,4,0,0"
-                            BorderBrush="{DynamicResource DeckAccent}" BorderThickness="0,1,0,0">
-                        <TextBlock MinHeight="12" FontSize="9" VerticalAlignment="Center"
-                                   Foreground="{StaticResource TextDimBrush}"
-                                   TextTrimming="CharacterEllipsis">
-                            <TextBlock.Style>
-                                <Style TargetType="TextBlock">
-                                    <Setter Property="Text" Value=""/>
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding HasKaraoke}" Value="False">
-                                            <Setter Property="Text" Value="no karaoke stem in this file"/>
-                                        </DataTrigger>
-                                        <!-- An unloaded deck is empty, not stemless. -->
-                                        <DataTrigger Binding="{Binding IsLoaded}" Value="False">
-                                            <Setter Property="Text" Value=""/>
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </TextBlock.Style>
-                        </TextBlock>
+                        </Grid>
                     </Border>
 
                     <!-- Cue bank: eight saved pads plus the quick cue in one
