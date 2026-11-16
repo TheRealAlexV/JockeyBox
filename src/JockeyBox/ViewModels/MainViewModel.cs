@@ -153,8 +153,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
         DeckB = new DeckViewModel("DECK B", PlaybackDeck.B, channelB, _transport, PersistDeckSettings,
             id => id != null && _settings.DeviceDelays.TryGetValue(id, out var d) ? d : 0,
             (id, delay) => { if (id != null) _settings.DeviceDelays[id] = delay; });
-        DeckA.RestoreSettings(_settings.DeckADeviceId, _settings.DeckADelayMs, _settings.DeckAVolume);
-        DeckB.RestoreSettings(_settings.DeckBDeviceId, _settings.DeckBDelayMs, _settings.DeckBVolume);
+        DeckA.RestoreSettings(_settings.DeckADeviceId, _settings.DeckADelayMs, _settings.DeckAVolume,
+            _settings.DeckAOutputDelayMs);
+        DeckB.RestoreSettings(_settings.DeckBDeviceId, _settings.DeckBDelayMs, _settings.DeckBVolume,
+            _settings.DeckBOutputDelayMs);
         SyncDeckActivation();
         RefreshDevices();
 
@@ -4459,6 +4461,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _settings.DeckBDeviceId = DeckB.SelectedDevice?.Id;
         _settings.DeckADelayMs = DeckA.DelayMs;
         _settings.DeckBDelayMs = DeckB.DelayMs;
+        _settings.DeckAOutputDelayMs = DeckA.OutputDelayMs;
+        _settings.DeckBOutputDelayMs = DeckB.OutputDelayMs;
         _settings.DeckAVolume = DeckA.Volume;
         _settings.DeckBVolume = DeckB.Volume;
         _settings.Save();

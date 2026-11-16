@@ -418,6 +418,34 @@ internal static class UiShot
         }
 
 
+        // --uishot-both-decks <title>: the same track's original on both decks, which
+        // is the only state where both cards draw the karaoke strip's stem trim.
+        // --uishot-pair cannot produce it (its deck A holds the karaoke render, which
+        // has no sub-stem), and equal card heights only mean something at the worse
+        // of the two states.
+        if (Harness.Flag(args, "--uishot-both-decks") is { } bothTitle
+            && window.DataContext is MainViewModel bothVm)
+        {
+            var bothHit = bothVm.Tracks.FirstOrDefault(t =>
+                t.Title.Contains(bothTitle.Trim(), StringComparison.OrdinalIgnoreCase));
+            if (bothHit is null)
+            {
+                Console.Error.WriteLine($"uishot: no library track titled '{bothTitle}'");
+                Console.Error.Flush();
+                window.Close();
+                return 2;
+            }
+
+            bothVm.StartBothDecksForCapture(bothHit);
+            bool bothLoaded = UiPump.PumpUntil(() => bothVm.DeckA.IsLoaded && bothVm.DeckB.IsLoaded, 30000);
+            UiPump.Pump(Harness.QuietMs);
+            Console.Out.WriteLine(
+                $"uishot: both-decks \"{bothHit.Title}\" loaded={bothLoaded} " +
+                $"A=\"{bothVm.DeckA.Title}\" (IsLoaded={bothVm.DeckA.IsLoaded} HasKaraoke={bothVm.DeckA.HasKaraoke}) " +
+                $"B=\"{bothVm.DeckB.Title}\" (IsLoaded={bothVm.DeckB.IsLoaded} HasKaraoke={bothVm.DeckB.HasKaraoke})");
+            Console.Out.Flush();
+        }
+
         // window rules - one instance however often it is asked for, and no
         // survivor once the main window closes. A capture cannot show this: the
         // pop-out is a second HWND and only one window is ever in the bitmap.

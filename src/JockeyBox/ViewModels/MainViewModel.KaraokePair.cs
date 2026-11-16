@@ -103,6 +103,19 @@ public partial class MainViewModel
     /// </summary>
     internal void StartKaraokePairForCapture(TrackEntry track) => LoadKaraokePair(track);
 
+    /// <summary>
+    /// Selftest only: the same original on both decks, so a capture can photograph
+    /// the worst case for the deck cards - two cards that each hold a karaoke stem
+    /// and therefore both draw the strip's stem trim. The pair cannot stand in for
+    /// it: Deck A takes the karaoke render, which is the sub-stem itself and so
+    /// reports no stem of its own.
+    /// </summary>
+    internal void StartBothDecksForCapture(TrackEntry track)
+    {
+        LoadTrack(track, targetDeck: PlaybackDeck.A, activate: false);
+        LoadTrack(track, targetDeck: PlaybackDeck.B, activate: false);
+    }
+
     // ---- menu actions -------------------------------------------------------
     // Both resolve their row exactly like "Play": the tree selection, no command
     // parameter. The commands stay present (the rows are always drawn where a pair

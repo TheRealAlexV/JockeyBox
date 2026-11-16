@@ -157,6 +157,16 @@ public partial class App : Application
             return;
         }
 
+        // --null-render: offline render of both decks straight to raw float32, so a
+        // 0 ms build can be diffed against another build sample for sample.
+        if (NullRender.Requested(e.Args))
+        {
+            int nullExit = NullRender.Run(e.Args);
+            Console.Out.Flush();
+            Shutdown(nullExit);
+            return;
+        }
+
         if (SelftestRequested(e.Args))
         {
             int exitCode = SelftestRunner.Run(Console.Out, verbose: HasFlag(e.Args, "--selftest-verbose"));
