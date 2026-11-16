@@ -45,6 +45,9 @@ public partial class App : Application
             return;
         }
 
+        // Diagnostic only: no-op unless JOCKEYBOX_STALL_WATCH names a CSV path.
+        Tools.StallWatch.Start();
+
         // The per-second audio trace is opt-in (a normal launch leaves it off: one
         // line a second is 86 000 lines a day). The headless probes were built on
         // it - --audiotrace prints it by design, the capture modes and the selftest
@@ -279,6 +282,24 @@ public partial class App : Application
             return;
         }
 
+        // --stall-run: the same real window, playing through the real device with a
+        // scan running, so the stall watchdog has a workload (diagnostic build only).
+        if (StallRun.Requested(e.Args))
+        {
+            int stallExit = 1;
+            try
+            {
+                Data.LibraryBoot.Boot();
+                stallExit = StallRun.Run(e.Args);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine("stall-run failed: " + ex);
+            }
+            Shutdown(stallExit);
+            return;
+        }
+
         DispatcherUnhandledException += OnUnhandledException;
 
         // Library database comes up before the window exists: every view model
@@ -312,6 +333,8 @@ public partial class App : Application
     /// </summary>
     protected override void OnExit(ExitEventArgs e)
     {
+        Tools.StallWatch.Stop();
+
         try
         {
             var stores = Sources.PlaylistStore.FlushAll();
