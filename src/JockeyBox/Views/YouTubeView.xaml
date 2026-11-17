@@ -428,7 +428,7 @@
                                  Background="Transparent" BorderThickness="0"
                                  ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                  VirtualizingPanel.IsVirtualizing="True"
-                                 VirtualizingPanel.VirtualizationMode="Standard"
+                                 VirtualizingPanel.VirtualizationMode="Recycling"
                                  MouseDoubleClick="OnResultDoubleClick"
                                  PreviewMouseRightButtonDown="OnResultRightClick"
                                  KeyDown="OnResultKeyDown"

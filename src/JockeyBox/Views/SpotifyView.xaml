@@ -443,7 +443,7 @@
                                   Background="Transparent" BorderThickness="0"
                                   ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                   VirtualizingPanel.IsVirtualizing="True"
-                                  VirtualizingPanel.VirtualizationMode="Standard"
+                                  VirtualizingPanel.VirtualizationMode="Recycling"
                                   MouseDoubleClick="OnTrackDoubleClick"
                                   PreviewMouseRightButtonDown="OnTrackRightClick"
                                   KeyDown="OnTrackKeyDown"

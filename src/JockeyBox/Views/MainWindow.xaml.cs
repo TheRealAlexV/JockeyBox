@@ -89,6 +89,12 @@ public partial class MainWindow : Window
         // from a partial beside MainViewModel; its constructor belongs to another
         // lane, so the window is what calls the init hook.
         Loaded += (_, _) => _vm.InitializeDeckUi();
+
+        // Bound what the browser row can measure (see OnShellLayoutChanged). The
+        // shell scrolls, so its content is measured at infinite height; that is what
+        // turned the track table into a list that realized every row. Writes only when
+        // the cap it computes changes, so it settles after one extra layout pass.
+        LayoutUpdated += OnShellLayoutChanged;
         _vm.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName == nameof(MainViewModel.IsPlaying)) UpdatePlayGlyph();
@@ -146,6 +152,47 @@ public partial class MainWindow : Window
 
         Closed += (_, _) => CloseLyricsWindow();
         Closed += (_, _) => CloseViewModel();
+    }
+
+    /// <summary>Last cap written to <see cref="BrowserHost"/>, so a layout pass that
+    /// recomputes the same number does not touch the element.</summary>
+    private double _browserMaxHeight = double.NaN;
+
+    /// <summary>
+    /// Cap the browser row's height at the band the shell can actually give it.
+    ///
+    /// <para><b>Why.</b> <c>ShellScroll</c> measures its content at infinite height,
+    /// and under that constraint every star row degrades to a content-sized one - so
+    /// the browser row handed its track table no viewport at all. A virtualizing
+    /// panel with no viewport realizes a container for every item, which is the
+    /// freeze: 4 150 rows of ~15 elements and ~10 bindings each, measured and
+    /// arranged in one layout pass. Measured at 1518x900 before this: 4 150
+    /// containers, <c>ShellScroll</c> extent 117 181 px against an 876 px
+    /// viewport.</para>
+    ///
+    /// <para>A <see cref="FrameworkElement.MaxHeight"/> on the browser host, rather
+    /// than a fixed row height, is the smallest thing that restores a finite
+    /// measure: the row stays <c>3*</c>, so the splitter keeps working and the
+    /// browser still takes the larger share of the free band next to the waveform.
+    /// The cap only has to be an upper bound, and it comes from the viewport minus
+    /// the fixed rows, so when the fixed content genuinely does not fit the browser
+    /// gives up space and the shell scrolls instead of growing its extent by a whole
+    /// list.</para>
+    /// </summary>
+    private void OnShellLayoutChanged(object? sender, EventArgs e)
+    {
+        var rows = ShellGrid.RowDefinitions;
+        if (rows.Count < 7) return;
+
+        // Rows 2 (waveform) and 4 (browser) are the elastic pair. Everything else
+        // is a height the browser cannot take, so it is what the cap is built from.
+        double fixedHeight = rows[0].ActualHeight + rows[1].ActualHeight
+            + rows[3].ActualHeight + rows[5].ActualHeight + rows[6].ActualHeight;
+        double cap = Math.Max(180, ShellScroll.ViewportHeight - fixedHeight - rows[2].MinHeight);
+
+        if (Math.Abs(cap - _browserMaxHeight) < 0.5) return;
+        _browserMaxHeight = cap;
+        BrowserHost.MaxHeight = cap;
     }
 
     /// <summary>The single pop-out lyrics window, if one is open.</summary>

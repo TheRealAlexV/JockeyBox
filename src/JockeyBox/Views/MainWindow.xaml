@@ -1035,7 +1035,8 @@
     <ScrollViewer x:Name="ShellScroll" Padding="12" Focusable="False"
                   VerticalScrollBarVisibility="Auto"
                   HorizontalScrollBarVisibility="Disabled">
-    <Grid MinHeight="{Binding ViewportHeight, ElementName=ShellScroll}">
+    <Grid x:Name="ShellGrid"
+          MinHeight="{Binding ViewportHeight, ElementName=ShellScroll}">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>   <!-- header -->
             <RowDefinition Height="Auto"/>   <!-- deck block: cards, transport, crossfader (never clipped) -->
@@ -1774,7 +1775,7 @@
         <GridSplitter Grid.Row="3" Height="6" Style="{StaticResource RowSplitter}"/>
 
         <!-- ================= Browser + Lyrics ================= -->
-        <Grid Grid.Row="4">
+        <Grid Grid.Row="4" x:Name="BrowserHost">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="3*"/>
                 <ColumnDefinition Width="12"/>
