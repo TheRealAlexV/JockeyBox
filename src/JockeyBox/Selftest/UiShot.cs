@@ -1400,6 +1400,9 @@ internal static class UiShot
             if (element is not (ListBox or TreeView)) continue;
             var name = string.IsNullOrEmpty(element.Name) ? element.GetType().Name : element.Name;
             Console.Out.WriteLine($"uishot: list {name} {element.ActualWidth:0.0}x{element.ActualHeight:0.0} px");
+            // The row chain says which row starved the list. Without it, "the list is
+            // 0 px tall" is a symptom with no owner.
+            DumpRowChain(element);
         }
 
         Console.Out.Flush();
@@ -1434,7 +1437,9 @@ internal static class UiShot
                 rows.Append($"  [{i}] {def.Height} -> {taken:0.0}");
             }
 
-            Console.Out.WriteLine($"uishot:   grid rows:{rows}");
+            Console.Out.WriteLine($"uishot:   grid rows:{rows}"
+                + (double.IsPositiveInfinity(grid.MaxHeight) ? "" : $" max {grid.MaxHeight:0.0}")
+                + (grid.Name.Length > 0 ? $" ({grid.Name})" : ""));
         }
     }
 
