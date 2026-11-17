@@ -743,6 +743,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
                 await Task.Run(() => AnalysisBackfill.Run(gridStore, _tagCache, db), ct);
             }
 
+            // Breadcrumb: this is the synchronous half of the scan - thousands of
+            // rows rebuilt on the UI thread. No await follows it, so the scope ends
+            // with the method.
+            using var crumb = UiBreadcrumb.Enter("library scan: apply the scan result");
+
             _separation.RebindEntries(list);
 
             // Suppress the per-row invalidation: 5,000 rows would bump the
@@ -1259,6 +1264,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         }
 
         // Miss: show a busy state rather than a half-built list.
+        // Breadcrumb: the watchdog names this if the rebuild wedges the UI thread.
+        using var crumb = UiBreadcrumb.Enter("playlist select: rebuild the browser list");
         UnfreezeMembership();
         IsPlaylistLoading = true;
         StatusText = $"Loading {playlist.Name}\u2026";
@@ -4286,6 +4293,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void OnUiTick()
     {
+        // The UI watchdog's heartbeat: one timestamp store, ~20 ns. Every tick that
+        // reaches here is what tells the watchdog the UI thread is still moving.
+        UiBreadcrumb.NoteUiTick();
+
         // The active deck's playhead drives the shared seek bar and lyric clock;
         // each deck card reads its own playhead independently.
         DeckA.UpdateReadout();

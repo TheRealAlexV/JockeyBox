@@ -981,6 +981,10 @@ public partial class SpotifyViewModel : ObservableObject
             CancelTrackLoad();
             _tracksOwnerId = null;
             StatusText = "Loading account\u2026";
+
+            // Breadcrumb: opening the Spotify tab runs this. If the account or
+            // playlist fetch wedges the UI thread, the watchdog names it.
+            using var crumb = UiBreadcrumb.Enter("spotify tab: load account and playlists");
             var user = await _api.GetCurrentUserAsync(CancellationToken.None).ConfigureAwait(true);
             if (user != null)
                 AccountName = string.IsNullOrWhiteSpace(user.DisplayName) ? user.Id : user.DisplayName;

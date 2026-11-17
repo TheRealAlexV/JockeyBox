@@ -31,6 +31,43 @@ public static class Log
 
     public static void Debug(string message) => Write("DEBUG", message);
 
+    /// <summary>
+    /// A line that must not queue behind a gate some other thread may hold: tries
+    /// the gate for <paramref name="timeoutMs"/> and gives up. Only the UI stall
+    /// watchdog uses it - if the UI thread wedged while holding the gate, waiting
+    /// here would join the stall instead of ending it. Deliberately silent:
+    /// <see cref="LineWritten"/> listeners live on the UI thread.
+    /// </summary>
+    public static bool TryInfo(string message, int timeoutMs = 200)
+    {
+        var line = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} [INFO ] {message}";
+        var taken = false;
+        try
+        {
+            Monitor.TryEnter(Gate, timeoutMs, ref taken);
+            if (!taken) return false;
+
+            Directory.CreateDirectory(DirectoryPath);
+            var info = new FileInfo(FilePath);
+            if (info.Exists && info.Length > MaxBytes)
+            {
+                var previous = FilePath + ".1";
+                if (File.Exists(previous)) File.Delete(previous);
+                File.Move(FilePath, previous);
+            }
+            File.AppendAllText(FilePath, line + Environment.NewLine, Encoding.UTF8);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+        finally
+        {
+            if (taken) Monitor.Exit(Gate);
+        }
+    }
+
     private static void Write(string level, string message)
     {
         var line = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} [{level}] {message}";

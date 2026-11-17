@@ -1006,6 +1006,9 @@ public class PlaylistStore : IDisposable
     /// </summary>
     public void Flush()
     {
+        // Breadcrumb: a store flush can sit on a locked file or a slow disk. The
+        // watchdog reports which operation was flushing when the UI thread stops.
+        using var crumb = UiBreadcrumb.Enter("playlist store: flush to disk");
         FlushJsonMirror();
 
         WriteQueue? queue;

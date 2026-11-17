@@ -697,6 +697,11 @@ public partial class SettingsWindow : Window
             _settings.LyricsOffsetMs = Math.Clamp(offset, -10000, 10000);
         _settings.SpotifyClientIdOverride = SpotifyClientIdBox.Text.Trim();
 
+        // Breadcrumb: the save merges against disk state and writes the file on the
+        // UI thread. If that write wedges (a locked or slow profile dir), the
+        // watchdog names this operation instead of a generic stall.
+        using var crumb = UiBreadcrumb.Enter("settings save: merge and write settings");
+
         // 2.0 audio routing: a None entry writes null, never "" - the settings
         // doc comments and the engine both read null as "this output is off".
         // Storing a route - including "None" - is what makes it the user's

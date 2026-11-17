@@ -138,6 +138,18 @@ public partial class App : Application
 
         Exit += (_, _) => Tools.SingleInstance.Release();
 
+        // --stall-ui <ms>: the UI watchdog's end-to-end proof. It blocks this (the
+        // UI) thread on purpose; the watchdog writes its report and terminates the
+        // process with Tools.UiWatchdog.ExitCode. Reaching the line after it means
+        // the net failed to fire, so the run reports 1.
+        if (StallUi.Requested(e.Args))
+        {
+            // Environment.Exit, not Shutdown: this path only runs when the watchdog
+            // did not fire, and nothing has been created that needs unwinding.
+            Environment.Exit(StallUi.Run(e.Args));
+            return;
+        }
+
         // --linger-check: close the main window exactly as its X does and exit 0
         // only when the process then ends by itself (see Selftest/LingerCheck.cs).
         // It arms the check and returns to the app's own message loop instead of
@@ -278,6 +290,11 @@ public partial class App : Application
             Shutdown(perfExit);
             return;
         }
+
+        // The safety net: a BelowNormal thread watches OnUiTick. Disabled by
+        // JOCKEYBOX_UI_WATCHDOG_MS=0; never started for a headless run (those do not
+        // tick the UI heartbeat and would be killed by their own long work).
+        Tools.UiWatchdog.Start();
 
         DispatcherUnhandledException += OnUnhandledException;
 
