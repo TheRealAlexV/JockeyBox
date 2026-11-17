@@ -90,10 +90,10 @@ public partial class MainWindow : Window
         // lane, so the window is what calls the init hook.
         Loaded += (_, _) => _vm.InitializeDeckUi();
 
-        // Bound what the browser row can measure (see OnShellLayoutChanged). The
-        // shell scrolls, so its content is measured at infinite height; that is what
-        // turned the track table into a list that realized every row. Writes only when
-        // the cap it computes changes, so it settles after one extra layout pass.
+        // Give the browser row a definite height (see OnShellLayoutChanged). The shell
+        // scrolls, so its content is measured at infinite height; that is what turned
+        // the track table into a list that realized every row. Writes only when the
+        // number it computes changes, so it settles after one extra layout pass.
         LayoutUpdated += OnShellLayoutChanged;
         _vm.PropertyChanged += (_, e) =>
         {
@@ -154,28 +154,33 @@ public partial class MainWindow : Window
         Closed += (_, _) => CloseViewModel();
     }
 
-    /// <summary>Last cap written to <see cref="BrowserHost"/>, so a layout pass that
-    /// recomputes the same number does not touch the element.</summary>
-    private double _browserMaxHeight = double.NaN;
+    /// <summary>Last height written to <see cref="BrowserHost"/>, so a layout pass
+    /// that recomputes the same number does not touch the element.</summary>
+    private double _browserHeight = double.NaN;
 
     /// <summary>
-    /// Cap the browser row's height at the band the shell can actually give it.
+    /// Give the browser row the height the shell can actually afford, so the track
+    /// table below it gets a finite viewport to virtualize against.
     ///
     /// <para><b>Why.</b> <c>ShellScroll</c> measures its content at infinite height,
-    /// and under that constraint every star row degrades to a content-sized one - so
-    /// the browser row handed its track table no viewport at all. A virtualizing
-    /// panel with no viewport realizes a container for every item, which is the
-    /// freeze: 4 150 rows of ~15 elements and ~10 bindings each, measured and
-    /// arranged in one layout pass. Measured at 1518x900 before this: 4 150
-    /// containers, <c>ShellScroll</c> extent 117 181 px against an 876 px
-    /// viewport.</para>
+    /// and under that constraint the star rows degrade to content-sized ones, so the
+    /// browser row handed its track table no viewport at all. A virtualizing panel with
+    /// no viewport realizes a container for every item: 4 150 rows of ~15 elements and
+    /// ~10 bindings each, measured and arranged in one layout pass. Measured on this
+    /// branch at 1518x900 before the change: 4 150 containers, <c>ShellScroll</c> extent
+    /// 117 181 px against an 876 px viewport.</para>
     ///
-    /// <para>The cap only has to be an upper bound on the measure - the row keeps its
-    /// <c>3*</c> weight, so on a normal window the star arrangement is what decides how
-    /// tall the browser actually is and this number never bites. It is derived from the
-    /// viewport alone, never from the rows it sizes, so it cannot chase its own
-    /// layout: the vertical scrollbar takes width, so the viewport height does not move
-    /// when the scrollbar appears or the extent changes.</para>
+    /// <para>A definite <see cref="FrameworkElement.Height"/> rather than a
+    /// <c>MaxHeight</c>: under an infinite measure a max still lets the row take its cap
+    /// as a <i>desired</i> height - 778 px of shell inside a 900 px window - and the
+    /// card's own Auto-plus-star pair went on handing the list a 0 px viewport. This
+    /// value is exactly what the star split would produce on a normal window, so the
+    /// vertical layout matches the shipped one, and it is definite at every depth below
+    /// the row, which is what the card's inner Grid needs to pass a viewport down.</para>
+    ///
+    /// <para>It is derived from the viewport and the fixed rows only, never from the
+    /// rows it sizes, so it cannot chase its own layout; it is written only when it
+    /// changes, so it settles after the first pass that has a viewport.</para>
     /// </summary>
     private void OnShellLayoutChanged(object? sender, EventArgs e)
     {
@@ -197,8 +202,8 @@ public partial class MainWindow : Window
         double cap = Math.Max(200,
             Math.Min(band * 0.75, band - rows[2].MinHeight));
 
-        if (Math.Abs(cap - _browserMaxHeight) < 0.5) return;
-        _browserMaxHeight = cap;
+        if (Math.Abs(cap - _browserHeight) < 0.5) return;
+        _browserHeight = cap;
         BrowserHost.Height = cap;
     }
 

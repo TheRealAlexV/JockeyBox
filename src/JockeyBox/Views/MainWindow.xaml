@@ -1775,13 +1775,13 @@
         <GridSplitter Grid.Row="3" Height="6" Style="{StaticResource RowSplitter}"/>
 
         <!-- ================= Browser + Lyrics ================= -->
-        <!-- MaxHeight is the finite measure this whole row needs, and 480 is only a
-             seed: the shell measures its content at infinite height, and under that
-             constraint a star row degrades to a content-sized one, which leaves the
+        <!-- The browser row needs a definite height, and 480 is only the seed for the
+             first pass. The shell measures its content at infinite height, and under
+             that constraint a star row degrades to a content-sized one, which leaves the
              tab's track list with no viewport to virtualize against (it realizes a
-             container for every row - 4 150 of them). The window raises this to its
-             viewport share on the first layout pass (OnShellLayoutChanged); the seed
-             is what keeps the very first pass, before a viewport exists, finite. -->
+             container for every row - 4 150 of them). The window replaces this with its
+             viewport share (OnShellLayoutChanged); the seed is what keeps the very first
+             pass, before a viewport exists, finite. -->
         <Grid Grid.Row="4" x:Name="BrowserHost" MinHeight="150" Height="480">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="3*"/>
