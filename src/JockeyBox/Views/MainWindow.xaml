@@ -1782,7 +1782,7 @@
              container for every row - 4 150 of them). The window raises this to its
              viewport share on the first layout pass (OnShellLayoutChanged); the seed
              is what keeps the very first pass, before a viewport exists, finite. -->
-        <Grid Grid.Row="4" x:Name="BrowserHost" MaxHeight="480">
+        <Grid Grid.Row="4" x:Name="BrowserHost" MinHeight="150" Height="480">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="3*"/>
                 <ColumnDefinition Width="12"/>

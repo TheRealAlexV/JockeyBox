@@ -1403,6 +1403,20 @@ internal static class UiShot
             // The row chain says which row starved the list. Without it, "the list is
             // 0 px tall" is a symptom with no owner.
             DumpRowChain(element);
+            // And the siblings in that row: a row is only ever tall because something
+            // in it asked for the height, so the desired sizes name the culprit.
+            if (element.Parent is Panel parent)
+            {
+                foreach (var sibling in parent.Children.OfType<FrameworkElement>())
+                {
+                    Console.Out.WriteLine(
+                        $"uishot:   row {Grid.GetRow(sibling)}" +
+                        $" {(sibling.Name.Length > 0 ? sibling.Name : sibling.GetType().Name)}" +
+                        $" desired {sibling.DesiredSize.Height:0.0}" +
+                        $" actual {sibling.ActualHeight:0.0}" +
+                        $" v {sibling.VerticalAlignment}");
+                }
+            }
         }
 
         Console.Out.Flush();
@@ -1434,7 +1448,20 @@ internal static class UiShot
                     taken = Math.Max(taken, child.ActualHeight);
                 }
 
-                rows.Append($"  [{i}] {def.Height} -> {taken:0.0}");
+                // Name the tallest child: "row 0 took 122 px" is only actionable if it
+                // also says which element took them.
+                string tallest = "";
+                double most = -1;
+                foreach (var child in grid.Children.OfType<FrameworkElement>())
+                {
+                    if (Grid.GetRow(child) != i || child.ActualHeight <= most) continue;
+                    most = child.ActualHeight;
+                    tallest = child.Name.Length > 0
+                        ? child.Name
+                        : child.GetType().Name;
+                }
+
+                rows.Append($"  [{i}] {def.Height} -> {taken:0.0} {tallest}");
             }
 
             Console.Out.WriteLine($"uishot:   grid rows:{rows}"

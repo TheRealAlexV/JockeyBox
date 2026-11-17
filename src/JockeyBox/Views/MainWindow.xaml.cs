@@ -179,11 +179,27 @@ public partial class MainWindow : Window
     /// </summary>
     private void OnShellLayoutChanged(object? sender, EventArgs e)
     {
-        double cap = Math.Max(320, ShellScroll.ViewportHeight * 0.8);
+        var rows = ShellGrid.RowDefinitions;
+        if (rows.Count < 8) return;
+
+        // Rows 2 (waveform) and 4 (browser) are the elastic pair, 1:3 in the XAML. The
+        // browser gets what the star split would give it: three quarters of the band, or
+        // the band minus the waveform's floor when that floor is the binding one. Every
+        // other row is a height the browser cannot have, so the band is the viewport
+        // minus them. Two px of slack keeps the content a hair under the viewport when
+        // it fits, so the scrollbar does not sit exactly on its threshold. The floor is
+        // what the browser keeps when the fixed rows have grown past the window: below
+        // it the shell scrolls, which is what the shell is for.
+        double fixedHeight = rows[0].ActualHeight + rows[1].ActualHeight
+            + rows[3].ActualHeight + rows[5].ActualHeight + rows[6].ActualHeight
+            + rows[7].ActualHeight;
+        double band = ShellScroll.ViewportHeight - fixedHeight - 2;
+        double cap = Math.Max(200,
+            Math.Min(band * 0.75, band - rows[2].MinHeight));
 
         if (Math.Abs(cap - _browserMaxHeight) < 0.5) return;
         _browserMaxHeight = cap;
-        BrowserHost.MaxHeight = cap;
+        BrowserHost.Height = cap;
     }
 
     /// <summary>The single pop-out lyrics window, if one is open.</summary>
