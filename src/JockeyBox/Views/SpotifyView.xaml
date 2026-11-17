@@ -443,7 +443,7 @@
                                   Background="Transparent" BorderThickness="0"
                                   ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                                   VirtualizingPanel.IsVirtualizing="True"
-                                  VirtualizingPanel.VirtualizationMode="Standard"
+                                  VirtualizingPanel.VirtualizationMode="Recycling"
                                   MouseDoubleClick="OnTrackDoubleClick"
                                   PreviewMouseRightButtonDown="OnTrackRightClick"
                                   KeyDown="OnTrackKeyDown"
@@ -451,15 +451,19 @@
                                   ContextMenu="{StaticResource TrackMenu}">
                         </ListView>
 
-                        <!-- Busy / empty / disconnected states, layered over the table -->
-                        <Border Background="{StaticResource PanelAltBrush}" Opacity="0.94" IsHitTestVisible="False"
+                        <!-- Busy / empty / disconnected states, layered over the table.
+                             Row 1 is the body: in row 0 they were competing with the
+                             column headers for an Auto row, and the disconnected
+                             prompt alone made that row 122 px tall - so the table body
+                             was handed a viewport of zero on a short browser band. -->
+                        <Border Grid.Row="1" Background="{StaticResource PanelAltBrush}" Opacity="0.94" IsHitTestVisible="False"
                                 Visibility="{Binding IsBusy, Converter={StaticResource BoolToVisibility}}">
                             <TextBlock Text="Loading&#x2026;" FontSize="12"
                                        Foreground="{StaticResource TextDimBrush}"
                                        HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Border>
 
-                        <TextBlock Text="Select a playlist on the left to see its tracks."
+                        <TextBlock Grid.Row="1" Text="Select a playlist on the left to see its tracks."
                                    FontSize="11" Foreground="{StaticResource TextDimBrush}"
                                    TextWrapping="Wrap" TextAlignment="Center" MaxWidth="260"
                                    HorizontalAlignment="Center" VerticalAlignment="Center">
@@ -481,7 +485,7 @@
                         </TextBlock>
 
                         <!-- Disconnected: an invitation, not a blank table -->
-                        <Border Background="{StaticResource PanelAltBrush}"
+                        <Border Grid.Row="1" Background="{StaticResource PanelAltBrush}"
                                 Visibility="{Binding IsLoggedIn, Converter={StaticResource InverseBoolToVisibility}}">
                             <StackPanel MaxWidth="330" VerticalAlignment="Center" HorizontalAlignment="Center">
                                 <TextBlock Text="Connect your Spotify account" FontSize="15" FontWeight="SemiBold"

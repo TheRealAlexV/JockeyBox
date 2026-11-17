@@ -1035,7 +1035,8 @@
     <ScrollViewer x:Name="ShellScroll" Padding="12" Focusable="False"
                   VerticalScrollBarVisibility="Auto"
                   HorizontalScrollBarVisibility="Disabled">
-    <Grid MinHeight="{Binding ViewportHeight, ElementName=ShellScroll}">
+    <Grid x:Name="ShellGrid"
+          MinHeight="{Binding ViewportHeight, ElementName=ShellScroll}">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>   <!-- header -->
             <RowDefinition Height="Auto"/>   <!-- deck block: cards, transport, crossfader (never clipped) -->
@@ -1774,7 +1775,14 @@
         <GridSplitter Grid.Row="3" Height="6" Style="{StaticResource RowSplitter}"/>
 
         <!-- ================= Browser + Lyrics ================= -->
-        <Grid Grid.Row="4">
+        <!-- The browser row needs a definite height, and 480 is only the seed for the
+             first pass. The shell measures its content at infinite height, and under
+             that constraint a star row degrades to a content-sized one, which leaves the
+             tab's track list with no viewport to virtualize against (it realizes a
+             container for every row - 4 150 of them). The window replaces this with its
+             viewport share (OnShellLayoutChanged); the seed is what keeps the very first
+             pass, before a viewport exists, finite. -->
+        <Grid Grid.Row="4" x:Name="BrowserHost" MinHeight="150" Height="480">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="3*"/>
                 <ColumnDefinition Width="12"/>

@@ -13,6 +13,7 @@ using JockeyBox.Activity;
 using JockeyBox.Downloads;
 using JockeyBox.Library;
 using JockeyBox.Playback;
+using JockeyBox.Sources;
 using JockeyBox.Tools;
 using JockeyBox.ViewModels;
 using JockeyBox.Views;
@@ -169,6 +170,36 @@ internal static class UiShot
         {
             foreach (var entry in StubSearchRows) rowsVm.YouTube.Results.Add(entry);
             rowsVm.YouTube.SelectedResult = rowsVm.YouTube.Results[0];
+        }
+
+        // --uishot-spotify-rows N: fill the Spotify tab's table with N synthetic
+        // rows. A virtualization claim needs a list long enough that realising all
+        // of it costs something; a hundred rows would hide the difference between a
+        // bounded viewport and an unbounded one. No API, no download, no ledger: the
+        // same SourceTrack objects the tab binds, replaced in one Reset.
+        if (Harness.Flag(args, "--uishot-spotify-rows") is { } spotifyRowsText
+            && window.DataContext is MainViewModel spotifyRowsVm
+            && int.TryParse(spotifyRowsText, NumberStyles.Integer, CultureInfo.InvariantCulture,
+                out int spotifyRows)
+            && spotifyRows > 0)
+        {
+            var seeded = new List<SourceTrack>(spotifyRows);
+            for (int i = 0; i < spotifyRows; i++)
+            {
+                seeded.Add(new SourceTrack
+                {
+                    Id = $"uishot-{i:D5}",
+                    Source = MediaSource.Spotify,
+                    Title = $"Synthetic Track {i + 1:D5}",
+                    Artist = "Virtualization Fixture",
+                    Album = "uishot",
+                    DurationMs = 180_000 + (i % 137) * 1000,
+                });
+            }
+
+            spotifyRowsVm.Spotify.Tracks.ReplaceAll(seeded);
+            Console.Out.WriteLine($"uishot: spotify rows seeded {spotifyRows}");
+            Console.Out.Flush();
         }
 
         // --uishot-activity: seed the console's JOBS list with the rows a karaoke
@@ -807,6 +838,12 @@ internal static class UiShot
         // rows fit" would be a guess rather than a measurement.
         if (Harness.Flag(args, "--uishot-measure") != null) MeasureTrackLists(host);
 
+        // Opt-in, and the only honest test of "is virtualization on": the flag in
+        // the XAML says what was asked for, not what the panel did. A virtualizing
+        // panel with a viewport realizes the rows that fit; one measured at infinite
+        // height realizes every row it was given, whatever its flags say.
+        if (Harness.Flag(args, "--uishot-realized") != null) ReportRealized(host);
+
         // Opt-in layout probe: the numbers a PNG cannot show. "The window grew" is a
         // statement about extents, not about drawn ink, and a scrollbar is a few dark
         // pixels at the edge of a capture. Printing viewport against extent says which
@@ -1313,6 +1350,36 @@ internal static class UiShot
             : element.GetType().Name;
     }
 
+    /// <summary>
+    /// One line per list: the containers its items panel actually realized against
+    /// the number of items it was handed.
+    ///
+    /// <para><b>Why.</b> "Virtualizing" is a wish until a viewport exists. The
+    /// items panel is the thing that materializes rows, so its child count is the
+    /// measurement; reading the attached property would only repeat the XAML back.
+    /// A 4 000-row table that reports 4 000 containers was never virtualized, and
+    /// that is a per-row cost paid inside one layout pass.</para>
+    /// </summary>
+    private static void ReportRealized(Visual root)
+    {
+        foreach (var element in Descendants<FrameworkElement>(root))
+        {
+            if (element is not (ListBox or TreeView)) continue;
+
+            string name = string.IsNullOrEmpty(element.Name) ? element.GetType().Name : element.Name;
+            int items = element is ItemsControl control ? control.Items.Count : -1;
+            Panel? panel = Descendants<Panel>(element).FirstOrDefault(p => p.IsItemsHost);
+            int realized = panel?.Children.Count ?? -1;
+
+            Console.Out.WriteLine(
+                $"uishot: realized {name} items {items} containers {realized}" +
+                $" panel {panel?.GetType().Name ?? "none"}" +
+                $" height {element.ActualHeight:0.0}");
+        }
+
+        Console.Out.Flush();
+    }
+
     private static void MeasureTrackLists(Visual root)    {
         const double rowPitch = 34;
 
@@ -1333,6 +1400,23 @@ internal static class UiShot
             if (element is not (ListBox or TreeView)) continue;
             var name = string.IsNullOrEmpty(element.Name) ? element.GetType().Name : element.Name;
             Console.Out.WriteLine($"uishot: list {name} {element.ActualWidth:0.0}x{element.ActualHeight:0.0} px");
+            // The row chain says which row starved the list. Without it, "the list is
+            // 0 px tall" is a symptom with no owner.
+            DumpRowChain(element);
+            // And the siblings in that row: a row is only ever tall because something
+            // in it asked for the height, so the desired sizes name the culprit.
+            if (element.Parent is Panel parent)
+            {
+                foreach (var sibling in parent.Children.OfType<FrameworkElement>())
+                {
+                    Console.Out.WriteLine(
+                        $"uishot:   row {Grid.GetRow(sibling)}" +
+                        $" {(sibling.Name.Length > 0 ? sibling.Name : sibling.GetType().Name)}" +
+                        $" desired {sibling.DesiredSize.Height:0.0}" +
+                        $" actual {sibling.ActualHeight:0.0}" +
+                        $" v {sibling.VerticalAlignment}");
+                }
+            }
         }
 
         Console.Out.Flush();
@@ -1364,10 +1448,25 @@ internal static class UiShot
                     taken = Math.Max(taken, child.ActualHeight);
                 }
 
-                rows.Append($"  [{i}] {def.Height} -> {taken:0.0}");
+                // Name the tallest child: "row 0 took 122 px" is only actionable if it
+                // also says which element took them.
+                string tallest = "";
+                double most = -1;
+                foreach (var child in grid.Children.OfType<FrameworkElement>())
+                {
+                    if (Grid.GetRow(child) != i || child.ActualHeight <= most) continue;
+                    most = child.ActualHeight;
+                    tallest = child.Name.Length > 0
+                        ? child.Name
+                        : child.GetType().Name;
+                }
+
+                rows.Append($"  [{i}] {def.Height} -> {taken:0.0} {tallest}");
             }
 
-            Console.Out.WriteLine($"uishot:   grid rows:{rows}");
+            Console.Out.WriteLine($"uishot:   grid rows:{rows}"
+                + (double.IsPositiveInfinity(grid.MaxHeight) ? "" : $" max {grid.MaxHeight:0.0}")
+                + (grid.Name.Length > 0 ? $" ({grid.Name})" : ""));
         }
     }
 
