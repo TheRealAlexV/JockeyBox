@@ -159,6 +159,19 @@ internal static class UiShot
         if (Harness.Flag(args, "--uishot-console") != null && window is MainWindow mainWindow)
             mainWindow.ConsoleToggle.IsChecked = true;
 
+        // --uishot-edit: the EDIT chip at SpotifyView.xaml:454 opens the strip that
+        // the card's height would otherwise fold away below 260. Set the same
+        // IsChecked the chip's ToggleButton sets, before the pump lays it out.
+        if (Harness.Flag(args, "--uishot-edit") != null && window is MainWindow editWindow
+            && editWindow.BrowserTabs.Items.OfType<TabItem>()
+                .FirstOrDefault(t => (t.Header as string) == "SPOTIFY")?.Content is SpotifyView spotifyView
+            && spotifyView.FindName("EditFoldToggle") is ToggleButton editToggle)
+        {
+            editToggle.IsChecked = true;
+            Console.Out.WriteLine($"uishot: edit fold opened {editToggle.IsChecked}");
+            Console.Out.Flush();
+        }
+
 
 
 
