@@ -97,6 +97,7 @@ dotnet publish "$PROJ" \
   /p:EnableWindowsTargeting=true \
   /p:PublishSingleFile=true \
   /p:IncludeNativeLibrariesForSelfExtract=true \
+  /p:IncludeAllContentForSelfExtract=true \
   -o "$OUT" \
   -v:m 2>&1 | tee "$PUBLISH_LOG"
 PUBLISH_RC=${PIPESTATUS[0]}

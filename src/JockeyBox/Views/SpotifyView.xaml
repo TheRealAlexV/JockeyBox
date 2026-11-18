@@ -608,19 +608,15 @@
                                     <Style TargetType="StackPanel">
                                         <Setter Property="VerticalAlignment" Value="Center"/>
                                         <Style.Triggers>
-                                            <!-- Strip open on a short card: with the copy gone
-                                                 the button would re-centre into the strip's band
-                                                 (683-715). Bottom-anchored it keeps the y it had
-                                                 under the copy, 730, with 15 px of air below the
-                                                 strip and 8 px above the card's inner edge. -->
-                                            <MultiDataTrigger>
-                                                <MultiDataTrigger.Conditions>
-                                                    <Condition Binding="{Binding ActualHeight, ElementName=TrackCard, Converter={StaticResource HeightBelow}, ConverterParameter=260}" Value="True"/>
-                                                    <Condition Binding="{Binding IsChecked, ElementName=EditFoldToggle}" Value="True"/>
-                                                </MultiDataTrigger.Conditions>
+                                            <!-- Short card: bottom-anchor the invitation, folded or
+                                                 strip-open. Folded used to centre (11.1 px slack) while
+                                                 strip-open bottom-anchored, so the Connect button
+                                                 drifted 3.1 px as the strip opened. One anchor for both
+                                                 states pins it at 732.8. Tall cards keep the centring. -->
+                                            <DataTrigger Binding="{Binding ActualHeight, ElementName=TrackCard, Converter={StaticResource HeightBelow}, ConverterParameter=260}" Value="True">
                                                 <Setter Property="VerticalAlignment" Value="Bottom"/>
                                                 <Setter Property="Margin" Value="0,0,0,8"/>
-                                            </MultiDataTrigger>
+                                            </DataTrigger>
                                         </Style.Triggers>
                                     </Style>
                                 </StackPanel.Style>
