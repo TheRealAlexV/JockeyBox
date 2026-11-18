@@ -135,3 +135,25 @@ public sealed class InverseBoolToVisibilityConverter : IValueConverter
     public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) =>
         throw new NotSupportedException();
 }
+
+/// <summary>
+/// True when a laid-out height is below the threshold carried in ConverterParameter.
+/// Used to ask a stretched card "are you short?" without a view-model property, so
+/// the fold follows the window instead of a saved setting.
+/// </summary>
+public sealed class HeightBelowConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+    {
+        if (value is not double height) return false;
+        double threshold = double.TryParse(parameter as string, NumberStyles.Number,
+            CultureInfo.InvariantCulture, out double parsed) ? parsed : 0;
+        // Zero means "not measured yet", not "no room": folding on that would make
+        // every card start folded, flip back on the first real arrange, and cost a
+        // second layout pass (the list panel realizes one row more on it).
+        return height > 0 && height < threshold;
+    }
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture) =>
+        throw new NotSupportedException();
+}

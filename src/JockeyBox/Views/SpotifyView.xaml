@@ -17,6 +17,7 @@
 
         <SolidColorBrush x:Key="ErrorBrush" Color="#E06C7A"/>
         <views:InverseBoolToVisibilityConverter x:Key="InverseBoolToVisibility"/>
+        <views:HeightBelowConverter x:Key="HeightBelow"/>
 
         <!-- Dim uppercase label used for every section head. -->
         <Style x:Key="SectionLabel" TargetType="TextBlock">
@@ -123,6 +124,59 @@
             <Style.Triggers>
                 <DataTrigger Binding="{Binding SelectedTrack}" Value="{x:Null}">
                     <Setter Property="IsEnabled" Value="False"/>
+                </DataTrigger>
+            </Style.Triggers>
+        </Style>
+
+        <!-- Folded edit strip toggle. Below roughly a 260 px card the row budget
+             cannot hold the section head, the filter row, the edit strip, the
+             column headers and even one track row at once; the edit strip is the
+             one piece that is used rarely and can fold, so it does, and this chip
+             is the way back to it. It rides in the 22 px filter row, so showing it
+             costs the list no height. Only visible while the card is short: at a
+             tall card the strip is already open and the chip would be noise. -->
+        <Style x:Key="EditFoldToggle" TargetType="ToggleButton">
+            <Setter Property="Height" Value="22"/>
+            <Setter Property="MinWidth" Value="40"/>
+            <Setter Property="FontSize" Value="9"/>
+            <Setter Property="FontWeight" Value="Bold"/>
+            <Setter Property="Padding" Value="6,0"/>
+            <Setter Property="Margin" Value="4,0,0,0"/>
+            <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Visibility" Value="Collapsed"/>
+            <Setter Property="ToolTip" Value="Edit this playlist"/>
+            <Setter Property="ToolTipService.InitialShowDelay" Value="300"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Border x:Name="shell" Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="3" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="shell" Property="BorderBrush" Value="{StaticResource AccentABrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="shell" Property="BorderBrush" Value="{StaticResource AccentABrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+                                <Setter TargetName="shell" Property="BorderBrush" Value="{StaticResource AccentABrush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+            <Style.Triggers>
+                <DataTrigger Binding="{Binding ActualHeight, ElementName=TrackCard, Converter={StaticResource HeightBelow}, ConverterParameter=260}" Value="True">
+                    <Setter Property="Visibility" Value="Visible"/>
                 </DataTrigger>
             </Style.Triggers>
         </Style>
@@ -317,8 +371,10 @@
             <GridSplitter Grid.Column="1" Style="{StaticResource PaneSplitter}"
                           ToolTip="Drag to resize the playlist rail"/>
 
-            <!-- Track table -->
-            <Border Grid.Column="2" Style="{StaticResource PaneCard}">
+            <!-- Track table. x:Name is the height probe for the fold below: the
+                 card is stretched by its star row, so its ActualHeight is the
+                 budget the list has to live inside. -->
+            <Border Grid.Column="2" Style="{StaticResource PaneCard}" x:Name="TrackCard">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
@@ -370,6 +426,7 @@
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
                         </Grid.ColumnDefinitions>
                         <!-- Shared filter + sort strip; its DataContext is a
                              TrackListView built in the code-behind so the filter
@@ -393,12 +450,31 @@
                                 Margin="4,0,0,0"
                                 Command="{Binding FindVersionsCommand}"
                                 ToolTip="Find YouTube versions of the selected track before downloading it"/>
+                        <!-- Way back to the edit strip when it is folded away. -->
+                        <ToggleButton Grid.Column="6" x:Name="EditFoldToggle" Content="EDIT"
+                                      Style="{StaticResource EditFoldToggle}"/>
                     </Grid>
 
                     <!-- Playlist editing strip. Writes need playlist-modify-*: when the
                          grant is read-only these are disabled and Re-authorize shows
-                         instead. WrapPanel keeps it on one line until the pane is narrow. -->
+                         instead. WrapPanel keeps it on one line until the pane is narrow.
+                         Folds away instead of squeezing the list shut: at a short card
+                         this row plus the idle preview bar are the difference between
+                         zero track rows and three. -->
                     <WrapPanel Grid.Row="2" Margin="0,5,0,0" VerticalAlignment="Center">
+                        <WrapPanel.Style>
+                            <Style TargetType="WrapPanel">
+                                <Style.Triggers>
+                                    <MultiDataTrigger>
+                                        <MultiDataTrigger.Conditions>
+                                            <Condition Binding="{Binding ActualHeight, ElementName=TrackCard, Converter={StaticResource HeightBelow}, ConverterParameter=260}" Value="True"/>
+                                            <Condition Binding="{Binding IsChecked, ElementName=EditFoldToggle}" Value="False"/>
+                                        </MultiDataTrigger.Conditions>
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                    </MultiDataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </WrapPanel.Style>
                         <TextBlock Text="EDIT" Style="{StaticResource SectionLabel}" Margin="0,0,8,0"/>
                         <TextBox Width="150" Height="24" FontSize="11" Margin="0,0,4,0"
                                  VerticalContentAlignment="Center"
@@ -585,7 +661,38 @@
                     </Border>
 
                     <!-- Preview strip: position / seek / play-pause -->
-                    <views:PreviewBar Grid.Row="5" DataContext="{Binding Preview}"/>
+                    <!-- Idle, at a short card, the transport is 32 px of disabled chrome
+                         sitting under a list that has no room for a row, so it folds away
+                         and comes back the moment there is something to transport. The
+                         wrapper carries the fold: a Style on the bar itself would replace
+                         its implicit style and cost the list a measure pass. -->
+                    <Grid Grid.Row="5">
+                        <Grid.Style>
+                            <Style TargetType="Grid">
+                                <Style.Triggers>
+                                    <MultiDataTrigger>
+                                        <MultiDataTrigger.Conditions>
+                                            <Condition Binding="{Binding ActualHeight, ElementName=TrackCard, Converter={StaticResource HeightBelow}, ConverterParameter=260}" Value="True"/>
+                                            <Condition Binding="{Binding Preview.IsAvailable}" Value="False"/>
+                                        </MultiDataTrigger.Conditions>
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                    </MultiDataTrigger>
+                                    <!-- Short card, edit strip open: the strip and the
+                                         transport are both 32 px of optional chrome and
+                                         only one of them fits, so the strip wins and the
+                                         transport comes back when the strip is folded. -->
+                                    <MultiDataTrigger>
+                                        <MultiDataTrigger.Conditions>
+                                            <Condition Binding="{Binding ActualHeight, ElementName=TrackCard, Converter={StaticResource HeightBelow}, ConverterParameter=260}" Value="True"/>
+                                            <Condition Binding="{Binding IsChecked, ElementName=EditFoldToggle}" Value="True"/>
+                                        </MultiDataTrigger.Conditions>
+                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                    </MultiDataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Grid.Style>
+                        <views:PreviewBar DataContext="{Binding Preview}"/>
+                    </Grid>
 
                     <!-- Status line (the disconnected card already carries the status) -->
                     <TextBlock Grid.Row="6" Text="{Binding StatusText}" Height="16" Margin="0,4,2,0"
