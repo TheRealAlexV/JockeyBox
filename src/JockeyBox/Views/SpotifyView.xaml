@@ -461,10 +461,25 @@
                          Folds away instead of squeezing the list shut: at a short card
                          this row plus the idle preview bar are the difference between
                          zero track rows and three. -->
-                    <WrapPanel Grid.Row="2" Margin="0,5,0,0" VerticalAlignment="Center">
+                    <WrapPanel Margin="0,5,0,0">
                         <WrapPanel.Style>
                             <Style TargetType="WrapPanel">
+                                <Setter Property="Grid.Row" Value="2"/>
+                                <Setter Property="VerticalAlignment" Value="Center"/>
                                 <Style.Triggers>
+                                    <!-- Short card: there is no Auto row to spare, so the
+                                         strip rides over the top of the table instead of
+                                         pushing it down. At a 120 px card it was buying its
+                                         37 px out of the one star row, taking the body from
+                                         58 px to 21 px and pushing the empty state out
+                                         through the bottom border. Same controls, same
+                                         place, no height taken. -->
+                                    <DataTrigger Binding="{Binding ActualHeight, ElementName=TrackCard, Converter={StaticResource HeightBelow}, ConverterParameter=260}" Value="True">
+                                        <Setter Property="Grid.Row" Value="3"/>
+                                        <Setter Property="VerticalAlignment" Value="Top"/>
+                                        <Setter Property="Panel.ZIndex" Value="20"/>
+                                        <Setter Property="Background" Value="{StaticResource PanelAltBrush}"/>
+                                    </DataTrigger>
                                     <MultiDataTrigger>
                                         <MultiDataTrigger.Conditions>
                                             <Condition Binding="{Binding ActualHeight, ElementName=TrackCard, Converter={StaticResource HeightBelow}, ConverterParameter=260}" Value="True"/>
@@ -511,8 +526,28 @@
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
                         </Grid.RowDefinitions>
-                        <ContentControl Grid.Row="0" Content="{StaticResource TrackColumnHeaders}"
-                                        Focusable="False" IsTabStop="False"/>
+                        <!-- Short, disconnected: this row labels the columns of a table with
+                             no rows, and it is the 26 px that made the card's own rows sit
+                             15.7 px outside a 120.4 px card. The wrapper carries the fold so
+                             the ContentControl keeps its own style, the way the preview strip
+                             below does it. -->
+                        <Grid Grid.Row="0">
+                            <Grid.Style>
+                                <Style TargetType="Grid">
+                                    <Style.Triggers>
+                                        <MultiDataTrigger>
+                                            <MultiDataTrigger.Conditions>
+                                                <Condition Binding="{Binding ActualHeight, ElementName=TrackCard, Converter={StaticResource HeightBelow}, ConverterParameter=260}" Value="True"/>
+                                                <Condition Binding="{Binding IsLoggedIn}" Value="False"/>
+                                            </MultiDataTrigger.Conditions>
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                        </MultiDataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Grid.Style>
+                            <ContentControl Content="{StaticResource TrackColumnHeaders}"
+                                            Focusable="False" IsTabStop="False"/>
+                        </Grid>
                         <ListView Grid.Row="1" x:Name="TrackList" ItemsSource="{Binding TracksView}"
                                   SelectedItem="{Binding SelectedTrack}"
                                   ItemContainerStyle="{StaticResource TrackRow}"
@@ -560,20 +595,60 @@
                             </TextBlock.Style>
                         </TextBlock>
 
-                        <!-- Disconnected: an invitation, not a blank table -->
+                        <!-- Disconnected: an invitation, not a blank table. Headline, one
+                             line, the button. It used to carry four pieces of prose (the
+                             same "not connected, press this" three ways) and measured 122 px
+                             inside a 108 px card, so its bottom half lived outside the card.
+                             The status line it gave up still reaches the user through the
+                             button's tooltip; it needs 26 px of card to have a row again. -->
                         <Border Grid.Row="1" Background="{StaticResource PanelAltBrush}"
                                 Visibility="{Binding IsLoggedIn, Converter={StaticResource InverseBoolToVisibility}}">
-                            <StackPanel MaxWidth="330" VerticalAlignment="Center" HorizontalAlignment="Center">
-                                <TextBlock Text="Connect your Spotify account" FontSize="15" FontWeight="SemiBold"
-                                           TextAlignment="Center"/>
-                                <TextBlock Text="Pick a playlist, download it, and JockeyBox keeps it in your library. Tracks you already own are skipped."
-                                           FontSize="12" TextWrapping="Wrap" TextAlignment="Center"
-                                           Foreground="{StaticResource TextDimBrush}" Margin="0,6,0,12"/>
+                            <StackPanel MaxWidth="330" HorizontalAlignment="Center">
+                                <StackPanel.Style>
+                                    <Style TargetType="StackPanel">
+                                        <Setter Property="VerticalAlignment" Value="Center"/>
+                                        <Style.Triggers>
+                                            <!-- Strip open on a short card: with the copy gone
+                                                 the button would re-centre into the strip's band
+                                                 (683-715). Bottom-anchored it keeps the y it had
+                                                 under the copy, 730, with 15 px of air below the
+                                                 strip and 8 px above the card's inner edge. -->
+                                            <MultiDataTrigger>
+                                                <MultiDataTrigger.Conditions>
+                                                    <Condition Binding="{Binding ActualHeight, ElementName=TrackCard, Converter={StaticResource HeightBelow}, ConverterParameter=260}" Value="True"/>
+                                                    <Condition Binding="{Binding IsChecked, ElementName=EditFoldToggle}" Value="True"/>
+                                                </MultiDataTrigger.Conditions>
+                                                <Setter Property="VerticalAlignment" Value="Bottom"/>
+                                                <Setter Property="Margin" Value="0,0,0,8"/>
+                                            </MultiDataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </StackPanel.Style>
+                                <!-- Mid-edit there is nothing to invite: the strip is the task.
+                                     The button alone still says what it does. -->
+                                <StackPanel x:Name="InvitationCopy">
+                                    <StackPanel.Style>
+                                        <Style TargetType="StackPanel">
+                                            <Style.Triggers>
+                                                <MultiDataTrigger>
+                                                    <MultiDataTrigger.Conditions>
+                                                        <Condition Binding="{Binding ActualHeight, ElementName=TrackCard, Converter={StaticResource HeightBelow}, ConverterParameter=260}" Value="True"/>
+                                                        <Condition Binding="{Binding IsChecked, ElementName=EditFoldToggle}" Value="True"/>
+                                                    </MultiDataTrigger.Conditions>
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                </MultiDataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </StackPanel.Style>
+                                    <TextBlock Text="Connect your Spotify account" FontSize="15" FontWeight="SemiBold"
+                                               TextAlignment="Center"/>
+                                    <TextBlock Text="Loads playlists; tracks you already own are skipped."
+                                               FontSize="12" TextWrapping="Wrap" TextAlignment="Center"
+                                               Foreground="{StaticResource TextDimBrush}" Margin="0,2,0,2"/>
+                                </StackPanel>
                                 <Button Content="{Binding ConnectLabel}" Command="{Binding ConnectCommand}"
-                                        HorizontalAlignment="Center" Padding="16,5"/>
-                                <TextBlock Text="{Binding StatusText}" FontSize="11" TextWrapping="Wrap"
-                                           TextAlignment="Center" Foreground="{StaticResource TextDimBrush}"
-                                           Margin="0,10,0,0"/>
+                                        HorizontalAlignment="Center" Padding="16,5"
+                                        ToolTip="{Binding StatusText}"/>
                             </StackPanel>
                         </Border>
                     </Grid>

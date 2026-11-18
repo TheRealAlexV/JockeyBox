@@ -5,6 +5,8 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Windows;
+using System.Windows.Automation.Peers;
+using System.Windows.Automation.Provider;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Media;
@@ -518,6 +520,70 @@ internal static class UiShot
         if (Harness.Flag(args, "--uishot-expand") != null && window.DataContext is MainViewModel expandVm)
             foreach (var root in expandVm.BrowserRoots) ExpandFolders(root);
 
+        // Opt-in: the playlist edit strip is folded away on a card that has not been
+        // opened for editing, so a Spotify capture shows the list and never the strip.
+        // Opening it before the render goes through the toggle's own click path: a
+        // routed RaiseEvent(ButtonBase.ClickEvent) never reaches ToggleButton.OnClick,
+        // and assigning IsChecked skips the style triggers that read that same
+        // property, so either shortcut photographs the folded state and reads as a
+        // product bug. SpotifyView carries no x:Name in MainWindow, so the view is
+        // reached by walking the visual tree, the same way YouTubeView is.
+        if (Harness.Flag(args, "--uishot-spotify-edit") != null)
+        {
+            if (Descendants<SpotifyView>(window).FirstOrDefault() is not { } spotify)
+            {
+                Console.Error.WriteLine(
+                    "uishot: spotify-edit MISSING SpotifyView, is the Spotify tab the one laid out?");
+                Console.Error.Flush();
+                window.Close();
+                return 6;
+            }
+
+            if (spotify.FindName("EditFoldToggle") is not ToggleButton edit)
+            {
+                Console.Error.WriteLine("uishot: spotify-edit MISSING EditFoldToggle in SpotifyView");
+                Console.Error.Flush();
+                window.Close();
+                return 6;
+            }
+
+            // In-process automation peer: this is an AutomationPeer object, not
+            // desktop UIA, so it calls OnClick with no input queue, no focus change
+            // and no logged-on session involved.
+            var editPeer = UIElementAutomationPeer.CreatePeerForElement(edit);
+            if (editPeer?.GetPattern(PatternInterface.Toggle) is not IToggleProvider editToggle)
+            {
+                Console.Error.WriteLine(
+                    $"uishot: spotify-edit MISSING IToggleProvider peer={editPeer?.GetType().Name ?? "null"}");
+                Console.Error.Flush();
+                window.Close();
+                return 6;
+            }
+
+            editToggle.Toggle();
+            UiPump.Pump(200);
+
+            // Evidence in text, so the open state does not depend on eyeballing the
+            // PNG: the strip is the WrapPanel nearest above the toggle, and it is
+            // that trigger, not the click, that decides whether it is on screen.
+            var card = spotify.FindName("TrackCard") as FrameworkElement;
+            WrapPanel? strip = null;
+            for (DependencyObject? cursor = edit; cursor is not null;
+                   cursor = VisualTreeHelper.GetParent(cursor))
+                if (Descendants<WrapPanel>(cursor).FirstOrDefault() is { } found)
+                {
+                    strip = found;
+                    break;
+                }
+
+            Console.Out.WriteLine(
+                "uishot: spotify-edit toggle=found pattern=IToggleProvider OnClick=ran "
+                + $"IsChecked={edit.IsChecked} "
+                + $"card-height={card?.ActualHeight.ToString("0.#", CultureInfo.InvariantCulture) ?? "n/a"} "
+                + $"strip={strip?.Visibility.ToString() ?? "n/a"}");
+            Console.Out.Flush();
+        }
+
         window.UpdateLayout();
         UiPump.Pump(200);
 
@@ -854,6 +920,13 @@ internal static class UiShot
         string? textDumpPath = Harness.Flag(args, "--uishot-textdump");
         if (!string.IsNullOrWhiteSpace(textDumpPath)) DumpTextBlocks(host, textDumpPath, identity);
 
+        // Opt-in, next to the text dump and for the same reason: a Border, a Grid or
+        // a panel carries no text, so the text dump cannot say where a card's frame
+        // sits and a PNG leaves it to the eye. Runs here, before the render, so the
+        // numbers are laid out - and the capture still renders afterwards.
+        string? treeDumpPath = Harness.Flag(args, "--uishot-tree");
+        if (!string.IsNullOrWhiteSpace(treeDumpPath)) DumpVisualTree(host, treeDumpPath);
+
         var bitmap = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
         bitmap.Render(host);
 
@@ -1055,13 +1128,125 @@ internal static class UiShot
         }
     }
 
+    /// <summary>
+    /// <c>--uishot-tree &lt;file&gt;</c> support: one tab-separated line per element of
+    /// the rendered visual tree, in tree order.
+    ///
+    /// <para>Columns: <c>depth</c>, <c>type</c>, <c>name</c> (or <c>-</c>), <c>WxH</c>,
+    /// <c>root-offset x,y</c>, <c>Visibility</c>, <c>ClipState</c>. A Border or a Grid
+    /// carries no text, so the text dump cannot show where a card frame sits, and two
+    /// readings of the same PNG have disagreed about exactly that. Same walk, same
+    /// root-origin space as the text dump and the same
+    /// <c>inside</c>/<c>clipped</c>/<c>hidden</c> vocabulary, so a frame line and the
+    /// text line it encloses compare directly.</para>
+    ///
+    /// <para><c>hidden</c> is not geometry: a collapsed subtree keeps the arrange
+    /// coordinates it had before whatever collapsed it, so it means "took no part in
+    /// layout", never "outside the window".</para>
+    /// </summary>
+    private static void DumpVisualTree(Visual? root, string path)
+    {
+        if (root == null) return;
+
+        var lines = new StringBuilder();
+        int total = 0;
+        int hidden = 0;
+
+        void Emit(int depth, DependencyObject node, string name, string size, string offset,
+            string visibility, string clip)
+        {
+            total++;
+            if (clip == "hidden") hidden++;
+            lines.Append(depth.ToString(CultureInfo.InvariantCulture)).Append('\t')
+                .Append(node.GetType().Name).Append('\t')
+                .Append(string.IsNullOrEmpty(name) ? "-" : name).Append('\t')
+                .Append(size).Append('\t')
+                .Append(offset).Append('\t')
+                .Append(visibility).Append('\t')
+                .Append(clip).Append('\n');
+        }
+
+        void Walk(DependencyObject? node, int depth)
+        {
+            if (node == null) return;
+
+            // Borders stay in on purpose: ClipToBounds is false by default, so a
+            // plain border clips nothing - its frame is the whole point here.
+            if (node is FrameworkElement element)
+            {
+                Emit(depth, element, element.Name,
+                    $"{OneDecimal(element.ActualWidth)}x{OneDecimal(element.ActualHeight)}",
+                    RootOffset(element, root), element.Visibility.ToString(), ClipState(element, root));
+            }
+            else if (node is FrameworkContentElement content)
+            {
+                // Content elements carry no measure and no Visibility of their own,
+                // and this walk does not reach one: both fields say so rather than
+                // inventing 0x0 and Visible.
+                Emit(depth, content, content.Name, "-", "-", "-", "unknown");
+            }
+
+            if (node is not Visual && node is not System.Windows.Media.Media3D.Visual3D) return;
+
+            int childCount;
+            try
+            {
+                childCount = VisualTreeHelper.GetChildrenCount(node);
+            }
+            catch (Exception)
+            {
+                // Not every DependencyObject is walkable as a visual.
+                return;
+            }
+
+            for (int i = 0; i < childCount; i++)
+            {
+                DependencyObject? child;
+                try
+                {
+                    child = VisualTreeHelper.GetChild(node, i);
+                }
+                catch (Exception)
+                {
+                    continue;
+                }
+                Walk(child, depth + 1);
+            }
+        }
+
+        Walk(root, 0);
+
+        string rootSize = root is FrameworkElement rootElement
+            ? $"{OneDecimal(rootElement.ActualWidth)}x{OneDecimal(rootElement.ActualHeight)}"
+            : "-";
+        lines.Append("summary\ttotal ").Append(total.ToString(CultureInfo.InvariantCulture))
+            .Append("\thidden ").Append(hidden.ToString(CultureInfo.InvariantCulture))
+            .Append("\troot ").Append(rootSize).Append('\n');
+
+        try
+        {
+            string? directory = Path.GetDirectoryName(Path.GetFullPath(path));
+            if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
+            File.WriteAllText(path, lines.ToString());
+            Console.Out.WriteLine(
+                $"uishot: tree {total} element(s), {hidden} hidden, root {rootSize} -> {path}");
+        }
+        catch (Exception ex)
+        {
+            // The dump is a diagnostic, not the product: a path that cannot be
+            // written must not abort the capture it was asked to explain.
+            Console.Error.WriteLine($"uishot: tree failed, capture continues - {path}: {ex.Message}");
+            Console.Error.Flush();
+        }
+    }
+
     /// <summary>Top-left of the element in the hosted root's coordinates, or <c>not-connected</c>.</summary>
-    private static string RootOffset(TextBlock textBlock, Visual? root)
+    private static string RootOffset(FrameworkElement element, Visual? root)
     {
         if (root == null) return "not-connected";
         try
         {
-            Point origin = textBlock.TransformToAncestor(root).Transform(new Point(0, 0));
+            Point origin = element.TransformToAncestor(root).Transform(new Point(0, 0));
             return $"{OneDecimal(origin.X)},{OneDecimal(origin.Y)}";
         }
         catch (Exception)
@@ -1089,24 +1274,24 @@ internal static class UiShot
     /// cut still reaches the <c>clipped</c> arm below and this exclusion cannot pass
     /// for a mute.</para>
     /// </summary>
-    private static string ClipState(TextBlock textBlock, Visual? root)
+    private static string ClipState(FrameworkElement target, Visual? root)
     {
         if (root is not FrameworkElement rootElement) return "unknown";
-        if (!LaidOut(textBlock, rootElement)) return "hidden";
+        if (!LaidOut(target, rootElement)) return "hidden";
 
         Rect region = new Rect(0, 0, rootElement.ActualWidth, rootElement.ActualHeight);
         Rect bounds;
         try
         {
-            Point origin = textBlock.TransformToAncestor(rootElement).Transform(new Point(0, 0));
-            bounds = new Rect(origin, new Size(textBlock.ActualWidth, textBlock.ActualHeight));
+            Point origin = target.TransformToAncestor(rootElement).Transform(new Point(0, 0));
+            bounds = new Rect(origin, new Size(target.ActualWidth, target.ActualHeight));
         }
         catch (Exception)
         {
             return "unknown";
         }
 
-        DependencyObject? current = VisualTreeHelper.GetParent(textBlock);
+        DependencyObject? current = VisualTreeHelper.GetParent(target);
         while (current != null)
         {
             if (current is FrameworkElement element && (element.ClipToBounds || element.Clip != null))
