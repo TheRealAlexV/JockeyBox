@@ -909,7 +909,16 @@ public sealed class PreviewStreamPlayer : IDisposable
 
             try
             {
-                Core.Initialize();
+                // Under PublishSingleFile, AppContext.BaseDirectory is the
+                // extraction directory, but KeepLibVlcPayloadLoose leaves
+                // libvlc\win-x64 beside the real exe, so libVLC has to be
+                // resolved from the process's own directory first.
+                var exeDir = Path.GetDirectoryName(Environment.ProcessPath);
+                var nativeDir = exeDir == null ? null : Path.Combine(exeDir, "libvlc", "win-x64");
+                if (nativeDir != null && Directory.Exists(nativeDir))
+                    Core.Initialize(nativeDir);
+                else
+                    Core.Initialize();
                 _vlc = new LibVLC(
                     "--no-video",
                     "--no-snapshot-preview",
