@@ -185,6 +185,82 @@ public sealed class KaraokePairTests
         }
     }
 
+    /// <summary>
+    /// The combination neither branch could test alone. The deck contract pins
+    /// each take to a resident reader (<c>takeStem</c>: Karaoke and Keep backing
+    /// share the instrumental reader, Vocals has its own) and the version label
+    /// follows that pin through <c>SelectHeldVersion</c>, which matches the
+    /// variant before the kind. A backing take rides the karaoke reader, so a
+    /// kind-only match labelled it "Karaoke".
+    ///
+    /// <para>The picker is the whole path, not just the pin: the take goes in as
+    /// the command's parameter, through <c>LoadKaraokePair</c>, and the deck must
+    /// come back reporting that same take as the one it selected. Three takes on
+    /// disk at once, because the bug needs both instrumental files present.</para>
+    /// </summary>
+    [Theory]
+    [InlineData(AudioVariant.Backing, "Keep backing")]
+    [InlineData(AudioVariant.Vocals, "Vocals")]
+    [InlineData(AudioVariant.Karaoke, "Karaoke")]
+    public void EveryTake_SurvivesThePickerRoundTrip_ToItsOwnLabel(AudioVariant take, string label)
+    {
+        string folder = Path.Combine(Path.GetTempPath(), $"jb-takes-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(folder);
+        string music = Path.Combine(folder, "song.wav");
+        // The naming rule probes .mp3 then .flac, so the takes carry a render
+        // extension; their content is the same constant WAV as the original.
+        string karaoke = Path.Combine(folder, "song.karaoke.flac");
+        string backing = Path.Combine(folder, "song.backing.flac");
+        string vocals = Path.Combine(folder, "song.vocals.flac");
+        string expected = take switch
+        {
+            AudioVariant.Backing => backing,
+            AudioVariant.Vocals => vocals,
+            _ => karaoke,
+        };
+
+        string source = TestAudio.WriteConstantWav(0.20f);
+        try
+        {
+            File.Copy(source, music);
+            File.Copy(source, karaoke);
+            File.Copy(source, backing);
+            File.Copy(source, vocals);
+
+            var vm = UiThread.Run(() => new MainViewModel());
+            try
+            {
+                var track = Track("a/song", music, karaoke);
+                // The picker resolves its row from the selection, exactly like the
+                // menu item does; the variant is the command parameter.
+                UiThread.Run(() => vm.SelectedTreeNode = new BrowserNode(track.RelativeKey) { Track = track });
+                UiThread.Run(() => vm.PlayKaraokeSelectedCommand.Execute(take));
+
+                Assert.True(WaitFor(vm, () => PairLoaded(vm)
+                                                 && vm.DeckA.SelectedVersion?.Variant == take),
+                            $"deck A never reported the {take} take as selected");
+
+                Assert.Equal($"Deck A: {label}", vm.DeckA.Title);
+                Assert.Equal(take, vm.DeckA.SelectedVersion!.Variant);
+                // The entry names the file this take actually plays, not whichever
+                // one the menu happened to find first.
+                Assert.Equal(expected, vm.DeckA.SelectedVersion.Path);
+                // The regression stated plainly: a backing take is not "Karaoke".
+                if (take == AudioVariant.Backing)
+                    Assert.NotEqual("Karaoke", vm.DeckA.SelectedVersion.Label);
+            }
+            finally
+            {
+                UiThread.Run(() => vm.Dispose());
+            }
+        }
+        finally
+        {
+            TestAudio.TryDelete(source);
+            try { Directory.Delete(folder, true); } catch { }
+        }
+    }
+
     // ---- settings migration -------------------------------------------------
 
     [Fact]
