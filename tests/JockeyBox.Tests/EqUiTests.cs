@@ -14,22 +14,22 @@ namespace JockeyBox.Tests;
 /// link, the view model to the engine, is measured end to end by <c>--audiotrace</c>
 /// rather than asserted against a double.
 /// </summary>
-[Collection(nameof(UiThreadCollection))]
+[Collection(nameof(JockeyBoxHomeCollection))]
 public sealed class EqUiTests : IDisposable
 {
-    private readonly string? _previousHome = Environment.GetEnvironmentVariable("JOCKEYBOX_HOME");
     private readonly string _home;
+    private readonly HomeLease _lease;
 
     public EqUiTests()
     {
         _home = Path.Combine(Path.GetTempPath(), "jb-eq-ui-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_home);
-        Environment.SetEnvironmentVariable("JOCKEYBOX_HOME", _home);
+        _lease = HomeLease.Enter(_home, nameof(EqUiTests));
     }
 
     public void Dispose()
     {
-        Environment.SetEnvironmentVariable("JOCKEYBOX_HOME", _previousHome);
+        _lease.Dispose();
         try
         {
             Directory.Delete(_home, recursive: true);
