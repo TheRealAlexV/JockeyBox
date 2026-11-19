@@ -63,6 +63,74 @@
              A deck is a self-contained player: its own playhead, seek, volume,
              output device and waveform, plus the karaoke sub-stem bar when the
              loaded track has a karaoke partner. -->
+        <!-- The one pad geometry, shared by a deck's cue bank and the karaoke pair's
+             bank in the transport row. It lives at window scope because the pair bank
+             is not inside the deck card: both banks must draw the same pad, and two
+             copies of a 60-line template is how the two would drift apart.
+             Nine pads, one row: each takes an equal share of what CLEAR leaves. The
+             floor keeps a pad tappable and only engages on a window narrower than the
+             card is ever laid out; at 1040 a share is ~37 px. -->
+        <Style x:Key="CuePad" TargetType="Button"
+               BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="Height" Value="44"/>
+            <Setter Property="MinWidth" Value="30"/>
+            <Setter Property="HorizontalAlignment" Value="Stretch"/>
+            <Setter Property="Padding" Value="0"/>
+            <Setter Property="Margin" Value="0,0,3,0"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Grid>
+                            <Rectangle x:Name="frame" RadiusX="3" RadiusY="3"
+                                       Stroke="{StaticResource BorderBrush}"
+                                       StrokeThickness="1" StrokeDashArray="2 2"
+                                       Fill="{TemplateBinding Background}"/>
+                            <StackPanel VerticalAlignment="Center"
+                                        HorizontalAlignment="Center">
+                                <TextBlock x:Name="slotText" Text="{Binding SlotText}"
+                                           FontSize="10" FontWeight="Bold"
+                                           HorizontalAlignment="Center"
+                                           Foreground="{TemplateBinding Foreground}"/>
+                                <TextBlock x:Name="posText" Text="{Binding PositionText}"
+                                           FontFamily="Consolas" FontSize="9"
+                                           Margin="0,1,0,0"
+                                           HorizontalAlignment="Center"
+                                           Foreground="{TemplateBinding Foreground}"/>
+                            </StackPanel>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <DataTrigger Binding="{Binding HasPosition}" Value="True">
+                                <Setter TargetName="frame" Property="Stroke"
+                                        Value="{StaticResource TextDimBrush}"/>
+                                <Setter TargetName="frame" Property="StrokeDashArray"
+                                        Value="{x:Null}"/>
+                                <Setter TargetName="frame" Property="Fill"
+                                        Value="{StaticResource PanelAltBrush}"/>
+                                <Setter TargetName="slotText" Property="Foreground"
+                                        Value="{StaticResource TextBrush}"/>
+                                <Setter TargetName="posText" Property="Foreground"
+                                        Value="{StaticResource TextBrush}"/>
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding IsQuick}" Value="True">
+                                <Setter Property="Margin" Value="8,0,3,0"/>
+                            </DataTrigger>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="frame" Property="Stroke"
+                                        Value="{StaticResource TextBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="frame" Property="Stroke"
+                                        Value="{StaticResource TextBrush}"/>
+                                <Setter TargetName="frame" Property="StrokeThickness" Value="2"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
         <DataTemplate x:Key="DeckCardTemplate" DataType="{x:Type vm:DeckViewModel}">
             <!-- Bottom padding matched to the top: 20 px of it hung below the cue
                  bank as an empty band on both cards, which is the slack the review
@@ -413,72 +481,6 @@
                             <ColumnDefinition Width="8"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
-                        <Grid.Resources>
-                            <Style x:Key="CuePad" TargetType="Button"
-                                   BasedOn="{StaticResource {x:Type Button}}">
-                                <Setter Property="Height" Value="44"/>
-                                <!-- Nine pads, one row: each takes an equal share of
-                                     what CLEAR leaves. The floor keeps a pad tappable
-                                     and only engages on a window narrower than this
-                                     card is ever laid out; at 1040 a share is ~37 px. -->
-                                <Setter Property="MinWidth" Value="30"/>
-                                <Setter Property="HorizontalAlignment" Value="Stretch"/>
-                                <Setter Property="Padding" Value="0"/>
-                                <Setter Property="Margin" Value="0,0,3,0"/>
-                                <Setter Property="Background" Value="Transparent"/>
-                                <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
-                                <Setter Property="Template">
-                                    <Setter.Value>
-                                        <ControlTemplate TargetType="Button">
-                                            <Grid>
-                                                <Rectangle x:Name="frame" RadiusX="3" RadiusY="3"
-                                                           Stroke="{StaticResource BorderBrush}"
-                                                           StrokeThickness="1" StrokeDashArray="2 2"
-                                                           Fill="{TemplateBinding Background}"/>
-                                                <StackPanel VerticalAlignment="Center"
-                                                            HorizontalAlignment="Center">
-                                                    <TextBlock x:Name="slotText" Text="{Binding SlotText}"
-                                                               FontSize="10" FontWeight="Bold"
-                                                               HorizontalAlignment="Center"
-                                                               Foreground="{TemplateBinding Foreground}"/>
-                                                    <TextBlock x:Name="posText" Text="{Binding PositionText}"
-                                                               FontFamily="Consolas" FontSize="9"
-                                                               Margin="0,1,0,0"
-                                                               HorizontalAlignment="Center"
-                                                               Foreground="{TemplateBinding Foreground}"/>
-                                                </StackPanel>
-                                            </Grid>
-                                            <ControlTemplate.Triggers>
-                                                <DataTrigger Binding="{Binding HasPosition}" Value="True">
-                                                    <Setter TargetName="frame" Property="Stroke"
-                                                            Value="{StaticResource TextDimBrush}"/>
-                                                    <Setter TargetName="frame" Property="StrokeDashArray"
-                                                            Value="{x:Null}"/>
-                                                    <Setter TargetName="frame" Property="Fill"
-                                                            Value="{StaticResource PanelAltBrush}"/>
-                                                    <Setter TargetName="slotText" Property="Foreground"
-                                                            Value="{StaticResource TextBrush}"/>
-                                                    <Setter TargetName="posText" Property="Foreground"
-                                                            Value="{StaticResource TextBrush}"/>
-                                                </DataTrigger>
-                                                <DataTrigger Binding="{Binding IsQuick}" Value="True">
-                                                    <Setter Property="Margin" Value="8,0,3,0"/>
-                                                </DataTrigger>
-                                                <Trigger Property="IsMouseOver" Value="True">
-                                                    <Setter TargetName="frame" Property="Stroke"
-                                                            Value="{StaticResource TextBrush}"/>
-                                                </Trigger>
-                                                <Trigger Property="IsKeyboardFocused" Value="True">
-                                                    <Setter TargetName="frame" Property="Stroke"
-                                                            Value="{StaticResource TextBrush}"/>
-                                                    <Setter TargetName="frame" Property="StrokeThickness" Value="2"/>
-                                                </Trigger>
-                                            </ControlTemplate.Triggers>
-                                        </ControlTemplate>
-                                    </Setter.Value>
-                                </Setter>
-                            </Style>
-                        </Grid.Resources>
 
                         <!-- Top-aligned on the pad bank's first row: centred in the
                              bank it landed on the seam between the two rows (y272-305
@@ -1050,11 +1052,16 @@
                  review asked for exactly that share, so the baseline move is intended,
                  not accidental; if 900 px ends up too tight the knob is the browser
                  weight (2* -> 3*), not this row.
-                 MinHeight 103 is the released size (97 px card + its own 6 px top
-                 margin) and keeps a short window from squeezing the waveform out.
+                 MinHeight 108 is the worst state's natural height, not the released
+                 97: the waveform card draws a karaoke sub-stem under each canvas when a
+                 karaoke render is loaded, which takes it from 97 to 102 px, and the row
+                 holds 6 px of its own margin on top. At 103 the karaoke state asked for
+                 5 px the star split had not reserved, so the shell overflowed by exactly
+                 those 5. 108 covers both states and the deck's KARAOKE strip comment in
+                 the window header covers the rest.
                  The two canvases are MinHeight (was Height) and their rows are star,
                  so the card's contents stretch with the row. -->
-            <RowDefinition Height="*" MinHeight="103"/>
+            <RowDefinition Height="*" MinHeight="108"/>
             <RowDefinition Height="6"/>      <!-- splitter: deck block <-> browser. 6 so
                                                   the gap after the waveform matches the
                                                   6 px card margins above it (the review
@@ -1063,9 +1070,17 @@
                                                                 and the heavier share of it now: the lyric
                                                                 list is what is read, the wave canvases
                                                                 are at their floor. -->
-            <RowDefinition Height="Auto"/>   <!-- status console: jobs, downloads, log -->
-            <RowDefinition Height="Auto"/>   <!-- soundboard -->
-            <RowDefinition Height="Auto"/>   <!-- footer -->
+            <!-- One bottom strip. The activity console's header line, the soundboard
+                 toggle, the folder/rescan/devices commands and the status text used to
+                 occupy three rows - 30 px collapsed console, 31 px soundboard header,
+                 36 px footer - for 97 px of window that showed nothing but chrome. They
+                 now share the one 30 px line, and both expanders still open downwards
+                 from it, so nothing was removed: every command is on the strip and the
+                 66 px they gave up went to the browser row, the one that should flex.
+                 The row below this one is the soundboard's body, 0 px until its toggle
+                 is on; the console's body is inside this row's own Border. -->
+            <RowDefinition Height="Auto"/>   <!-- bottom strip: console, soundboard, commands -->
+            <RowDefinition Height="Auto"/>   <!-- soundboard body, 0 px while folded -->
         </Grid.RowDefinitions>
 
         <!-- ================= Header ================= -->
@@ -1494,7 +1509,7 @@
                            FontSize="16" VerticalAlignment="Center" Margin="10,0,18,0"
                            Foreground="{StaticResource TextDimBrush}"/>
 
-                <!-- Deck activation + download queue -->
+                <!-- Pair cues, deck activation, link and sync switches -->
                 <StackPanel Grid.Column="4" Orientation="Horizontal" VerticalAlignment="Center">
                     <!-- Link and sync switches. Each carries a state glyph column
                          of fixed width, so engaged and disengaged differ by text
@@ -1544,6 +1559,74 @@
                             </Setter>
                         </Style>
                     </StackPanel.Resources>
+
+                    <!-- ================= Pair cue bank =================
+                         The karaoke pair's own bank: one position, both decks, and it
+                         lives in this row because a row of pads costs zero vertical
+                         height here - the row is already 40 px tall for the transport
+                         buttons, so the pads are 34 px inside a 36 px cluster. A new row
+                         would have cost 40. It is a secondary bank and reads as one: the
+                         same CuePad, the same dashed frame, a 34 px box against the 40 px
+                         transport buttons, and it only exists while a pair is loaded,
+                         because with one deck loaded the pads would be half a bank and
+                         the deck's own bank already covers that.
+                         Bindings mirror the deck bank (Pads / Press / ToggleClearMode)
+                         so pressing, clear mode and the tooltips behave identically. -->
+                    <Border Margin="0,0,8,0" Padding="2,0" CornerRadius="3"
+                            BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                            ToolTip="Pair cues: an empty pad captures where both decks are; an occupied pad seeks both">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsKaraokePairLoaded}" Value="True">
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <TextBlock Text="PAIR" FontSize="8" Margin="0,0,5,0"
+                                       Foreground="{StaticResource TextBrush}"
+                                       VerticalAlignment="Center"/>
+                            <ItemsControl ItemsSource="{Binding PairCues.Pads}"
+                                          VerticalAlignment="Center">
+                                <ItemsControl.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <UniformGrid Rows="1"/>
+                                    </ItemsPanelTemplate>
+                                </ItemsControl.ItemsPanel>
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <Button Style="{StaticResource CuePad}"
+                                                Height="34" Width="30"
+                                                CommandParameter="{Binding}"
+                                                Command="{Binding DataContext.PairCues.PressCommand,
+                                                          RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                ToolTip="{Binding ToolTip}"
+                                                AutomationProperties.Name="{Binding PadText}"/>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                            <Button MinWidth="28" Height="34" Margin="4,0,0,0"
+                                    FontSize="8" FontWeight="Bold"
+                                    Command="{Binding PairCues.ToggleClearModeCommand}"
+                                    Content="{Binding PairCues.ClearModeText}"
+                                    ToolTip="Clear mode: while on, pressing a pad removes its cue">
+                                <Button.Style>
+                                    <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                        <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding PairCues.IsClearing}" Value="True">
+                                                <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+                                                <Setter Property="BorderBrush" Value="{StaticResource TextDimBrush}"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Button.Style>
+                            </Button>
+                        </StackPanel>
+                    </Border>
 
                     <Button Content="A" FontSize="10" Padding="8,3" Margin="0,0,4,0"
                             Command="{Binding SelectDeckACommand}"
@@ -1621,32 +1704,6 @@
                         </StackPanel>
                     </Border>
 
-                    <!-- Download queue: compact entry point with an active-count badge -->
-                    <Button Command="{Binding ShowDownloadsCommand}"
-                            FontSize="10" Padding="8,3"
-                            ToolTip="Show the activity console: downloads, karaoke jobs and the log">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="&#x2B07; Downloads" FontSize="10" FontWeight="Bold"
-                                       VerticalAlignment="Center"/>
-                            <Border Background="{StaticResource AccentBBrush}" CornerRadius="7"
-                                    Padding="5,0" Margin="7,0,0,0" VerticalAlignment="Center"
-                                    ToolTip="Items still in the queue">
-                                <Border.Style>
-                                    <Style TargetType="Border">
-                                        <Setter Property="Visibility" Value="Visible"/>
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding Downloads.ActiveCount}" Value="0">
-                                                <Setter Property="Visibility" Value="Collapsed"/>
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </Border.Style>
-                                <TextBlock Text="{Binding Downloads.ActiveCount}" FontSize="9"
-                                           FontFamily="Consolas" Foreground="{StaticResource WindowBrush}"
-                                           VerticalAlignment="Center"/>
-                            </Border>
-                        </StackPanel>
-                    </Button>
                 </StackPanel>
             </Grid>
         </Border>
@@ -2524,10 +2581,105 @@
                         </TextBlock.Style>
                     </TextBlock>
 
+                    <!-- The soundboard's header, on the same line as the console's. Its
+                         own header was a second 31 px strip for one row of text; the two
+                         expanders now share this line and still open downwards into the
+                         rows below, so the board's height when open is unchanged. STOP
+                         ALL comes with it: a panic button is worth more visible than
+                         behind a disclosure, and it never doubled as "collapse". -->
+                    <Border DockPanel.Dock="Left" Width="1" Margin="12,1"
+                            Background="{StaticResource BorderBrush}"/>
+                    <ToggleButton x:Name="SoundboardToggle" DockPanel.Dock="Left"
+                                  Style="{StaticResource ConsoleHeaderToggle}"
+                                  AutomationProperties.Name="Soundboard, expand or collapse"
+                                  ToolTip="Sound pads: hold a jingle under either deck">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock FontSize="10" Margin="0,0,6,0" VerticalAlignment="Center">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Text" Value="&#x25B8;"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsChecked, ElementName=SoundboardToggle}"
+                                                         Value="True">
+                                                <Setter Property="Text" Value="&#x25BE;"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                            <TextBlock Text="SOUNDBOARD" FontSize="11" FontWeight="Bold"
+                                       VerticalAlignment="Center"
+                                       Foreground="{StaticResource TextDimBrush}"/>
+                            <TextBlock Text="{Binding Soundboard.Summary}" FontSize="10"
+                                       VerticalAlignment="Center" Margin="12,0,0,0"
+                                       TextTrimming="CharacterEllipsis"
+                                       Foreground="{StaticResource TextDimBrush}"/>
+                        </StackPanel>
+                    </ToggleButton>
+                    <Button DockPanel.Dock="Left" Content="STOP ALL" Margin="10,0,0,0"
+                            Style="{StaticResource ConsoleAction}"
+                            Foreground="{StaticResource DangerBrush}"
+                            Command="{Binding Soundboard.StopAllCommand}"
+                            ToolTip="Silence every pad"/>
+
                     <Button DockPanel.Dock="Right" Content="Clear finished"
                             Style="{StaticResource ConsoleAction}"
+                            Visibility="{Binding IsChecked, ElementName=ConsoleToggle, Converter={StaticResource BoolToVisibility}}"
                             Command="{Binding ClearFinishedActivityCommand, RelativeSource={RelativeSource AncestorType=Window}}"
                             ToolTip="Remove finished jobs from the list. The log keeps its lines."/>
+
+                    <!-- The footer's row, folded into this line. It was 36 px of window
+                         (a 28 px line plus its margin) for three buttons and an echo of
+                         the two folder paths; the buttons are here and the paths are one
+                         hover away on Folders, so nothing left the window. -->
+                    <Button DockPanel.Dock="Right" Content="&#x21BB; Devices" Margin="6,0,0,0"
+                            ToolTip="Re-enumerate audio outputs"
+                            Command="{Binding ReloadDevicesCommand}"/>
+                    <Button DockPanel.Dock="Right" Content="&#x21BB; Rescan" Margin="6,0,0,0"
+                            ToolTip="Rescan the music folder for new files"
+                            Command="{Binding RescanCommand}"/>
+                    <Button DockPanel.Dock="Right" Content="&#x1F4C1; Folders" Margin="6,0,0,0"
+                            Click="OnSettingsButtonClick">
+                        <Button.ToolTip>
+                            <StackPanel>
+                                <TextBlock Text="Configure the Music and Karaoke folders"/>
+                                <TextBlock Text="{Binding MusicDirectory}" FontFamily="Consolas"
+                                           FontSize="10" Margin="0,4,0,0"/>
+                                <TextBlock Text="{Binding KaraokeDirectory}" FontFamily="Consolas"
+                                           FontSize="10"/>
+                            </StackPanel>
+                        </Button.ToolTip>
+                    </Button>
+                    <Button DockPanel.Dock="Right" Command="{Binding ShowDownloadsCommand}"
+                            FontSize="10" Padding="8,1" Margin="10,0,0,0"
+                            ToolTip="Show the activity console: downloads, karaoke jobs and the log">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#x2B07; Downloads" FontSize="10" FontWeight="Bold"
+                                       VerticalAlignment="Center"/>
+                            <Border Background="{StaticResource AccentBBrush}" CornerRadius="7"
+                                    Padding="5,0" Margin="7,0,0,0" VerticalAlignment="Center"
+                                    ToolTip="Items still in the queue">
+                                <Border.Style>
+                                    <Style TargetType="Border">
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding Downloads.ActiveCount}" Value="0">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Border.Style>
+                                <TextBlock Text="{Binding Downloads.ActiveCount}" FontSize="9"
+                                           FontFamily="Consolas" Foreground="{StaticResource WindowBrush}"
+                                           VerticalAlignment="Center"/>
+                            </Border>
+                        </StackPanel>
+                    </Button>
+                    <TextBlock DockPanel.Dock="Right" Text="{Binding StatusText}" Margin="12,0,0,0"
+                               MaxWidth="260" VerticalAlignment="Center"
+                               Foreground="{StaticResource TextDimBrush}"
+                               TextTrimming="CharacterEllipsis"
+                               ToolTip="{Binding StatusText}"/>
                 </DockPanel>
 
                 <TabControl x:Name="ConsoleTabs"
@@ -3186,12 +3338,25 @@
         </Border>
 
         <!-- ================= Soundboard =================
-             Collapsed by default; the header alone is ~34 px, which is what keeps
-             the window scroll-free at 1400x900. Everything inside binds to the
-             Board VM, so a missing board simply leaves an empty (collapsed) panel. -->
-        <Border Grid.Row="6" Style="{StaticResource Card}" Padding="0" Margin="0,6,0,0"
+             Opens from the strip's toggle instead of drawing a header of its own: this
+             Border used to be 31 px of window while folded, for one row of text on a
+             line of its own. Its two header commands moved with it - + ADD SLOT to the
+             add row below, STOP ALL to the strip, where a panic button belongs. The row
+             is Auto, so folded is 0 px. Everything inside binds to the Board VM, so a
+             missing board simply leaves an empty (collapsed) panel. -->
+        <Border Grid.Row="6" Padding="0" Margin="0,6,0,0"
                 DataContext="{Binding Soundboard}">
-            <Expander Style="{StaticResource SoundboardExpander}" IsExpanded="False">
+            <Border.Style>
+                <Style TargetType="Border" BasedOn="{StaticResource Card}">
+                    <Setter Property="Visibility" Value="Collapsed"/>
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding IsChecked, ElementName=SoundboardToggle}"
+                                     Value="True">
+                            <Setter Property="Visibility" Value="Visible"/>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Border.Style>
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
@@ -3209,6 +3374,13 @@
                                 Padding="8,4" Margin="0,0,8,0"
                                 Command="{Binding AddFromFileCommand}"
                                 ToolTip="Copy an audio file into the soundboard folder"/>
+                        <!-- The board's header used to carry this; the header is on the
+                             bottom strip now, so the action sits with the other two ways
+                             of adding a pad. -->
+                        <Button DockPanel.Dock="Left" Content="+ ADD SLOT" FontSize="9"
+                                Padding="8,4" Margin="0,0,8,0"
+                                Command="{Binding AddSlotCommand}"
+                                ToolTip="Add an empty pad"/>
                         <Button DockPanel.Dock="Right" Content="ADD FROM URL" FontSize="9"
                                 Padding="8,4" Margin="8,0,0,0"
                                 Command="{Binding AddFromUrlCommand}"
@@ -3299,25 +3471,7 @@
                                    Foreground="{StaticResource TextDimBrush}"/>
                     </StackPanel>
                 </Grid>
-            </Expander>
         </Border>
-
-        <!-- ================= Footer ================= -->
-        <DockPanel Grid.Row="7" Margin="0,8,0,0">
-            <Button Content="&#x1F4C1; Folders" Click="OnSettingsButtonClick"
-                    ToolTip="Configure the Music and Karaoke folders"/>
-            <TextBlock Margin="10,0" VerticalAlignment="Center"
-                       Foreground="{StaticResource TextDimBrush}" TextTrimming="CharacterEllipsis">
-                <Run Text="&#x266B;"/><Run Text="{Binding MusicDirectory}"/>
-                <Run Text="  &#x1F3A4;"/><Run Text="{Binding KaraokeDirectory}"/>
-            </TextBlock>
-            <Button DockPanel.Dock="Right" Content="&#x21BB; Devices" Margin="8,0,0,0"
-                    ToolTip="Re-enumerate audio outputs" Command="{Binding ReloadDevicesCommand}"/>
-            <Button DockPanel.Dock="Right" Content="&#x21BB; Rescan" Command="{Binding RescanCommand}"/>
-            <TextBlock DockPanel.Dock="Right" Text="{Binding StatusText}" Margin="0,0,16,0"
-                       VerticalAlignment="Center" HorizontalAlignment="Right"
-                       Foreground="{StaticResource TextDimBrush}" TextTrimming="CharacterEllipsis"/>
-        </DockPanel>
     </Grid>
     </ScrollViewer>
 </Window>

@@ -193,7 +193,7 @@ public partial class MainWindow : Window
     private void OnShellLayoutChanged(object? sender, EventArgs e)
     {
         var rows = ShellGrid.RowDefinitions;
-        if (rows.Count < 8) return;
+        if (rows.Count < 5) return;
 
         // Rows 2 (waveform) and 4 (browser) are the elastic pair, 1:3 in the XAML. The
         // browser gets what the star split would give it: three quarters of the band, or
@@ -203,9 +203,16 @@ public partial class MainWindow : Window
         // it fits, so the scrollbar does not sit exactly on its threshold. The floor is
         // what the browser keeps when the fixed rows have grown past the window: below
         // it the shell scrolls, which is what the shell is for.
-        double fixedHeight = rows[0].ActualHeight + rows[1].ActualHeight
-            + rows[3].ActualHeight + rows[5].ActualHeight + rows[6].ActualHeight
-            + rows[7].ActualHeight;
+        //
+        // Summed by skipping the elastic pair rather than by listing indices: the row
+        // list has changed twice (the footer and the soundboard header both became part
+        // of the bottom strip), and a list of indices went stale silently each time.
+        double fixedHeight = 0;
+        for (int i = 0; i < rows.Count; i++)
+        {
+            if (i == 2 || i == 4) continue;
+            fixedHeight += rows[i].ActualHeight;
+        }
         double band = ShellScroll.ViewportHeight - fixedHeight - 2;
         double cap = Math.Max(200,
             Math.Min(band * 0.75, band - rows[2].MinHeight));
