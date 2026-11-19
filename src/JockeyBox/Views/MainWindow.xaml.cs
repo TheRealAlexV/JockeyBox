@@ -94,6 +94,9 @@ public partial class MainWindow : Window
         // take seconds, which used to block start-up long enough for the UI
         // watchdog to kill the process.
         Loaded += async (_, _) => await _vm.RefreshDevicesAsync();
+        // Start the watchdog clock only now that a frame has rendered: the
+        // 8000 ms budget is for a wedged UI thread, not for start-up work.
+        ContentRendered += (_, _) => UiWatchdog.Arm();
 
         // Give the browser row a definite height (see OnShellLayoutChanged). The shell
         // scrolls, so its content is measured at infinite height; that is what turned

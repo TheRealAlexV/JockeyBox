@@ -44,6 +44,12 @@ public static class UiWatchdog
     private static int _started;
     private static int _fired;
 
+    /// <summary>Set by <see cref="Arm"/>: 0 until the window has rendered.</summary>
+    private static int _armed;
+
+    /// <summary>Stopwatch ticks at <see cref="Arm"/>; 0 while disarmed.</summary>
+    private static long _armedTicks;
+
     /// <summary>0 disables the watchdog; anything else is the starvation threshold.</summary>
     public static int ThresholdMs { get; } = ReadThreshold();
 
@@ -97,6 +103,22 @@ public static class UiWatchdog
     /// <summary>Age of the UI thread's last heartbeat, in ms. 0 when it never ticked.</summary>
     public static long LastTickAgeMs() => AgeMs(UiBreadcrumb.LastTickTicks);
 
+    /// <summary>
+    /// Begin measuring. Start-up is not a stall: opening the database, loading
+    /// settings, enumerating audio endpoints and building the window are work the
+    /// launch asked for, and the heartbeat timer cannot tick until the dispatcher
+    /// pumps anyway. Until this is called the sampler only sleeps, so the clock
+    /// cannot include construction. Called once from the window's
+    /// <c>ContentRendered</c>, when a real frame has rendered with the UI live.
+    /// Idempotent and a no-op when the watchdog is disabled.
+    /// </summary>
+    public static void Arm()
+    {
+        if (!Enabled) return;
+        if (Interlocked.Exchange(ref _armed, 1) != 0) return;
+        Volatile.Write(ref _armedTicks, Stopwatch.GetTimestamp());
+    }
+
     private static void SampleLoop()
     {
         var threshold = ThresholdMs;
@@ -107,7 +129,14 @@ public static class UiWatchdog
         while (true)
         {
             Thread.Sleep(periodMs);
-            var ageMs = LastTickAgeMs();
+            // Not armed yet: the window is still being built, which is not the
+            // failure this net exists for.
+            var armTicks = Volatile.Read(ref _armedTicks);
+            if (armTicks == 0) continue;
+
+            // Starvation is measured from whichever came later: the last real UI
+            // tick, or the moment the net was armed.
+            var ageMs = AgeMs(Math.Max(UiBreadcrumb.LastTickTicks, armTicks));
             if (!ShouldFire(ageMs, threshold)) continue;
             if (Interlocked.Exchange(ref _fired, 1) != 0) return;
 
