@@ -127,34 +127,76 @@ public sealed class ActivityLogTests
     [Theory]
     [InlineData(KaraokeDenial.NoTrack)]
     [InlineData(KaraokeDenial.NoMusicPath)]
-    [InlineData(KaraokeDenial.AlreadyHasKaraoke)]
+    [InlineData(KaraokeDenial.ModeAlreadyExists)]
     [InlineData(KaraokeDenial.NoKaraokeFolder)]
     [InlineData(KaraokeDenial.EngineNotInstalled)]
     public void EveryGateRefusal_LogsSomething(KaraokeDenial expected)
     {
         using var log = new LogCapture();
 
-        var track = NewTrack("Gate Song");
-        switch (expected)
+        // The per-mode gate reads the disk, so that one row needs a real pair.
+        var temp = expected == KaraokeDenial.ModeAlreadyExists
+            ? Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "jb-gate-" + Guid.NewGuid().ToString("N")))
+            : null;
+
+        try
         {
-            case KaraokeDenial.NoTrack:
-                track = null;
-                break;
-            case KaraokeDenial.NoMusicPath:
-                track = new TrackEntry { RelativeKey = "gate", RelativePath = "gate.mp3", Title = "Gate Song" };
-                break;
-            case KaraokeDenial.AlreadyHasKaraoke:
-                track!.KaraokePath = @"C:\K\Gate Song.karaoke.mp3";
-                break;
+            var track = NewTrack("Gate Song");
+            switch (expected)
+            {
+                case KaraokeDenial.NoTrack:
+                    track = null;
+                    break;
+                case KaraokeDenial.NoMusicPath:
+                    track = new TrackEntry { RelativeKey = "gate", RelativePath = "gate.mp3", Title = "Gate Song" };
+                    break;
+                case KaraokeDenial.ModeAlreadyExists:
+                    var source = Path.Combine(temp!.FullName, "Gate Song.mp3");
+                    File.WriteAllText(source, "");
+                    File.WriteAllText(Path.Combine(temp.FullName, "Gate Song.karaoke.mp3"), "");
+                    track!.MusicPath = source;
+                    break;
+            }
+
+            var denial = KaraokeGate.Check(
+                track,
+                expected == KaraokeDenial.NoKaraokeFolder ? "" : @"C:\K",
+                engineInstalled: expected != KaraokeDenial.EngineNotInstalled);
+
+            Assert.Equal(expected, denial);
+            Assert.Contains(log.Lines, l => l.Contains("Karaoke skipped: "));
         }
+        finally
+        {
+            temp?.Delete(recursive: true);
+        }
+    }
 
-        var denial = KaraokeGate.Check(
-            track,
-            expected == KaraokeDenial.NoKaraokeFolder ? "" : @"C:\K",
-            engineInstalled: expected != KaraokeDenial.EngineNotInstalled);
+    [Fact]
+    public void Gate_RefusesOnlyTheModeWhoseFileExists()
+    {
+        // One render on disk is one file: the other two modes are still free.
+        var temp = Directory.CreateDirectory(Path.Combine(Path.GetTempPath(), "jb-gate-" + Guid.NewGuid().ToString("N")));
+        try
+        {
+            var source = Path.Combine(temp.FullName, "Song.mp3");
+            File.WriteAllText(source, "");
+            File.WriteAllText(Path.Combine(temp.FullName, "Song.karaoke.mp3"), "");
 
-        Assert.Equal(expected, denial);
-        Assert.Contains(log.Lines, l => l.Contains("Karaoke skipped: "));
+            var track = NewTrack("Song");
+            track.MusicPath = source;
+
+            Assert.Equal(KaraokeDenial.ModeAlreadyExists,
+                KaraokeGate.Check(track, @"C:\K", engineInstalled: true, KaraokeStemMode.Instrumental));
+            Assert.Equal(KaraokeDenial.Allowed,
+                KaraokeGate.Check(track, @"C:\K", engineInstalled: true, KaraokeStemMode.InstrumentalKeepBacking));
+            Assert.Equal(KaraokeDenial.Allowed,
+                KaraokeGate.Check(track, @"C:\K", engineInstalled: true, KaraokeStemMode.VocalsOnly));
+        }
+        finally
+        {
+            temp.Delete(recursive: true);
+        }
     }
 
     [Fact]

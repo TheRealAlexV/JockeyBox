@@ -81,8 +81,15 @@ public static class KaraokeNaming
         _ => Marker,
     };
 
-    /// <summary>
-    /// True when the file name already carries the marker ("Song.karaoke.flac").
+    /// <summary>The take a stem mode writes, so a caller can ask <see cref="DiscoverVariants"/> about it.</summary>
+    public static AudioVariant VariantOf(KaraokeStemMode mode) => mode switch
+    {
+        KaraokeStemMode.InstrumentalKeepBacking => AudioVariant.Backing,
+        KaraokeStemMode.VocalsOnly => AudioVariant.Vocals,
+        _ => AudioVariant.Karaoke,
+    };
+
+
     /// A bare ".karaoke.flac" (empty base name) is not a pair, so it keeps a
     /// library row of its own instead of pairing with nothing.
     /// </summary>

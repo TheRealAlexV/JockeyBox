@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using CommunityToolkit.Mvvm.ComponentModel;
+using JockeyBox.Library;
 using JockeyBox.Sources;
 
 namespace JockeyBox.ViewModels;
@@ -21,6 +22,18 @@ public sealed class RemoteTrackHost
 
     /// <summary>Queue karaoke separation for the row's local file (no-op when there is none).</summary>
     public required Action<SourceTrack> MakeKaraoke { get; init; }
+
+    /// <summary>Play one named take of the row's local file (the versions picker's action).</summary>
+    public required Action<SourceTrack, AudioVariant> PlayVariant { get; init; }
+
+    /// <summary>
+    /// The other two stem modes, as siblings of <see cref="MakeKaraoke"/> rather
+    /// than one mode parameter: it is the same shape
+    /// <see cref="TrackMenuCapabilities"/> already uses, so the shared submenu
+    /// needs no special case for a remote tab.
+    /// </summary>
+    public required Action<SourceTrack> MakeKaraokeKeepBacking { get; init; }
+    public required Action<SourceTrack> MakeKaraokeVocalsOnly { get; init; }
 
     /// <summary>Show the row's local file in Explorer (no-op when there is none).</summary>
     public required Action<SourceTrack> RevealLocalFile { get; init; }

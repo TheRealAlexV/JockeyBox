@@ -195,26 +195,39 @@ public sealed class TrackMenuCapabilities : ObservableObject
     public ObservableCollection<TrackVariantItem> PlayVariants { get; } = new();
     public ObservableCollection<TrackVariantItem> QueueVariants { get; } = new();
 
+    /// <summary>
+    /// The pair action's takes: the karaoke renders only, so "Play Karaoke
+    /// Version" never offers the row's own file. One take keeps the flat item.
+    /// </summary>
+    public ObservableCollection<TrackVariantItem> PlayKaraokeVariants { get; } = new();
+
     public bool HasVariantChoice => PlayVariants.Count > 1;
     public bool ShowFlatPlay => Play is not null && !HasVariantChoice;
     public bool ShowVariantPlay => Play is not null && HasVariantChoice;
     public bool ShowFlatQueue => AddToQueue is not null && QueueVariants.Count <= 1;
     public bool ShowVariantQueue => AddToQueue is not null && QueueVariants.Count > 1;
+    public bool ShowFlatPlayKaraoke => PlayKaraoke is not null && PlayKaraokeVariants.Count <= 1;
+    public bool ShowVariantPlayKaraoke => PlayKaraoke is not null && PlayKaraokeVariants.Count > 1;
 
-    /// <summary>Swap the take lists and re-evaluate which Play/Queue item is shown.</summary>
+    /// <summary>Swap the take lists and re-evaluate which Play/Queue items are shown.</summary>
     internal void SetVariantItems(IReadOnlyList<TrackVariantItem> play,
-                                 IReadOnlyList<TrackVariantItem> queue)
+                                 IReadOnlyList<TrackVariantItem> queue,
+                                 IReadOnlyList<TrackVariantItem>? karaoke = null)
     {
         PlayVariants.Clear();
         foreach (var item in play) PlayVariants.Add(item);
         QueueVariants.Clear();
         foreach (var item in queue) QueueVariants.Add(item);
+        PlayKaraokeVariants.Clear();
+        foreach (var item in karaoke ?? Array.Empty<TrackVariantItem>()) PlayKaraokeVariants.Add(item);
 
         OnPropertyChanged(nameof(HasVariantChoice));
         OnPropertyChanged(nameof(ShowFlatPlay));
         OnPropertyChanged(nameof(ShowVariantPlay));
         OnPropertyChanged(nameof(ShowFlatQueue));
         OnPropertyChanged(nameof(ShowVariantQueue));
+        OnPropertyChanged(nameof(ShowFlatPlayKaraoke));
+        OnPropertyChanged(nameof(ShowVariantPlayKaraoke));
     }
 
     /// <summary>
@@ -257,6 +270,17 @@ public sealed class TrackMenuCapabilities : ObservableObject
         VariantAvailability variants, Func<AudioVariant, ICommand> command) =>
         BuildVariantItems(variants, command)
             .Where(item => item.Variant is AudioVariant.Original or AudioVariant.Karaoke)
+            .ToList();
+
+    /// <summary>
+    /// The pair action's takes: every render on disk, never the row's own file.
+    /// The labels and marks are <see cref="BuildVariantItems"/>'s, so this menu
+    /// reads the same as Play and Add to Queue.
+    /// </summary>
+    internal static List<TrackVariantItem> BuildKaraokeVariantItems(
+        VariantAvailability variants, Func<AudioVariant, ICommand> command) =>
+        BuildVariantItems(variants, command)
+            .Where(item => item.Variant != AudioVariant.Original)
             .ToList();
 }
 
@@ -335,7 +359,9 @@ public partial class MainViewModel
             TrackMenuCapabilities.BuildVariantItems(variants,
                 variant => new RelayCommand(() => PlayVariant(track, variant))),
             TrackMenuCapabilities.BuildQueueVariantItems(variants,
-                variant => new RelayCommand(() => QueueVariant(track, variant))));
+                variant => new RelayCommand(() => QueueVariant(track, variant))),
+            TrackMenuCapabilities.BuildKaraokeVariantItems(variants,
+                variant => new RelayCommand(() => PlayKaraokeSelected(variant))));
     }
 
     /// <summary>Add one take of a row to the queue.</summary>

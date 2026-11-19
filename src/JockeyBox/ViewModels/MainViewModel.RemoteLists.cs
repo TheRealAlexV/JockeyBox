@@ -44,6 +44,9 @@ public partial class MainViewModel
             Karaoke = _remoteFacts,
             AddToPlaylist = AddRemoteToPlaylist,
             MakeKaraoke = MakeKaraokeForRemote,
+            PlayVariant = PlayLocalVariantForRemote,
+            MakeKaraokeKeepBacking = MakeKaraokeKeepBackingForRemote,
+            MakeKaraokeVocalsOnly = MakeKaraokeVocalsOnlyForRemote,
             RevealLocalFile = RevealRemoteFile,
         };
 
@@ -97,7 +100,20 @@ public partial class MainViewModel
     /// and the menu entry is disabled until then. Runs the same command the
     /// library browser runs, so progress and the resulting file are identical.
     /// </summary>
-    private void MakeKaraokeForRemote(SourceTrack track)
+    private void MakeKaraokeForRemote(SourceTrack track) => MakeKaraokeForRemote(track, KaraokeStemMode.Instrumental);
+
+    private void MakeKaraokeKeepBackingForRemote(SourceTrack track) =>
+        MakeKaraokeForRemote(track, KaraokeStemMode.InstrumentalKeepBacking);
+
+    private void MakeKaraokeVocalsOnlyForRemote(SourceTrack track) =>
+        MakeKaraokeForRemote(track, KaraokeStemMode.VocalsOnly);
+
+    /// <summary>
+    /// The mode travels with the request instead of being hardcoded to the
+    /// instrumental, so the remote tabs offer the same three renders the library
+    /// does. The gate refuses per mode.
+    /// </summary>
+    private void MakeKaraokeForRemote(SourceTrack track, KaraokeStemMode mode)
     {
         if (_remoteFacts.Find(track) is not { } entry)
         {
@@ -105,7 +121,13 @@ public partial class MainViewModel
             return;
         }
 
-        EnqueueKaraoke(entry, KaraokeStemMode.Instrumental);
+        EnqueueKaraoke(entry, mode);
+    }
+
+    /// <summary>Play one named take of a remote row's local file (the versions picker's action).</summary>
+    private void PlayLocalVariantForRemote(SourceTrack track, AudioVariant variant)
+    {
+        if (_remoteFacts.Find(track) is { } entry) PlayVariant(entry, variant);
     }
 
     /// <summary>Show a remote row's local file in Explorer (no-op when it has none).</summary>

@@ -10,6 +10,9 @@ public enum KaraokeDenial
     NoTrack,
     NoMusicPath,
     AlreadyHasKaraoke,
+
+    /// <summary>This one stem mode's file is already on disk; the other modes are still free.</summary>
+    ModeAlreadyExists,
     NoKaraokeFolder,
     EngineNotInstalled,
 }
@@ -23,7 +26,8 @@ public enum KaraokeDenial
 /// </summary>
 public static class KaraokeGate
 {
-    public static KaraokeDenial Check(TrackEntry? track, string? karaokeDirectory, bool engineInstalled)
+    public static KaraokeDenial Check(TrackEntry? track, string? karaokeDirectory, bool engineInstalled,
+                                      KaraokeStemMode mode = KaraokeStemMode.Instrumental)
     {
         if (track is null) return Warn(KaraokeDenial.NoTrack, "no track selected");
 
@@ -32,12 +36,15 @@ public static class KaraokeGate
         if (track.MusicPath is null)
             return Warn(KaraokeDenial.NoMusicPath, $"no music path: {track.RelativeKey}");
 
-        // Not a fault: the operator asked twice, or the file already has its
-        // partner. Logged at INFO so it is findable without looking like a failure.
-        if (!track.NeedsKaraoke)
+        // Per mode, not per track: each stem mode writes its own file
+        // ("Song.karaoke.flac", "Song.backing.flac", "Song.vocals.flac"), so one
+        // render on disk must not refuse the other two. Only this mode's own
+        // target blocks the request; TrackEntry.NeedsKaraoke stays the display
+        // "already has karaoke" flag and is deliberately not consulted here.
+        if (KaraokeNaming.DiscoverVariants(track.MusicPath).Contains(KaraokeNaming.VariantOf(mode)))
         {
-            Log.Info($"Karaoke skipped: already has karaoke: {title}");
-            return KaraokeDenial.AlreadyHasKaraoke;
+            Log.Info($"Karaoke skipped: already has {mode}: {title}");
+            return KaraokeDenial.ModeAlreadyExists;
         }
 
         if (string.IsNullOrWhiteSpace(karaokeDirectory))

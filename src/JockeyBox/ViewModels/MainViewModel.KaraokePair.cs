@@ -134,9 +134,10 @@ public partial class MainViewModel
     // can exist) and go disabled on a row without a karaoke file on disk.
 
     [RelayCommand(CanExecute = nameof(CanKaraokeSelected))]
-    private void PlayKaraokeSelected()
+    private void PlayKaraokeSelected(AudioVariant? variant)
     {
-        if (SelectedTreeNode?.Track is { } track) LoadKaraokePair(track);
+        if (SelectedTreeNode?.Track is not { } track) return;
+        LoadKaraokePair(track, variant ?? AudioVariant.Karaoke);
     }
 
     /// <summary>

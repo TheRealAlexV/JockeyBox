@@ -705,25 +705,61 @@
                                                            TextTrimming="CharacterEllipsis"
                                                            ToolTip="{Binding DetailText}"/>
                                             </StackPanel>
-                                            <Button Grid.Column="1" Content="Download this"
-                                                    Style="{StaticResource VersionButton}" Width="Auto"
+                                            <Button Grid.Column="1" Width="Auto"
                                                     Padding="7,0" FontSize="10.5" Margin="6,0,4,0"
                                                     Foreground="{StaticResource TextBrush}"
-                                                    Command="{Binding DataContext.DownloadVersionCommand,
-                                                        RelativeSource={RelativeSource AncestorType=ListView}}"
-                                                    CommandParameter="{Binding}"
-                                                    ToolTip="Download this upload into the library as the Spotify track"/>
-                                            <Button Grid.Column="2" Style="{StaticResource PreviewButton}"
-                                                    Margin="0,0,4,0"
+                                                    CommandParameter="{Binding}">
+                                                <Button.Style>
+                                                    <Style TargetType="Button" BasedOn="{StaticResource VersionButton}">
+                                                        <Setter Property="Content" Value="Download this"/>
+                                                        <Setter Property="ToolTip"
+                                                                Value="Download this upload into the library as the Spotify track"/>
+                                                        <Setter Property="Command"
+                                                                Value="{Binding DataContext.DownloadVersionCommand,
+                                                                    RelativeSource={RelativeSource AncestorType=ListView}}"/>
+                                                        <Style.Triggers>
+                                                            <!-- A take already on disk is played, not downloaded again. -->
+                                                            <DataTrigger Binding="{Binding IsLocal}" Value="True">
+                                                                <Setter Property="Content" Value="Play"/>
+                                                                <Setter Property="ToolTip" Value="Load this take into the deck"/>
+                                                                <Setter Property="Command"
+                                                                        Value="{Binding DataContext.PlayVersionCommand,
+                                                                            RelativeSource={RelativeSource AncestorType=ListView}}"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Button.Style>
+                                            </Button>
+                                            <Button Grid.Column="2" Margin="0,0,4,0"
                                                     Command="{Binding DataContext.PreviewVersionCommand,
                                                         RelativeSource={RelativeSource AncestorType=ListView}}"
-                                                    CommandParameter="{Binding}"/>
+                                                    CommandParameter="{Binding}">
+                                                <Button.Style>
+                                                    <Style TargetType="Button" BasedOn="{StaticResource PreviewButton}">
+                                                        <!-- Nothing to audition: it is the file already in the library. -->
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsLocal}" Value="True">
+                                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Button.Style>
+                                            </Button>
                                             <Button Grid.Column="3" Content="&#x2197;"
-                                                    Style="{StaticResource VersionButton}"
                                                     Command="{Binding DataContext.OpenVersionOnYouTubeCommand,
                                                         RelativeSource={RelativeSource AncestorType=ListView}}"
-                                                    CommandParameter="{Binding}"
-                                                    ToolTip="Open this upload on YouTube"/>
+                                                    CommandParameter="{Binding}">
+                                                <Button.Style>
+                                                    <Style TargetType="Button" BasedOn="{StaticResource VersionButton}">
+                                                        <Setter Property="ToolTip" Value="Open this upload on YouTube"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsLocal}" Value="True">
+                                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Button.Style>
+                                            </Button>
                                         </Grid>
                                     </DataTemplate>
                                 </ListView.ItemTemplate>
