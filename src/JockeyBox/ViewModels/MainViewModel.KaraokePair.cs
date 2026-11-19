@@ -81,6 +81,29 @@ public partial class MainViewModel
         _ = GenerateWaveformsAsync(DeckA, DeckA.WaveformGeneration, track.MusicPath,
                                    takeStem == StemKind.Karaoke ? karaokePath : null);
         _ = GenerateWaveformsAsync(DeckB, DeckB.WaveformGeneration, track.MusicPath, null);
+
+        // The pair path never goes through LoadTrack, so nothing else points the
+        // lyrics header at this track or asks for its lyrics. Mirror that load's
+        // lyrics block (MainViewModel.LoadTrack) here, in the same order: the
+        // header key follows LoadedTrack, and the fetch reads the track metadata
+        // the store was just given.
+        LoadedTrack = track;
+        LoadedTrackTitle = string.IsNullOrWhiteSpace(track.Artist)
+            ? track.Title : $"{track.Artist} \u2014 {track.Title}";
+
+        _trackMeta.SetTrackInfo(track.RelativeKey, track.Title, track.Artist);
+        RefreshTrackSections();
+        _editSectionIndex = -1;
+        _playheadSectionIndex = -2;
+
+        var lyricsSource = StoredLyricsSource(track.RelativeKey);
+        SyncLyricsOffsetEditor();
+        SetLyricsSourceSelection(LyricsSourceNameForId(lyricsSource));
+        IsLyricsSourcePickerOpen = false;
+        LyricsCandidates.Clear();
+
+        _ = FetchLyricsAsync(track, lyricsSource);
+
         // One take per deck: a load discovers the sibling render beside its file
         // as a partner, and the deck's default Mix mode would then sum both files,
         // so each deck is pinned to its own take.

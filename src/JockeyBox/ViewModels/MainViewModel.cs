@@ -4239,7 +4239,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
     [RelayCommand]
     private async Task TryOtherSourcesAsync()
     {
-        var track = LoadedTrack;
+        // Prefill from the first real track there is. With nothing loaded the
+        // picker used to keep whatever was typed for a previous song.
+        var track = LoadedTrack
+            ?? SelectedTrack
+            ?? SelectedTreeNode?.Track
+            ?? Queue.FirstOrDefault(q => q.IsCurrent)?.Track;
         if (track == null)
         {
             LyricsCandidates.Clear();
