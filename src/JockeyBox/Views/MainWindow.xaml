@@ -1636,7 +1636,7 @@
                                 <Setter Property="FontSize" Value="10"/>
                                 <Setter Property="Padding" Value="8,3"/>
                                 <Style.Triggers>
-                                    <DataTrigger Binding="{Binding IsDeckAActive}" Value="True">
+                                    <DataTrigger Binding="{Binding IsAOnlySelected}" Value="True">
                                         <Setter Property="Foreground" Value="{StaticResource AccentABrush}"/>
                                         <Setter Property="BorderBrush" Value="{StaticResource AccentABrush}"/>
                                     </DataTrigger>
@@ -1652,7 +1652,7 @@
                                 <Setter Property="FontSize" Value="10"/>
                                 <Setter Property="Padding" Value="8,3"/>
                                 <Style.Triggers>
-                                    <DataTrigger Binding="{Binding IsDeckBActive}" Value="True">
+                                    <DataTrigger Binding="{Binding IsBOnlySelected}" Value="True">
                                         <Setter Property="Foreground" Value="{StaticResource AccentBBrush}"/>
                                         <Setter Property="BorderBrush" Value="{StaticResource AccentBBrush}"/>
                                     </DataTrigger>
@@ -1667,7 +1667,7 @@
                     <ToggleButton Margin="4,0,0,0" MinWidth="52" Height="26"
                                   FontSize="10" Padding="8,2"
                                   IsChecked="{Binding IsABMode, Mode=TwoWay}"
-                                  ToolTip="A-B link: play, seek, stop and volume act on both decks at once">
+                                  ToolTip="A-B link: play, seek, stop and volume act on both decks at once.&#10;While it is on, the small letter names the deck the seek bar and lyrics follow.">
                         <ToggleButton.Style>
                             <Style TargetType="ToggleButton" BasedOn="{StaticResource SyncSwitch}">
                                 <Setter Property="FontSize" Value="10"/>
@@ -1676,8 +1676,32 @@
                                 <Setter Property="MinWidth" Value="52"/>
                             </Style>
                         </ToggleButton.Style>
+                        <!-- With the link on, A and B both go dim, so the deck the
+                             seek bar, position readout and lyric clock still follow
+                             is named here instead: one small letter, dim, only while
+                             the link is on. No extra control, no extra width. -->
                         <ToggleButton.Content>
-                            <TextBlock Text="A-B" FontWeight="Bold"/>
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="A-B" FontWeight="Bold"/>
+                                <TextBlock FontSize="8" Margin="3,1,0,0"
+                                           VerticalAlignment="Center"
+                                           Foreground="{StaticResource TextDimBrush}">
+                                    <TextBlock.Style>
+                                        <Style TargetType="TextBlock">
+                                            <Setter Property="Text" Value="&#x203A;B"/>
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsABMode}" Value="True">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding IsDeckAActive}" Value="True">
+                                                    <Setter Property="Text" Value="&#x203A;A"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </TextBlock.Style>
+                                </TextBlock>
+                            </StackPanel>
                         </ToggleButton.Content>
                     </ToggleButton>
 

@@ -193,9 +193,9 @@
                               ToolTip="-10 ms (fine tune)"/>
 
                 <Slider Grid.Column="3" Height="18" Margin="6,0" VerticalAlignment="Center"
-                        Minimum="-2000" Maximum="2000" SmallChange="1" LargeChange="100"
+                        Minimum="-10000" Maximum="10000" SmallChange="1" LargeChange="100"
                         IsSnapToTickEnabled="False" Value="{Binding LyricsOffsetMs}"
-                        ToolTip="-2000 to +2000 ms; positive = lyrics later"/>
+                        ToolTip="-10000 to +10000 ms; positive = lyrics later. The nudge buttons are the fine adjustment."/>
 
                 <RepeatButton Grid.Column="4" Style="{StaticResource NudgeButton}" Content="+10"
                               Width="24" Height="20" FontSize="9" Delay="400" Interval="150"

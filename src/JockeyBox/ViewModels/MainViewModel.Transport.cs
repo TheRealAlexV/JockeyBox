@@ -46,6 +46,11 @@ public partial class MainViewModel
             _transport.SetTarget(value ? TransportTarget.Both : TransportTarget.Active);
             OnPropertyChanged();
             OnPropertyChanged(nameof(IsSyncAvailable));
+            // Toggling the link does not move the pair's active deck, so the A/B
+            // highlight has to be told here: both of them go out when the link
+            // comes on, and the master's one comes back when it goes off.
+            OnPropertyChanged(nameof(IsAOnlySelected));
+            OnPropertyChanged(nameof(IsBOnlySelected));
             if (value) return;
 
             // A toggle that silently stays on while its mode is gone is a lie:
@@ -121,6 +126,8 @@ public partial class MainViewModel
             _abMode = both;
             OnPropertyChanged(nameof(IsABMode));
             OnPropertyChanged(nameof(IsSyncAvailable));
+            OnPropertyChanged(nameof(IsAOnlySelected));
+            OnPropertyChanged(nameof(IsBOnlySelected));
             if (!both)
             {
                 IsDeckSync = false;

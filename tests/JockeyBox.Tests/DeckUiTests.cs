@@ -149,6 +149,71 @@ public sealed class DeckUiTests
     }
 
     [Fact]
+    public void ABMode_LeavesNeitherDeckSelectedOnItsOwn()
+    {
+        var vm = Linked();
+        try
+        {
+            // Link off: exactly one deck carries the highlight, the one the
+            // transport follows.
+            UiThread.Run(() => vm.Transport.ActivateDeck(PlaybackDeck.A));
+            Assert.True(vm.IsAOnlySelected);
+            Assert.False(vm.IsBOnlySelected);
+            Assert.False(vm.IsABMode);
+
+            UiThread.Run(() => vm.Transport.ActivateDeck(PlaybackDeck.B));
+            Assert.False(vm.IsAOnlySelected);
+            Assert.True(vm.IsBOnlySelected);
+
+            // Link on: neither deck is selected on its own, so the row cannot
+            // show B highlighted while A-B also reads as pressed.
+            UiThread.Run(() => vm.IsABMode = true);
+            Assert.False(vm.IsAOnlySelected);
+            Assert.False(vm.IsBOnlySelected);
+            Assert.True(vm.IsABMode);
+
+            // Dropping the link hands the highlight back to the deck the
+            // transport kept as master, not to the one that was pressed last.
+            UiThread.Run(() => vm.IsABMode = false);
+            Assert.True(vm.IsAOnlySelected ^ vm.IsBOnlySelected);
+            Assert.Equal(vm.IsDeckAActive, vm.IsAOnlySelected);
+        }
+        finally
+        {
+            Drop(vm);
+        }
+    }
+
+    [Fact]
+    public void ABMode_TellsTheRowWhenTheTransportSelectsThePair()
+    {
+        var vm = Linked();
+        var raised = new List<string>();
+        try
+        {
+            UiThread.Run(() => vm.Transport.ActivateDeck(PlaybackDeck.A));
+            vm.PropertyChanged += (_, e) =>
+            {
+                lock (raised) raised.Add(e.PropertyName ?? "");
+            };
+
+            // A karaoke load flips the transport's target, not the switch.
+            UiThread.Run(() => vm.Transport.Target = TransportTarget.Both);
+
+            Assert.True(vm.IsABMode);
+            lock (raised)
+            {
+                Assert.Contains(nameof(vm.IsAOnlySelected), raised);
+                Assert.Contains(nameof(vm.IsBOnlySelected), raised);
+            }
+        }
+        finally
+        {
+            Drop(vm);
+        }
+    }
+
+    [Fact]
     public void LinkOff_TakesTheThreeSyncSwitchesWithIt()
     {
         var vm = Linked();

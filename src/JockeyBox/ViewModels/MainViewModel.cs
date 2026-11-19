@@ -72,10 +72,6 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private string _mediaOpNewPath = "";
     private string _mediaOpOldKey = "";
 
-    // Header slider range for lyric offsets. AppSettings allows +/-10 s; the
-    // slider covers the useful range and the raw ms value is still settable
-    // from the Settings dialog.
-    private const double LyricsOffsetSliderLimitMs = 2000;
     private const string AutoLyricsSource = "Auto";
 
     private CancellationTokenSource? _scanCts;
@@ -400,9 +396,22 @@ public partial class MainViewModel : ObservableObject, IDisposable
     /// </summary>
     [ObservableProperty] private double _crossfader = 0.5;
 
-    /// <summary>Which deck the shared transport surface currently follows.</summary>
+    /// <summary>
+    /// Which deck the shared transport surface follows. This stays a plain pair
+    /// (exactly one true) because the link still keeps a single master: the seek
+    /// bar, position readout, lyric clock and deck sync all follow it even while
+    /// commands fan out to both decks.
+    /// </summary>
     public bool IsDeckAActive => _transport.ActiveDeck == PlaybackDeck.A;
     public bool IsDeckBActive => !IsDeckAActive;
+
+    /// <summary>
+    /// The one-of-three selection behind the A / B / A-B buttons: A only, B only
+    /// or the link. Mutually exclusive by construction, so the row cannot show B
+    /// selected and A-B ticked at the same time.
+    /// </summary>
+    public bool IsAOnlySelected => !_abMode && _transport.ActiveDeck == PlaybackDeck.A;
+    public bool IsBOnlySelected => !_abMode && _transport.ActiveDeck == PlaybackDeck.B;
 
     /// <summary>Raised when the highlighted lyric changes (view scrolls to it).</summary>
     public event Action<LyricLineViewModel>? CurrentLyricChanged;
@@ -3772,10 +3781,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
         try
         {
             LyricsOffsetScope = scope;
-            // The slider only covers +/-2 s; hand it a clamped value so a
-            // larger offset set from the Settings dialog is not written back
-            // clamped. The text still shows the real value.
-            LyricsOffsetMs = Math.Clamp(stored, -LyricsOffsetSliderLimitMs, LyricsOffsetSliderLimitMs);
+            // The slider covers the whole legal range (+/-MaxLyricsOffsetMs), so
+            // the value it shows is the stored one: touching it writes back what
+            // the operator actually set, not a clamped stand-in.
+            LyricsOffsetMs = stored;
             LyricsOffsetText = FormatLyricsOffset(stored);
         }
         finally
@@ -4426,6 +4435,8 @@ public partial class MainViewModel : ObservableObject, IDisposable
         DeckB.IsActive = active == PlaybackDeck.B;
         OnPropertyChanged(nameof(IsDeckAActive));
         OnPropertyChanged(nameof(IsDeckBActive));
+        OnPropertyChanged(nameof(IsAOnlySelected));
+        OnPropertyChanged(nameof(IsBOnlySelected));
     }
 
     /// <summary>
