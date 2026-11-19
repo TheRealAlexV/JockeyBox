@@ -78,6 +78,29 @@
             </MenuItem.ItemContainerStyle>
         </MenuItem>
 
+        <!-- 1b. Play Karaoke Version: the pair (the take on A, the original on B).
+             One item per karaoke render the row has on disk; a row with a single
+             render keeps the one-click item, so its menu is unchanged. -->
+        <MenuItem Header="Play Karaoke Version"
+                  AutomationProperties.Name="Play Karaoke Version"
+                  Command="{Binding PlacementTarget.Tag.PlayKaraoke, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                  Visibility="{Binding PlacementTarget.Tag.ShowFlatPlayKaraoke, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={StaticResource MenuVisibility}}"/>
+
+        <MenuItem Header="Play Karaoke Version"
+                  AutomationProperties.Name="Play Karaoke Version"
+                  ItemsSource="{Binding PlacementTarget.Tag.PlayKaraokeVariants, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                  Visibility="{Binding PlacementTarget.Tag.ShowVariantPlayKaraoke, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={StaticResource MenuVisibility}}">
+            <MenuItem.ItemContainerStyle>
+                <Style TargetType="MenuItem">
+                    <Setter Property="Header" Value="{Binding}"/>
+                    <Setter Property="Command" Value="{Binding Command}"/>
+                    <Setter Property="AutomationProperties.Name" Value="{Binding Header}"/>
+                    <Setter Property="HeaderTemplate"
+                            Value="{StaticResource VariantMenuItemHeader}"/>
+                </Style>
+            </MenuItem.ItemContainerStyle>
+        </MenuItem>
+
         <!-- 2. Preview (stream) -->
         <MenuItem Header="Preview"
                   Command="{Binding PlacementTarget.Tag.Preview, RelativeSource={RelativeSource AncestorType=ContextMenu}}"

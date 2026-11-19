@@ -3535,8 +3535,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
     {
         // Every refusal logs one line naming the track, so a click that does
         // nothing is still visible in the console's LOG list.
-        switch (KaraokeGate.Check(track, _settings.KaraokeDirectory, SeparationEngine.IsInstalled))
+        switch (KaraokeGate.Check(track, _settings.KaraokeDirectory, SeparationEngine.IsInstalled, mode))
         {
+            case KaraokeDenial.ModeAlreadyExists:
+                StatusText = $"“{track!.Title}” already has that karaoke version.";
+                return;
             case KaraokeDenial.NoKaraokeFolder:
                 StatusText = "Set a Karaoke folder in Settings before generating karaoke tracks.";
                 SettingsRequested?.Invoke();

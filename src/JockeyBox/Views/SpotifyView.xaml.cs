@@ -75,6 +75,8 @@ public partial class SpotifyView : UserControl
             Preview = vm.PreviewTrackCommand,
             Download = vm.DownloadSelectedCommand,
             MakeKaraoke = vm.SeparateSelectedKaraokeCommand,
+            MakeKaraokeKeepBacking = vm.SeparateSelectedKaraokeKeepBackingCommand,
+            MakeKaraokeVocalsOnly = vm.SeparateSelectedKaraokeVocalsOnlyCommand,
             ShowInExplorer = vm.RevealSelectedFileCommand,
             FindOnYouTube = vm.OpenSelectedOnYouTubeCommand,
         };

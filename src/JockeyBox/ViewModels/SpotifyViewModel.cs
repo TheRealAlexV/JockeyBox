@@ -10,6 +10,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using JockeyBox.Downloads;
 using JockeyBox.Data;
+using JockeyBox.Library;
 using JockeyBox.Lyrics;
 using JockeyBox.Playback;
 using JockeyBox.Settings;
@@ -177,6 +178,8 @@ public partial class SpotifyViewModel : ObservableObject
     [NotifyCanExecuteChangedFor(nameof(AddSelectedToSpotifyPlaylistCommand))]
     [NotifyCanExecuteChangedFor(nameof(RemoveSelectedFromSpotifyPlaylistCommand))]
     [NotifyCanExecuteChangedFor(nameof(SeparateSelectedKaraokeCommand))]
+    [NotifyCanExecuteChangedFor(nameof(SeparateSelectedKaraokeKeepBackingCommand))]
+    [NotifyCanExecuteChangedFor(nameof(SeparateSelectedKaraokeVocalsOnlyCommand))]
     [NotifyCanExecuteChangedFor(nameof(RevealSelectedFileCommand))]
     [NotifyPropertyChangedFor(nameof(HasLocalFileForSelected))]
     private SourceTrack? _selectedTrack;
@@ -461,6 +464,7 @@ public partial class SpotifyViewModel : ObservableObject
 
         VersionsTarget = track;
         Versions.Clear();
+        AddLocalTakes(track);
         IsFindingVersions = true;
 
         var query = track.SearchQuery;
@@ -501,6 +505,19 @@ public partial class SpotifyViewModel : ObservableObject
     }
 
     [RelayCommand]
+    /// <summary>
+    /// The row's own takes, prepended to the upload list. Only a library-owned row
+    /// has files on disk, and every stem mode writes its own file, so this is one
+    /// row per render that will actually play.
+    /// </summary>
+    private void AddLocalTakes(SourceTrack track)
+    {
+        if (_remote?.Karaoke.Find(track) is not { } entry) return;
+
+        foreach (var variant in KaraokeNaming.DiscoverVariants(entry.MusicPath))
+            Versions.Add(new VersionCandidate(variant));
+    }
+
     private void CloseVersions()
     {
         Versions.Clear();
@@ -518,9 +535,8 @@ public partial class SpotifyViewModel : ObservableObject
     private void DownloadVersion(VersionCandidate? candidate)
     {
         var target = VersionsTarget;
-        if (candidate == null || target == null) return;
+        if (candidate?.Entry is not { } entry || target == null) return;
 
-        var entry = candidate.Entry;
         target.VideoId = entry.VideoId;
         target.State = SourceTrackState.New;
         target.Error = null;
@@ -540,9 +556,8 @@ public partial class SpotifyViewModel : ObservableObject
     private void PreviewVersion(VersionCandidate? candidate)
     {
         var target = VersionsTarget;
-        if (candidate == null || target == null) return;
+        if (candidate?.Entry is not { } entry || target == null) return;
 
-        var entry = candidate.Entry;
         if (string.IsNullOrWhiteSpace(entry.VideoId))
         {
             StatusText = "That upload has no video id, so it cannot be previewed.";
@@ -606,7 +621,19 @@ public partial class SpotifyViewModel : ObservableObject
 
     /// <summary>Hand one already-chosen upload to the browser.</summary>
     [RelayCommand]
-    private void OpenVersionOnYouTube(VersionCandidate? candidate) => OpenOnYouTube(candidate?.Entry.VideoId);
+    private void OpenVersionOnYouTube(VersionCandidate? candidate) => OpenOnYouTube(candidate?.Entry?.VideoId);
+
+    /// <summary>
+    /// Play a take the row already has on disk: the versions picker lists local
+    /// renders above the uploads, and this is the row action for them.
+    /// </summary>
+    [RelayCommand]
+    private void PlayVersion(VersionCandidate? candidate)
+    {
+        if (candidate?.LocalVariant is not { } variant) return;
+        if (VersionsTarget is not { } target) return;
+        _remote?.PlayVariant(target, variant);
+    }
 
     /// <summary>
     /// "Find on YouTube": open the search window for the selected row, filled in
@@ -1169,6 +1196,25 @@ public partial class SpotifyViewModel : ObservableObject
         _remote?.MakeKaraoke(track);
     }
 
+    /// <summary>
+    /// The other two stem modes, mirroring the library's three menu rows. The
+    /// remote tabs used to offer the plain instrumental only, because this host
+    /// carried one mode-less action.
+    /// </summary>
+    [RelayCommand(CanExecute = nameof(HasLocalFileForSelected))]
+    private void SeparateSelectedKaraokeKeepBacking()
+    {
+        if (SelectedTrack is not { } track) return;
+        _remote?.MakeKaraokeKeepBacking(track);
+    }
+
+    [RelayCommand(CanExecute = nameof(HasLocalFileForSelected))]
+    private void SeparateSelectedKaraokeVocalsOnly()
+    {
+        if (SelectedTrack is not { } track) return;
+        _remote?.MakeKaraokeVocalsOnly(track);
+    }
+
     /// <summary>Show the selected row's local file in Explorer (disabled until it exists).</summary>
     [RelayCommand(CanExecute = nameof(HasLocalFileForSelected))]
     private void RevealSelectedFile()
@@ -1484,17 +1530,38 @@ public partial class SpotifyViewModel : ObservableObject
 /// </summary>
 public sealed class VersionCandidate
 {
-    public VersionCandidate(YtEntry entry) => Entry = entry;
+    public VersionCandidate(YtEntry entry)
+    {
+        Entry = entry;
+        Title = entry.Title;
+    }
 
-    public YtEntry Entry { get; }
+    /// <summary>
+    /// A take the row already owns: the picker lists it above the uploads so the
+    /// operator can play what is on disk instead of downloading a second copy.
+    /// </summary>
+    public VersionCandidate(AudioVariant variant)
+    {
+        LocalVariant = variant;
+        Title = KaraokeNaming.DisplayName(variant);
+    }
 
-    public string Title => Entry.Title;
-    public string Uploader => Entry.Uploader;
-    public string DurationText => Format(Entry.DurationSeconds);
-    public string ViewsText => FormatViews(Entry.ViewCount);
+    public YtEntry? Entry { get; }
 
-    /// <summary>"Channel · 3:42 · 1.2M views" - one line under the title.</summary>
-    public string DetailText => $"{Uploader} \u00b7 {DurationText} \u00b7 {ViewsText}";
+    /// <summary>Set for a local file; null for a YouTube upload.</summary>
+    public AudioVariant? LocalVariant { get; }
+
+    public bool IsLocal => LocalVariant is not null;
+
+    public string Title { get; }
+    public string Uploader => Entry?.Uploader ?? "";
+    public string DurationText => Entry is null ? "" : Format(Entry.DurationSeconds);
+    public string ViewsText => Entry is null ? "" : FormatViews(Entry.ViewCount);
+
+    /// <summary>"Channel · 3:42 · 1.2M views", or "On disk" for a take the row owns.</summary>
+    public string DetailText => IsLocal
+        ? "On disk"
+        : $"{Uploader} \u00b7 {DurationText} \u00b7 {ViewsText}";
 
     private static string Format(double seconds)
     {
