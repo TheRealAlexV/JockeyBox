@@ -72,6 +72,15 @@ public partial class MainViewModel
         DeckA.SetTrack(track.MusicPath, takeStem == StemKind.Karaoke ? karaokePath : null,
                        track.Title, track.Artist);
         DeckB.SetTrack(track.MusicPath, null, track.Title, track.Artist);
+
+        // Peaks for every lane. SetTrack clears both arrays and only an ordinary
+        // load asked for them back, so a pair load drew no waveforms at all, deck
+        // B's original included. Same paths the two SetTrack calls got; the
+        // generation is read after SetTrack because that call bumps it, and
+        // SetWaveforms drops a result whose generation no longer matches.
+        _ = GenerateWaveformsAsync(DeckA, DeckA.WaveformGeneration, track.MusicPath,
+                                   takeStem == StemKind.Karaoke ? karaokePath : null);
+        _ = GenerateWaveformsAsync(DeckB, DeckB.WaveformGeneration, track.MusicPath, null);
         // One take per deck: a load discovers the sibling render beside its file
         // as a partner, and the deck's default Mix mode would then sum both files,
         // so each deck is pinned to its own take.

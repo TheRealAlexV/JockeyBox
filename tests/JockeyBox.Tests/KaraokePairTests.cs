@@ -131,6 +131,42 @@ public sealed class KaraokePairTests
         Assert.Equal("Deck B", vm.DeckB.DeckPrefix);
     }
 
+    /// <summary>
+    /// A pair load must fill every waveform lane, not just the ones an ordinary
+    /// single-file load would. <c>SetTrack</c> clears both arrays on each deck and
+    /// the load path that got the pair here used to ask for no peaks back, so all
+    /// three lanes (A's original, A's take, B's original) drew nothing.
+    /// </summary>
+    [Fact]
+    public void KaraokePair_FillsEveryWaveformLane()
+    {
+        string music = TestAudio.WriteConstantWav(0.20f);
+        string karaoke = TestAudio.WriteConstantWav(0.50f);
+        try
+        {
+            var vm = UiThread.Run(() => new MainViewModel());
+            var pair = Track("a/song", music, karaoke);
+
+            UiThread.Run(() => Invoke(vm, "LoadKaraokePair", pair, AudioVariant.Karaoke));
+            Assert.True(PairLoaded(vm), "the pair never loaded");
+
+            // Generation is fire-and-forget; each deck drops a result whose
+            // generation no longer matches, so wait for the arrays themselves.
+            Assert.True(WaitFor(vm, () => vm.DeckA.Waveform.Count > 1
+                                            && vm.DeckA.KaraokeWaveform.Count > 1
+                                            && vm.DeckB.Waveform.Count > 1),
+                        "empty waveform lane: " +
+                        $"A={vm.DeckA.Waveform.Count}, " +
+                        $"A take={vm.DeckA.KaraokeWaveform.Count}, " +
+                        $"B={vm.DeckB.Waveform.Count}");
+        }
+        finally
+        {
+            TestAudio.TryDelete(music);
+            TestAudio.TryDelete(karaoke);
+        }
+    }
+
     [Fact]
     public void KaraokePair_StartsBothDecks_WithTheLockEngaged()
     {
