@@ -89,6 +89,11 @@ public partial class MainWindow : Window
         // from a partial beside MainViewModel; its constructor belongs to another
         // lane, so the window is what calls the init hook.
         Loaded += (_, _) => _vm.InitializeDeckUi();
+        // Endpoint enumeration is off the UI thread and out of the view model's
+        // constructor: resolving each device's FriendlyName crosses COM and can
+        // take seconds, which used to block start-up long enough for the UI
+        // watchdog to kill the process.
+        Loaded += async (_, _) => await _vm.RefreshDevicesAsync();
 
         // Give the browser row a definite height (see OnShellLayoutChanged). The shell
         // scrolls, so its content is measured at infinite height; that is what turned

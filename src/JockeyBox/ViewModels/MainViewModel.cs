@@ -172,7 +172,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
         DeckB.RestoreSettings(_settings.DeckBDeviceId, _settings.DeckBDelayMs, _settings.DeckBVolume,
             _settings.DeckBOutputDelayMs);
         SyncDeckActivation();
-        RefreshDevices();
+        // Endpoint enumeration deliberately does not happen here: it blocks on
+        // MMDevAPI for seconds and would run on the UI thread during start-up.
+        // MainWindow calls RefreshDevicesAsync once it is loaded.
 
         // 2.0: master volume, output delay, transition automation, the
         // soundboard, its hotkeys and the loopback API. Kept in
@@ -4578,15 +4580,24 @@ public partial class MainViewModel : ObservableObject, IDisposable
         BallVisible = BallX + BallSize > 0 && BallY >= 0;
     }
 
-    private void RefreshDevices()
+    /// <summary>
+    /// Enumerate active output endpoints and hand them to both decks.
+    ///
+    /// <para>Runs on a worker thread on purpose: resolving <c>FriendlyName</c>
+    /// re-enters <c>IPropertyStore.GetCount</c> across COM per property read, which
+    /// has been measured at seconds per device. Called from the window's
+    /// <c>Loaded</c>, never from the constructor, so start-up never blocks on
+    /// MMDevAPI.</para>
+    /// </summary>
+    public async Task RefreshDevicesAsync()
     {
-        var devices = _deviceService.GetOutputDevices();
+        var devices = await Task.Run(_deviceService.GetOutputDevices);
         DeckA.RefreshDevices(devices);
         DeckB.RefreshDevices(devices);
     }
 
     [RelayCommand]
-    private void ReloadDevices() => RefreshDevices();
+    private Task ReloadDevices() => RefreshDevicesAsync();
 
     private void PersistDeckSettings()
     {

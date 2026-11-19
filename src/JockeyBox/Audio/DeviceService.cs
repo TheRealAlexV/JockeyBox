@@ -1,3 +1,4 @@
+using JockeyBox.Tools;
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
 
@@ -27,25 +28,34 @@ public class DeviceService
     public List<AudioDeviceInfo> GetOutputDevices()
     {
         var list = new List<AudioDeviceInfo>();
-        using var enumerator = new MMDeviceEnumerator();
-
-        string? defaultId = null;
+        // Enumeration runs on a background thread during start-up, so a broken
+        // audio service must cost an empty picker, not the whole launch.
         try
         {
-            using var def = enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
-            defaultId = def.ID;
-            list.Add(new AudioDeviceInfo(def.ID, $"{def.FriendlyName} (Default)"));
-        }
-        catch
-        {
-            // No default endpoint (no audio devices at all) - list stays empty.
-        }
+            using var enumerator = new MMDeviceEnumerator();
 
-        foreach (var device in enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active))
+            string? defaultId = null;
+            try
+            {
+                using var def = enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
+                defaultId = def.ID;
+                list.Add(new AudioDeviceInfo(def.ID, $"{def.FriendlyName} (Default)"));
+            }
+            catch
+            {
+                // No default endpoint (no audio devices at all) - list stays empty.
+            }
+
+            foreach (var device in enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active))
+            {
+                if (device.ID != defaultId)
+                    list.Add(new AudioDeviceInfo(device.ID, device.FriendlyName));
+                device.Dispose();
+            }
+        }
+        catch (Exception ex)
         {
-            if (device.ID != defaultId)
-                list.Add(new AudioDeviceInfo(device.ID, device.FriendlyName));
-            device.Dispose();
+            Log.Warn("Output device enumeration failed: " + ex.Message);
         }
         return list;
     }
@@ -61,28 +71,36 @@ public class DeviceService
     public List<AudioDeviceInfo> GetInputDevices()
     {
         var list = new List<AudioDeviceInfo>();
-        using var enumerator = new MMDeviceEnumerator();
-
-        string? defaultId = DefaultCaptureId(enumerator);
-        if (defaultId != null)
+        // Same contract as the render side: a failure is logged, never thrown.
+        try
         {
-            try
+            using var enumerator = new MMDeviceEnumerator();
+
+            string? defaultId = DefaultCaptureId(enumerator);
+            if (defaultId != null)
             {
-                using var def = enumerator.GetDevice(defaultId);
-                list.Add(new AudioDeviceInfo(def.ID, $"{def.FriendlyName} (Default)"));
+                try
+                {
+                    using var def = enumerator.GetDevice(defaultId);
+                    list.Add(new AudioDeviceInfo(def.ID, $"{def.FriendlyName} (Default)"));
+                }
+                catch
+                {
+                    // The endpoint vanished between the two calls; the loop below
+                    // still lists whatever is active.
+                }
             }
-            catch
+
+            foreach (var device in enumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active))
             {
-                // The endpoint vanished between the two calls; the loop below
-                // still lists whatever is active.
+                if (device.ID != defaultId)
+                    list.Add(new AudioDeviceInfo(device.ID, device.FriendlyName));
+                device.Dispose();
             }
         }
-
-        foreach (var device in enumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active))
+        catch (Exception ex)
         {
-            if (device.ID != defaultId)
-                list.Add(new AudioDeviceInfo(device.ID, device.FriendlyName));
-            device.Dispose();
+            Log.Warn("Input device enumeration failed: " + ex.Message);
         }
         return list;
     }
