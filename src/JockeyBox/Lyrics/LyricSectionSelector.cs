@@ -105,10 +105,15 @@ public static class LyricSectionSelector
     {
         int startMs = ClampMs(lines[first].Time);
 
+        // A marker line never ends a section: it is not sung text, so the span
+        // must run on to the next real line.
+        int next = last + 1;
+        while (next < lines.Count && lines[next].IsInstrumental) next++;
+
         long endMs;
-        if (last + 1 < lines.Count)
+        if (next < lines.Count)
         {
-            endMs = ClampMs(lines[last + 1].Time);
+            endMs = ClampMs(lines[next].Time);
         }
         else
         {

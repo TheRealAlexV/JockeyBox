@@ -71,6 +71,10 @@ public static class LyricEdits
         int best = -1, bestDelta = MatchWindowMs + 1;
         for (int i = 0; i < lines.Count; i++)
         {
+            // A marker line is not a lyric: binding an edit to it would rewrite
+            // the text of a placeholder and leave the real line untouched.
+            if (lines[i].IsInstrumental) continue;
+
             int delta = (int)Math.Abs(lines[i].Time.TotalMilliseconds - edit.TimeMs);
             if (delta < bestDelta)
             {

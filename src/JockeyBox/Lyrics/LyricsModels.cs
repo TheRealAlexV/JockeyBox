@@ -27,6 +27,13 @@ public record LyricLine(TimeSpan Time, string Text)
     /// across the line's unchanged window.
     /// </summary>
     public bool IsSynthetic { get; init; }
+
+    /// <summary>
+    /// True for a placeholder line that stands in for an instrumental stretch
+    /// (see <see cref="InstrumentalGap"/>). It is display-only: it is never
+    /// edited, never gets synthesised words and never ends a saved section.
+    /// </summary>
+    public bool IsInstrumental { get; init; }
 }
 
 /// <summary>Parsed lyrics for a track, ready for the UI panel.</summary>

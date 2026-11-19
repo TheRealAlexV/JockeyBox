@@ -14,16 +14,31 @@ public partial class LyricLineViewModel : ObservableObject
     }
 
     public LyricLineViewModel(TimeSpan time, string text, IReadOnlyList<LyricWord>? words)
+        : this(time, text, words, false)
+    {
+    }
+
+    public LyricLineViewModel(
+        TimeSpan time, string text, IReadOnlyList<LyricWord>? words, bool isInstrumental)
     {
         Time = time;
         Text = string.IsNullOrWhiteSpace(text) ? "\u266a" : text;
-        Words = words is { Count: > 0 }
+        IsInstrumental = isInstrumental;
+        Words = !isInstrumental && words is { Count: > 0 }
             ? words.Select(w => new LyricWordViewModel(w)).ToArray()
             : Array.Empty<LyricWordViewModel>();
     }
 
     public TimeSpan Time { get; }
     public string Text { get; }
+
+    /// <summary>
+    /// True for a marker line standing in for an instrumental stretch (see
+    /// <see cref="InstrumentalGap.Marker"/>). It uses the standard line
+    /// treatment; the flag is here so a later visual pass can style it without
+    /// re-deriving it from the text.
+    /// </summary>
+    public bool IsInstrumental { get; }
 
     /// <summary>
     /// Per-word views for the wrapped word-by-word layout; empty when the line

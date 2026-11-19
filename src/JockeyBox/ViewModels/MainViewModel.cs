@@ -3677,6 +3677,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         if (!fromEditsOnly)
         {
+            // Instrumental stretches get a marker line before the word spans are
+            // built: it becomes the pre-gap line's next line, which is what stops
+            // that line's synthetic words stretching across the whole gap. New
+            // document, so the provider's copy and the cache stay marker-free.
+            doc = InstrumentalGap.Fill(doc);
+
             // Word-follow needs per-word spans. Documents that already carry real
             // word timings (A2 enhanced LRC, providers with word data) are used as
             // is; line-only synced documents get an even split bounded by the next
@@ -3691,7 +3697,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         _lyricsDocument = doc;
         foreach (var line in doc.Lines)
-            LyricLines.Add(new LyricLineViewModel(line.Time, line.Text, line.Words));
+            LyricLines.Add(new LyricLineViewModel(line.Time, line.Text, line.Words, line.IsInstrumental));
         _lyricsSynced = doc.Synced;
         LyricsStatus = doc.Synced
             ? $"Synced lyrics \u00b7 {doc.Source}"

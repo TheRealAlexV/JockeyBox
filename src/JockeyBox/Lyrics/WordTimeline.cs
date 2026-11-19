@@ -65,6 +65,11 @@ public static class WordTimeline
             // second call a no-op.
             if (line.Words is { Count: > 0 }) continue;
 
+            // A marker line stands in for the singing, not for words: tiling its
+            // symbols across the gap would leave one of them lit for the whole
+            // instrumental.
+            if (line.IsInstrumental) continue;
+
             var (start, end) = LineWindow(lines, i, trackDuration);
             var words = BuildLineWords(line.Text, start, end);
             if (words.Count == 0) continue;
