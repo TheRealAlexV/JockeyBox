@@ -68,6 +68,34 @@ public sealed class KaraokePairTests
     }
 
     [Fact]
+    public void PairLoad_builds_the_pair_cue_bank_and_release_drops_it()
+    {
+        string music = TestAudio.WriteConstantWav(0.20f);
+        string karaoke = TestAudio.WriteConstantWav(0.50f);
+        try
+        {
+            var vm = UiThread.Run(() => new MainViewModel());
+            UiThread.Run(() => Invoke(vm, "LoadKaraokePair", Track("a/song", music, karaoke), AudioVariant.Karaoke));
+
+            // The strip's signal is the pair flag, not A-B mode plus sync.
+            Assert.True(vm.IsKaraokePairLoaded);
+            Assert.NotNull(vm.PairCues);
+            Assert.Equal(8, vm.PairCues!.Slots.Count);
+            Assert.Equal(9, vm.PairCues.Pads.Count);
+
+            // Every exit goes through the one release point, which drops the bank.
+            UiThread.Run(() => Invoke(vm, "ReleaseKaraokePair"));
+            Assert.False(vm.IsKaraokePairLoaded);
+            Assert.Null(vm.PairCues);
+        }
+        finally
+        {
+            TestAudio.TryDelete(music);
+            TestAudio.TryDelete(karaoke);
+        }
+    }
+
+    [Fact]
     public void RestoreTitle_CalledTwice_StillYieldsTheBaseTitles()
     {
         var vm = UiThread.Run(() => new MainViewModel());
@@ -164,7 +192,7 @@ public sealed class KaraokePairTests
 
                 // The same line that lands in jockeybox.log proves it without the UI.
                 var pairText = string.Join("\n", lines.Where(line => line.Contains("karaoke pair")));
-                var loadedFlag = ReadField(vm, "_karaokePairLoaded");
+                var loadedFlag = ReadField(vm, "_isKaraokePairLoaded");
                 var loggedFlag = ReadField(vm, "_pairStartLogged");
                 Assert.True(pairText.Contains("both decks Playing") && pairText.Contains("sync=True"),
                     $"the pair's log lines: {pairText}\n" +
@@ -469,7 +497,7 @@ public sealed class KaraokePairTests
 
     private static bool PairLoaded(MainViewModel vm) =>
         (bool)typeof(MainViewModel)
-            .GetField("_karaokePairLoaded", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetField("_isKaraokePairLoaded", BindingFlags.Instance | BindingFlags.NonPublic)!
             .GetValue(vm)!;
 
     private static object? ReadField(MainViewModel vm, string name) =>

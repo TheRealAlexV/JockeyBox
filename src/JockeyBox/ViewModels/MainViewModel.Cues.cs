@@ -18,6 +18,10 @@ public partial class MainViewModel
     internal static HotCueRepository? HotCueStore =>
         LibraryDatabase.Current is { } db ? new HotCueRepository(db) : null;
 
+    /// <summary>Saved pair cues, or null when the library runs JSON-only.</summary>
+    internal static PairHotCueRepository? PairHotCueStore =>
+        LibraryDatabase.Current is { } db ? new PairHotCueRepository(db) : null;
+
     /// <summary>Deck index the cue table uses: 0 is Deck A, 1 is Deck B.</summary>
     internal static int CueDeckOf(PlaybackDeck deck) => deck == PlaybackDeck.A ? 0 : 1;
 }

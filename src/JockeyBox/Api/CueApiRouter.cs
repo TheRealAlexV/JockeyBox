@@ -38,7 +38,15 @@ public sealed record CueSurface(
     bool ABMode,
     bool DeckSync,
     bool VolumeSync,
-    bool TempoSync);
+    bool TempoSync,
+    CuePairState? Pair = null);
+
+/// <summary>
+/// The karaoke pair's bank: both track ids a cue row is keyed by, and each slot.
+/// Null on the surface when no pair is loaded. Additive: nothing here changes
+/// what <see cref="CueDeckState"/> means.
+/// </summary>
+public sealed record CuePairState(long TrackIdA, long TrackIdB, IReadOnlyList<CueSlotState> Slots);
 
 /// <summary>HTTP status plus the JSON body to write.</summary>
 public readonly record struct RouteOutcome(int Status, string Json)

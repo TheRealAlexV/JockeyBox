@@ -129,6 +129,15 @@ public partial class DeckViewModel : ObservableObject, IDisposable
     /// <summary>Eight saved pads plus the quick cue, bound in the card's pad bank.</summary>
     public CueBankViewModel Cues { get; }
 
+    /// <summary>Raw media clock of this deck's channel (the pair bank captures from it).</summary>
+    internal double MediaSeconds => _channel.MediaPositionSeconds;
+
+    /// <summary>
+    /// Seek this deck's own channel. Used by the pair bank, which must move both
+    /// channels without going through the transport's sync mirror.
+    /// </summary>
+    internal void SeekMedia(double seconds) => _channel.Seek(TimeSpan.FromSeconds(seconds));
+
     /// <summary>
     /// Diagnostic for the deck's asynchronous load, on when
     /// <c>JOCKEYBOX_DECK_TRACE</c> is set: the state sampled at load time next to

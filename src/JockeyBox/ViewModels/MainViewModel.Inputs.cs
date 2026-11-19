@@ -38,7 +38,7 @@ public partial class MainViewModel
     {
         if (_hotkeys == null) return;
 
-        _cueHotkeys ??= new CueHotkeyInput(_hotkeys, OnCueAction);
+        _cueHotkeys ??= new CueHotkeyInput(_hotkeys, OnCueAction, OnPairCueAction);
     }
 
     /// <summary>
@@ -51,8 +51,20 @@ public partial class MainViewModel
         StartCueHotkeys();
         if (_cueHotkeys == null) return;
 
-        _cueHotkeys.Attach(CueHotkeys.Resolve(_settings.CueHotkeys));
+        _cueHotkeys.Attach(MergedCuePlan(_settings.CueHotkeys));
         Log.Info($"cue hotkeys: {_cueHotkeys.Bound} bound, {_cueHotkeys.Failures.Count} failed");
+    }
+
+    /// <summary>
+    /// One plan for one binder: the per-deck family and the pair family, so both
+    /// ride the window's single WM_HOTKEY hook.
+    /// </summary>
+    internal static IReadOnlyDictionary<string, string> MergedCuePlan(IReadOnlyDictionary<string, string>? stored = null)
+    {
+        var plan = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var pair in CueHotkeys.Resolve(stored)) plan[pair.Key] = pair.Value;
+        foreach (var pair in PairCueHotkeys.Resolve(null)) plan[pair.Key] = pair.Value;
+        return plan;
     }
 
     /// <summary>Drop the registrations and the subscription (shutdown and settings reload).</summary>
@@ -91,6 +103,39 @@ public partial class MainViewModel
             Log.Warn($"cue hotkey {action.Label}: {error}");
     }
 
+    /// <summary>Marshal a pair action to the UI thread, same reason as <see cref="OnCueAction"/>.</summary>
+    private void OnPairCueAction(PairCueAction action)
+    {
+        var dispatcher = System.Windows.Application.Current?.Dispatcher;
+        if (dispatcher == null)
+        {
+            FirePairCue(action);
+            return;
+        }
+
+        dispatcher.BeginInvoke(new Action(() => FirePairCue(action)));
+    }
+
+    /// <summary>
+    /// The pair hotkey is the pair pad: an occupied slot jumps both decks, an
+    /// empty one stores the master deck's position. With no pair loaded there is
+    /// nothing to address, so it logs rather than touching the per-deck banks.
+    /// </summary>
+    private void FirePairCue(PairCueAction action)
+    {
+        var bank = PairCues;
+        if (bank == null)
+        {
+            Log.Info($"pair cue {action.Label}: no karaoke pair loaded");
+            return;
+        }
+
+        if (bank.TryRecall(action.Slot, out _)) return;
+
+        if (!bank.TryCapture(action.Slot, out string error))
+            Log.Warn($"pair cue {action.Label}: {error}");
+    }
+
     /// <summary>Marshal to the UI thread, because cues and transport are UI state.</summary>
     private T OnUi<T>(Func<T> work)
     {
@@ -123,7 +168,15 @@ public partial class MainViewModel
                 decks.Add(new CueDeckState(deck == PlaybackDeck.A ? "a" : "b", bank.TrackId, slots));
             }
 
-            return new CueSurface(decks, _vm.IsABMode, _vm.IsDeckSync, _vm.IsVolumeSync, _vm.IsTempoSync);
+            var pairBank = _vm.PairCues;
+            var pair = pairBank == null
+                ? null
+                : new CuePairState(pairBank.TrackIdA, pairBank.TrackIdB,
+                    pairBank.Pads
+                        .Select(p => new CueSlotState(p.Slot, p.PositionMs, p.HasPosition))
+                        .ToList());
+
+            return new CueSurface(decks, _vm.IsABMode, _vm.IsDeckSync, _vm.IsVolumeSync, _vm.IsTempoSync, pair);
         });
 
         public bool Recall(PlaybackDeck deck, int slot, out long positionMs, out string error)

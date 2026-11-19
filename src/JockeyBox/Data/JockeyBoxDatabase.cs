@@ -30,7 +30,7 @@ namespace JockeyBox.Data;
 public sealed class JockeyBoxDatabase : IDisposable
 {
     /// <summary>Latest schema version this build understands.</summary>
-    public const int SchemaVersion = 6;
+    public const int SchemaVersion = 7;
 
     private const string AppFolderName = "JockeyBox";
     private const string DatabaseFileName = "library.db";
@@ -399,6 +399,7 @@ public sealed class JockeyBoxDatabase : IDisposable
         4 => Migration4PlaylistNames,
         5 => Migration5PlaylistOrder,
         6 => Migration6HotCues,
+        7 => Migration7PairHotCues,
         _ => throw new ArgumentOutOfRangeException(nameof(version), version, "No such migration"),
     };
 
@@ -633,5 +634,34 @@ public sealed class JockeyBoxDatabase : IDisposable
             UNIQUE (track_id, deck, slot)
         );
         CREATE INDEX IF NOT EXISTS ix_hot_cues_track ON hot_cues(track_id, deck);
+        """;
+
+    /// <summary>
+    /// v7: eight saved cues shared by a karaoke pair.
+    ///
+    /// <para><b>Why a second table</b>: a pair is two tracks at once, the render
+    /// on deck A and the original on deck B, so one <c>track_id</c> cannot name
+    /// it. A sentinel <c>deck</c> value in <c>hot_cues</c> would also change what
+    /// the existing deck column means, and every existing reader would need to
+    /// know about it. A pair row is keyed by both track ids instead, and the
+    /// per-deck table is untouched.</para>
+    ///
+    /// <para>Additive only: no <c>ALTER</c>, no row rewritten. A v6 file keeps
+    /// every <c>hot_cues</c> row exactly as it was. Like its predecessor, the
+    /// pair's position is media milliseconds, and the quick cue is never
+    /// stored.</para>
+    /// </summary>
+    private const string Migration7PairHotCues = """
+        CREATE TABLE IF NOT EXISTS pair_hot_cues (
+            id          INTEGER PRIMARY KEY,
+            track_id_a  INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+            track_id_b  INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+            slot        INTEGER NOT NULL,
+            position_ms INTEGER NOT NULL,
+            label       TEXT,
+            created_at  TEXT    NOT NULL,
+            UNIQUE (track_id_a, track_id_b, slot)
+        );
+        CREATE INDEX IF NOT EXISTS ix_pair_hot_cues_pair ON pair_hot_cues(track_id_a, track_id_b);
         """;
 }

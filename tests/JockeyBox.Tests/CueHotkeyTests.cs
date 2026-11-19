@@ -261,8 +261,9 @@ public sealed class CueHotkeyTests
             });
 
             // Headless: there is no window handle, so every chord is refused as
-            // "window not ready" - the point is that all 18 were attempted.
-            Assert.Equal(18, vm.CueHotkeyFailureCount);
+            // "window not ready" - the point is that all 27 were attempted
+            // (eighteen deck cues and the nine pair cues).
+            Assert.Equal(27, vm.CueHotkeyFailureCount);
             Assert.Equal(0, vm.CueHotkeyBound);
         }
         finally

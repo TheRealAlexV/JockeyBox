@@ -17,6 +17,106 @@ public readonly record struct CueAction(PlaybackDeck Deck, int Slot)
 }
 
 /// <summary>
+/// One cue on the karaoke pair: a slot only, because a pair action hits both
+/// decks at once. Slot 0 is the pair's ephemeral quick cue, 1..8 the saved pads.
+/// This is deliberately not a third <see cref="PlaybackDeck"/>: the deck enum
+/// stays two-valued, and a pair is not a deck.
+/// </summary>
+public readonly record struct PairCueAction(int Slot)
+{
+    public bool IsQuick => Slot == 0;
+
+    /// <summary>"P1".."P8"/"PQ" — short enough for a log line or a key caption.</summary>
+    public string Label => $"P{(IsQuick ? "Q" : Slot.ToString())}";
+}
+
+/// <summary>
+/// The pair cue id scheme: "cue.p.1".."cue.p.8" and "cue.p.q".
+///
+/// <para><b>Default chords</b> are on the family that is free on this rig: deck A
+/// owns <c>Ctrl+Shift</c>, deck B owns <c>Ctrl+Alt+Shift</c>, so the pair takes
+/// <c>Ctrl+Alt+1..8</c> / <c>Ctrl+Alt+Q</c> and collides with neither.</para>
+///
+/// <para>Ids are data, like the per-deck family: nothing here is hand-written
+/// per slot.</para>
+/// </summary>
+public static class PairCueHotkeys
+{
+    /// <summary>Prefix that keeps pair cue ids distinct from the per-deck ones.</summary>
+    public const string Prefix = "cue.p.";
+
+    /// <summary>Every pair cue action: saved slots first, quick cue last.</summary>
+    public static IReadOnlyList<PairCueAction> Actions { get; } = BuildActions();
+
+    private static IReadOnlyList<PairCueAction> BuildActions()
+    {
+        var list = new List<PairCueAction>(9);
+        for (int slot = 1; slot <= 8; slot++) list.Add(new PairCueAction(slot));
+        list.Add(new PairCueAction(0));
+        return list;
+    }
+
+    /// <summary>Canonical id for a pair action: "cue.p.3", "cue.p.q".</summary>
+    public static string Id(PairCueAction action) =>
+        Prefix + (action.IsQuick ? "q" : action.Slot.ToString());
+
+    /// <summary>Parse "cue.p.3" / "cue.p.quick". Slot aliases: q, quick, 0.</summary>
+    public static bool TryParseId(string? id, out PairCueAction action)
+    {
+        action = default;
+        if (string.IsNullOrWhiteSpace(id)) return false;
+
+        string text = id.Trim();
+        if (!text.StartsWith(Prefix, StringComparison.OrdinalIgnoreCase)) return false;
+
+        string slotText = text[Prefix.Length..];
+        int slot;
+        if (slotText.Equals("q", StringComparison.OrdinalIgnoreCase)
+            || slotText.Equals("quick", StringComparison.OrdinalIgnoreCase)
+            || slotText == "0")
+            slot = 0;
+        else if (!int.TryParse(slotText, out slot) || slot is < 1 or > 8)
+            return false;
+
+        action = new PairCueAction(slot);
+        return true;
+    }
+
+    /// <summary>The shipped chord for an action: Ctrl+Alt plus the digit, or Q.</summary>
+    public static string DefaultChord(PairCueAction action) =>
+        $"Ctrl+Alt+{(action.IsQuick ? "Q" : action.Slot.ToString())}";
+
+    /// <summary>Every pair action mapped to its default chord.</summary>
+    public static Dictionary<string, string> Defaults()
+    {
+        var map = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var action in Actions) map[Id(action)] = DefaultChord(action);
+        return map;
+    }
+
+    /// <summary>
+    /// The live pair plan: shipped defaults with any stored overrides layered on
+    /// top, same rules as <see cref="CueHotkeys.Resolve"/> (unknown ids dropped,
+    /// an empty chord stays deliberately unbound).
+    /// </summary>
+    public static SortedDictionary<string, string> Resolve(IReadOnlyDictionary<string, string>? stored)
+    {
+        var plan = new SortedDictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var action in Actions) plan[Id(action)] = DefaultChord(action);
+
+        if (stored == null) return plan;
+
+        foreach (var pair in stored)
+        {
+            if (!TryParseId(pair.Key, out var action)) continue;
+            plan[Id(action)] = pair.Value?.Trim() ?? string.Empty;
+        }
+
+        return plan;
+    }
+}
+
+/// <summary>
 /// The cue/action identifier scheme shared by hotkeys and the HTTP surface.
 ///
 /// <para><b>Ids are data.</b> Eighteen recall actions ("cue.a.1".."cue.a.8",
@@ -201,16 +301,14 @@ public sealed class CueHotkeyBinder : IDisposable
 
         foreach (var pair in plan)
         {
-            if (!CueHotkeys.TryParseId(pair.Key, out var action)) continue;
+            if (!TryResolveId(pair.Key, out string id, out string label)) continue;
             if (string.IsNullOrWhiteSpace(pair.Value)) continue;
-
-            string id = CueHotkeys.Id(action);
 
             if (!CueHotkeys.HasRequiredModifier(pair.Value))
             {
                 string refusal = "needs a modifier (Ctrl/Alt/Shift/Win) unless the key is an F-key";
                 _failures[id] = refusal;
-                Warn($"cue hotkey {pair.Value} for {id} ({action.Label}): refused, {refusal}");
+                Warn($"cue hotkey {pair.Value} for {id} ({label}): refused, {refusal}");
                 continue;
             }
 
@@ -222,8 +320,33 @@ public sealed class CueHotkeyBinder : IDisposable
 
             string message = error ?? "registration failed";
             _failures[id] = message;
-            Warn($"cue hotkey {pair.Value} for {id} ({action.Label}): {message}");
+            Warn($"cue hotkey {pair.Value} for {id} ({label}): {message}");
         }
+    }
+
+    /// <summary>
+    /// Canonical id and caption for either cue family. The planner hands this
+    /// class one merged dictionary, so a pair id has to resolve here too.
+    /// </summary>
+    private static bool TryResolveId(string key, out string id, out string label)
+    {
+        if (CueHotkeys.TryParseId(key, out var cue))
+        {
+            id = CueHotkeys.Id(cue);
+            label = cue.Label;
+            return true;
+        }
+
+        if (PairCueHotkeys.TryParseId(key, out var pair))
+        {
+            id = PairCueHotkeys.Id(pair);
+            label = pair.Label;
+            return true;
+        }
+
+        id = string.Empty;
+        label = string.Empty;
+        return false;
     }
 
     /// <summary>Drop every cue registration this binder owns.</summary>
@@ -260,13 +383,16 @@ public sealed class CueHotkeyInput : IDisposable
 
     private readonly IHotkeyRegistrar _registrar;
     private readonly Action<CueAction> _fire;
+    private readonly Action<PairCueAction>? _firePair;
     private CueHotkeyBinder? _binder;
     private bool _subscribed;
 
-    public CueHotkeyInput(IHotkeyRegistrar registrar, Action<CueAction> fire)
+    public CueHotkeyInput(IHotkeyRegistrar registrar, Action<CueAction> fire,
+                          Action<PairCueAction>? firePair = null)
     {
         _registrar = registrar ?? throw new ArgumentNullException(nameof(registrar));
         _fire = fire ?? throw new ArgumentNullException(nameof(fire));
+        _firePair = firePair;
     }
 
     /// <summary>Live registrations, 0 before the first attach and after a detach.</summary>
@@ -300,6 +426,12 @@ public sealed class CueHotkeyInput : IDisposable
 
     private void OnTriggered(string id)
     {
-        if (CueHotkeys.TryParseId(id, out var action)) _fire(action);
+        if (CueHotkeys.TryParseId(id, out var action))
+        {
+            _fire(action);
+            return;
+        }
+
+        if (_firePair != null && PairCueHotkeys.TryParseId(id, out var pair)) _firePair(pair);
     }
 }

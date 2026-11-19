@@ -4405,7 +4405,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         // the load it still reads false. Asking the copy released a pair that was
         // one tick old, which took the deck titles and the lock with it and left
         // one deck playing.
-        if (_karaokePairLoaded
+        if (IsKaraokePairLoaded
             && !DeckA.HasTrackInFlight && !DeckB.HasTrackInFlight
             && !_transport.DeckA.IsLoaded && !_transport.DeckB.IsLoaded)
             ReleaseKaraokePair();

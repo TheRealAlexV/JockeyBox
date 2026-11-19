@@ -1,4 +1,5 @@
 using System.IO;
+using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using JockeyBox.Audio;
 using JockeyBox.Audio.Graph;
@@ -17,7 +18,24 @@ namespace JockeyBox.ViewModels;
 /// </summary>
 public partial class MainViewModel
 {
-    private bool _karaokePairLoaded;
+    /// <summary>
+    /// True while a karaoke pair is loaded. Public so the pair cue strip can bind
+    /// its visibility to it: <c>IsABMode &amp;&amp; IsDeckSync</c> is also true for
+    /// any manual A-B link, and either can be toggled mid-pair.
+    /// </summary>
+    [ObservableProperty]
+    private bool _isKaraokePairLoaded;
+
+    /// <summary>
+    /// The pair cue bank, or null when no pair is loaded. Captures from whichever
+    /// deck is master and seeks both channels directly; see
+    /// <see cref="PairCueBankViewModel"/> for why the transport is bypassed.
+    /// </summary>
+    [ObservableProperty]
+    private PairCueBankViewModel? _pairCues;
+
+    /// <summary>The deck a pair action captures from: the active one, A by default.</summary>
+    private DeckViewModel MasterDeck => _activeDeck == PlaybackDeck.B ? DeckB : DeckA;
     private bool _pairStartLogged; // the settled both-decks line, written once per pair
 
     /// <summary>
@@ -60,7 +78,20 @@ public partial class MainViewModel
         DeckB.HoldStem(StemKind.Original);
         DeckA.HoldStem(takeStem, karaokePath, variant);
 
-        _karaokePairLoaded = true;
+        IsKaraokePairLoaded = true;
+
+        // The pair bank rides the pair's lifetime: built after both decks have
+        // their track (so the cue rows name a real pair) and dropped in
+        // ReleaseKaraokePair. Both channels are seeked directly, not mirrored.
+        PairCues = new PairCueBankViewModel(
+            () => MasterDeck.MediaSeconds,
+            seconds =>
+            {
+                DeckA.SeekMedia(seconds);
+                DeckB.SeekMedia(seconds);
+            },
+            () => PairHotCueStore);
+        PairCues.SetPair(DeckA.Cues.TrackId, DeckB.Cues.TrackId);
         // The take's own name from the variant, never a literal: "Deck A: Karaoke"
         // is this deck's identity plus whatever take the operator picked.
         DeckA.SetKaraokeTitle(KaraokeNaming.DisplayName(variant));
@@ -96,8 +127,9 @@ public partial class MainViewModel
     /// </summary>
     private void ReleaseKaraokePair()
     {
-        if (!_karaokePairLoaded) return;
-        _karaokePairLoaded = false;
+        if (!IsKaraokePairLoaded) return;
+        IsKaraokePairLoaded = false;
+        PairCues = null;
         DeckA.RestoreTitle();
         DeckB.RestoreTitle();
     }

@@ -146,7 +146,7 @@ public partial class MainViewModel
     /// </summary>
     private void MaybeLogPairStart()
     {
-        if (_pairStartLogged || !_karaokePairLoaded) return;
+        if (_pairStartLogged || !IsKaraokePairLoaded) return;
         if (_transport.DeckA.State != TransportState.Playing
             || _transport.DeckB.State != TransportState.Playing) return;
 
