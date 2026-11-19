@@ -50,6 +50,13 @@ public enum TransitionMode
 /// </summary>
 public class AppSettings
 {
+    /// <summary>
+    /// The home this instance was read from (or created under). <see cref="Save()"/>
+    /// goes back there, so a write that runs late — a debounce firing after
+    /// teardown, a continuation after an <c>await</c> — cannot land in whichever
+    /// profile <c>JOCKEYBOX_HOME</c> happens to name by then.
+    /// </summary>
+    private readonly string _home = AppPaths.Home;
     // Library: one tree of music files. The karaoke version of a track sits
     // beside it as "Song.karaoke.ext" (Library.KaraokeNaming); KaraokeDirectory
     // is only the legacy split root and is normalised to the music root when it
@@ -778,17 +785,31 @@ public class AppSettings
         }
     }
 
-    public void Save()
+    public void Save() => Save(_home);
+
+    /// <summary>
+    /// Write to <paramref name="home"/> instead of whatever <c>JOCKEYBOX_HOME</c>
+    /// holds right now. A debounced save captures its home when it is scheduled
+    /// and passes it here, so a fire that lands after teardown cannot write this
+    /// object over the profile someone else has since pointed the process at.
+    /// </summary>
+    public void Save(string home)
     {
+        string path = Path.Combine(home, "settings.json");
         try
         {
             SpotifyClientSecretProtected = Protect(SpotifyClientSecret);
             SpotifyAccessTokenProtected = Protect(SpotifyAccessToken);
             LegacyPlaintextSecret = null; // never write plaintext back out
-            Directory.CreateDirectory(Path.GetDirectoryName(SettingsPath)!);
-            File.WriteAllText(SettingsPath, JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
         }
-        catch { /* best-effort */ }
+        catch (Exception ex)
+        {
+            // Best-effort by design, but not silent: a save that did not land is
+            // why a setting can read back as its old value with no other clue.
+            Log.Error($"settings: could not write {path}", ex);
+        }
     }
 
     private static string Protect(string plaintext)

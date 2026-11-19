@@ -82,6 +82,13 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private CancellationTokenSource? _lyricsCts;
     private CancellationTokenSource? _lyricsCandidatesCts;
     private readonly DispatcherTimer _lyricsSettingsSave;
+
+    /// <summary>
+    /// The home <see cref="ScheduleLyricsSettingsSave"/> armed for, captured at
+    /// schedule time. Null means no save is pending, which is also how a tick
+    /// that arrives after teardown is recognised and dropped.
+    /// </summary>
+    private string? _lyricsSettingsHome;
     private bool _isUserSeeking;
     private bool _syncingCrossfader;
     private int _currentLyricIndex = -1;
@@ -202,11 +209,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
         // on every drag step (the store debounces its own save); the settings
         // debounce below is only for the global default.
         _lyricsSettingsSave = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(400) };
-        _lyricsSettingsSave.Tick += (_, _) =>
-        {
-            _lyricsSettingsSave.Stop();
-            _settings.Save();
-        };
+        _lyricsSettingsSave.Tick += (_, _) => SaveScheduledLyricsSettings();
 
         LyricsSourceOptions.Add(AutoLyricsSource);
         foreach (var name in _lyricsService.SourceNames)
@@ -3780,8 +3783,24 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void ScheduleLyricsSettingsSave()
     {
+        // Bind the target now: by the time the debounce fires, JOCKEYBOX_HOME
+        // may name a different profile (another test, another launch), and the
+        // save must land where this edit was made.
+        _lyricsSettingsHome ??= AppPaths.Home;
         _lyricsSettingsSave.Stop();
         _lyricsSettingsSave.Start();
+    }
+
+    /// <summary>
+    /// Run the pending debounce, once. Clears the bound home first, so a second
+    /// tick (or one after <see cref="Dispose"/>) has nothing left to write.
+    /// </summary>
+    private void SaveScheduledLyricsSettings()
+    {
+        _lyricsSettingsSave.Stop();
+        if (_lyricsSettingsHome is not { } home) return;
+        _lyricsSettingsHome = null;
+        _settings.Save(home);
     }
 
     private static string FormatLyricsOffset(double ms) =>
@@ -4657,8 +4676,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _lyricsCts?.Cancel();
         _lyricsCandidatesCts?.Cancel();
         // Persist a pending lyric offset drag that hadn't hit its debounce yet.
+        // The pending save carries the home it was scheduled for; clearing it
+        // here is also what makes a tick arriving after teardown a no-op.
         TeardownStep("settings and lyric metadata");
-        _settings.Save();
+        _settings.Save(_lyricsSettingsHome ?? AppPaths.Home);
+        _lyricsSettingsHome = null;
         // Per-track lyric metadata (offset, pinned sources, sections) lives in
         // the store now: flush anything the debounce still holds, then stop
         // listening.
