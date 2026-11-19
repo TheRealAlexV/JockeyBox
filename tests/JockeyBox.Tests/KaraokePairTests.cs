@@ -42,6 +42,16 @@ public sealed class KaraokePairTests
             Assert.Equal("Deck A: Karaoke", vm.DeckA.Title);
             Assert.Equal("Deck B: Original", vm.DeckB.Title);
 
+            // The original file is always the deck's primary stem, the take rides
+            // beside it as the sub-stem. That is what makes the label read the take
+            // and leaves Karaoke mode a second reader to unmute: loading the render
+            // as the primary labelled it "Original" and nulled the partner as
+            // "same file twice".
+            Assert.Equal("Karaoke", vm.DeckA.VersionLabel);
+            Assert.Equal(AudioVariant.Karaoke, vm.DeckA.SelectedVersion?.Variant);
+            Assert.True(WaitFor(vm, () => vm.DeckA.HasKaraoke),
+                        "deck A attached the render as its sub-stem");
+
             // An ordinary load is the release choke point: it runs first, so the
             // lock and both titles are back before the new track lands.
             UiThread.Run(() => Invoke(vm, "LoadTrack", normal, false, (PlaybackDeck?)null, true));
@@ -390,4 +400,31 @@ public sealed class KaraokePairTests
         typeof(MainViewModel)
             .GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!
             .GetValue(vm);
+
+    /// <summary>
+    /// Pump until <paramref name="until"/> holds. A MainViewModel in a test has no
+    /// device, and a channel with no output refuses every load as a no-op, so each
+    /// pass tells both channels an output exists and drains their queued commands
+    /// the way the engine's render thread would.
+    /// </summary>
+    private static bool WaitFor(MainViewModel vm, Func<bool> until, int milliseconds = 60_000)
+    {
+        for (int i = 0; i < milliseconds / 5; i++)
+        {
+            PumpDecks(vm);
+            if (until()) return true;
+            Thread.Sleep(5);
+        }
+
+        PumpDecks(vm);
+        return until();
+    }
+
+    private static void PumpDecks(MainViewModel vm)
+    {
+        vm.Transport.DeckA.SetOutputAvailable(true);
+        vm.Transport.DeckB.SetOutputAvailable(true);
+        vm.Transport.Engine.DeckA.Commands.Drain();
+        vm.Transport.Engine.DeckB.Commands.Drain();
+    }
 }

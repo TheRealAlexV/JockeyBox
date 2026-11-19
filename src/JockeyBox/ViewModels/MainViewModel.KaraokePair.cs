@@ -41,12 +41,24 @@ public partial class MainViewModel
         var karaokePath = VariantOnDisk(track, variant);
         if (karaokePath == null || string.IsNullOrWhiteSpace(track.MusicPath)) return;
 
-        DeckA.SetTrack(karaokePath, null, track.Title, track.Artist);
+        // Which resident reader the take drives. BuildVersions maps Karaoke and
+        // Backing to the karaoke reader (one render, two names) and Vocals to the
+        // third reader, which SetTrack fills from the primary path itself, so the
+        // take is the sub-stem only when it is a karaoke render.
+        var takeStem = variant == AudioVariant.Vocals ? StemKind.Vocals : StemKind.Karaoke;
+
+        // The original file is always the deck's primary stem; the take rides
+        // beside it as the sub-stem. Loading the take as the primary put deck A
+        // on the wrong side of that contract: it labelled the render "Original",
+        // and Karaoke mode had no second reader to unmute.
+        DeckA.SetTrack(track.MusicPath, takeStem == StemKind.Karaoke ? karaokePath : null,
+                       track.Title, track.Artist);
         DeckB.SetTrack(track.MusicPath, null, track.Title, track.Artist);
-        // Deck B is the original, alone. Its load discovers the sibling render
-        // beside it as a partner, and the deck's default Mix mode would then sum
-        // both files: the pair is one take per deck, so B is pinned to its own.
+        // One take per deck: a load discovers the sibling render beside its file
+        // as a partner, and the deck's default Mix mode would then sum both files,
+        // so each deck is pinned to its own take.
         DeckB.HoldStem(StemKind.Original);
+        DeckA.HoldStem(takeStem, karaokePath, variant);
 
         _karaokePairLoaded = true;
         // The take's own name from the variant, never a literal: "Deck A: Karaoke"

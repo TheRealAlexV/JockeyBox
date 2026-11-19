@@ -385,10 +385,45 @@ public partial class DeckViewModel : ObservableObject, IDisposable
     /// the default Mix, which sums both: a caller that loaded this deck for one
     /// file (the karaoke pair's original deck) says so here.
     /// </summary>
-    internal void HoldStem(StemKind kind)
+    internal void HoldStem(StemKind kind, string? takePath = null,
+                           AudioVariant variant = AudioVariant.Original)
     {
         _pendingStem = kind;
         if (_channel.IsLoaded) ApplyPendingStem();
+        SelectHeldVersion(kind, takePath, variant);
+    }
+
+    /// <summary>
+    /// Point the version menu at the stem the pin just chose, so the label reads
+    /// what the deck is playing: a karaoke pair pins deck A to its take, and the
+    /// menu must not keep saying "Original". A kind with no entry on disk leaves
+    /// the menu alone.
+    /// </summary>
+    private void SelectHeldVersion(StemKind kind, string? takePath, AudioVariant variant)
+    {
+        // The variant first: Karaoke and Keep backing are two files on one reader,
+        // so matching the kind alone would label a backing take "Karaoke".
+        var version = Versions.FirstOrDefault(v => v.IsAvailable && v.Variant == variant)
+                      ?? Versions.FirstOrDefault(v => v.IsAvailable && v.Kind == kind);
+
+        // The menu is discovered from the naming rule beside the primary file, and
+        // a take the scan paired can live outside it (a karaoke-root copy). The pin
+        // still names the take it is playing, so that take is added rather than
+        // letting the label fall back to whatever the menu happened to find.
+        if (version == null && takePath is { Length: > 0 })
+        {
+            version = new DeckVersion(KaraokeNaming.DisplayName(variant), kind, true,
+                                      null, variant, takePath)
+            {
+                SelectCommand = SelectVersionCommand,
+            };
+            Versions.Add(version);
+        }
+
+        if (version == null) return;
+
+        foreach (var option in Versions) option.IsSelected = ReferenceEquals(option, version);
+        SelectedVersion = version;
     }
 
     private void ApplyPendingStem()
