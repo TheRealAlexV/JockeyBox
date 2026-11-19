@@ -823,7 +823,7 @@ public sealed class DualDeckTransport : IDisposable
     /// Mirror the persisted mix EQ onto the engine. Called from the engine's own
     /// start-up and from a settings change, so a saved band is in circuit on the
     /// first block whichever host built the engine - the window is not the only one.
-    /// The bands clamp themselves; nothing here can leave the engine outside -26…+6.
+    /// The bands clamp themselves; nothing here can leave the engine outside -50…+50.
     /// </summary>
     private void AdoptEqSettings(AppSettings settings) =>
         Engine.Eq.SetAll(settings.EqLowDb, settings.EqMidDb, settings.EqHighDb);

@@ -11,8 +11,8 @@ namespace JockeyBox.Tests;
 ///
 /// <para>The load-bearing facts: a centred band is <b>bit-identical</b> to the input
 /// (topology 1: bypass, not a unity biquad); LOW is a <b>shelf</b>, so its attenuation
-/// survives toward DC where a bell returns to unity; the range is the asymmetric
-/// -26…+6 dB; and moving a band gain mid-stream produces no sample-to-sample step
+/// survives toward DC where a bell returns to unity; the range is -50…+50 dB; and moving
+/// a band gain mid-stream produces no sample-to-sample step
 /// larger than the signal's own slope.</para>
 /// </summary>
 public class EqTests
@@ -106,11 +106,12 @@ public class EqTests
         Assert.False(eq.IsActive(EqBand.Mid));
         Assert.False(eq.IsActive(EqBand.High));
 
-        // And the range really is the asymmetric -26…+6: a +26 dB request is clamped.
-        eq.SetTargetDb(EqBand.Low, 26f);
-        Assert.Equal(6f, eq.TargetDb(EqBand.Low));
-        eq.SetTargetDb(EqBand.Low, -40f);
-        Assert.Equal(-26f, eq.TargetDb(EqBand.Low));
+        // And the range really is -50…+50: a +60 dB request is clamped to the boost
+        // limit, a -60 dB request to the cut limit.
+        eq.SetTargetDb(EqBand.Low, 60f);
+        Assert.Equal(50f, eq.TargetDb(EqBand.Low));
+        eq.SetTargetDb(EqBand.Low, -60f);
+        Assert.Equal(-50f, eq.TargetDb(EqBand.Low));
     }
 
     // ------------------------------------------------- 2. low shelf
@@ -316,15 +317,15 @@ public class EqSettingsTests
                 """);
 
             var settings = AppSettings.Load();
-            Assert.Equal(-26.0, settings.EqLowDb);   // clamped to the cut limit
-            Assert.Equal(6.0, settings.EqMidDb);     // clamped to the boost limit
+            Assert.Equal(-50.0, settings.EqLowDb);   // clamped to the cut limit
+            Assert.Equal(50.0, settings.EqMidDb);    // clamped to the boost limit
             Assert.Equal(3.5, settings.EqHighDb);    // inside the window, untouched
             Assert.Equal(175, settings.OutputDelayMs); // neighbours survive
 
             settings.Save();
             var reloaded = AppSettings.Load();
-            Assert.Equal(-26.0, reloaded.EqLowDb);
-            Assert.Equal(6.0, reloaded.EqMidDb);
+            Assert.Equal(-50.0, reloaded.EqLowDb);
+            Assert.Equal(50.0, reloaded.EqMidDb);
             Assert.Equal(3.5, reloaded.EqHighDb);
         }
         finally

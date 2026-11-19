@@ -86,10 +86,10 @@ public sealed class SliderTickBar : FrameworkElement
 
     /// <summary>
     /// Marks a slider declares by name, when its ladder is not evenly spaced from its
-    /// minimum: <c>views:SliderTickBar.Values="-26,-18,-10,0,6"</c> on the mix EQ,
-    /// whose recentre mark is 0 dB and sits about 81% up a -26…+6 track. The derived
-    /// ladder would land on -26, -18, -10, -2, +6 and put the detent at -2 dB - a
-    /// detent that leaves the band filtering. No marks without this: a slider that
+    /// minimum: <c>views:SliderTickBar.Values="-50,-25,0,25,50"</c> on the mix EQ,
+    /// whose recentre mark is 0 dB. On the original asymmetric -26…+6 track the
+    /// derived ladder landed on -26, -18, -10, -2, +6 and put the detent at -2 dB -
+    /// a detent that leaves the band filtering. No marks without this: a slider that
     /// declares nothing keeps the ladder it always had.
     /// </summary>
     public static readonly DependencyProperty ValuesProperty = DependencyProperty.RegisterAttached(

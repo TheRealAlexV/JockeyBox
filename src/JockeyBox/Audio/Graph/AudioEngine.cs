@@ -357,7 +357,7 @@ public sealed class AudioEngine : IDisposable
 
     /// <summary>
     /// The mix equaliser: low shelf 70 Hz, mid bell 1 kHz (Q 0.6), high shelf
-    /// 13 kHz, each -26…+6 dB. Its output is applied to both deck blocks before the
+    /// 13 kHz, each -50…+50 dB. Its output is applied to both deck blocks before the
     /// crossfade fan-out, so it equalises every bus fed from the decks.
     /// </summary>
     public MixEq Eq => _eq;

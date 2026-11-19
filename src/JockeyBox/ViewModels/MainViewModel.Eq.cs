@@ -30,16 +30,16 @@ public partial class MainViewModel
     /// <summary>True once the saved bands have been adopted, so start-up does not save.</summary>
     private bool _eqAdopted;
 
-    /// <summary>Low shelf gain in dB, -26…+6 (0 = out of circuit).</summary>
+    /// <summary>Low shelf gain in dB, -50…+50 (0 = out of circuit).</summary>
     [ObservableProperty] private double _eqLowDb;
 
-    /// <summary>Mid bell gain in dB, -26…+6 (0 = out of circuit).</summary>
+    /// <summary>Mid bell gain in dB, -50…+50 (0 = out of circuit).</summary>
     [ObservableProperty] private double _eqMidDb;
 
-    /// <summary>High shelf gain in dB, -26…+6 (0 = out of circuit).</summary>
+    /// <summary>High shelf gain in dB, -50…+50 (0 = out of circuit).</summary>
     [ObservableProperty] private double _eqHighDb;
 
-    /// <summary>Low band's readout: "+6.0 dB", "0.0 dB", "−26.0 dB".</summary>
+    /// <summary>Low band's readout: "+50.0 dB", "0.0 dB", "−50.0 dB".</summary>
     public string EqLowText => DbText(EqLowDb);
 
     /// <summary>Mid band's readout.</summary>
@@ -122,7 +122,7 @@ public partial class MainViewModel
     }
 
     /// <summary>
-    /// "+6.0 dB" / "0.0 dB" / "−26.0 dB". Rounded before the sign is chosen so a drag
+    /// "+50.0 dB" / "0.0 dB" / "−50.0 dB". Rounded before the sign is chosen so a drag
     /// that lands on -0.04 reads "0.0 dB" and not "−0.0 dB"; the minus is U+2212 to
     /// match the rest of the window's readouts.
     /// </summary>

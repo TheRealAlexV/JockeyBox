@@ -218,21 +218,21 @@ public class AppSettings
     public int OutputDelayMs { get; set; }
 
     // ---- three-band mix EQ -------------------------------------------------
-    // Low shelf 70 Hz, mid bell 1 kHz (Q 0.6), high shelf 13 kHz, each -26…+6 dB
-    // with 0 dB (the centre detent, a true bypass) as the default. Asymmetric on
-    // purpose: a mixer's EQ cuts far more than it boosts.
+    // Low shelf 70 Hz, mid bell 1 kHz (Q 0.6), high shelf 13 kHz, each -50…+50 dB
+    // with 0 dB (the centre detent, a true bypass) as the default. Symmetric: the
+    // operator asked for the same cut and boost either way.
     //
     // Clamped on load in PostProcess, never clamped on write, so a settings file
     // that was hand-edited out of range cannot leave the engine with a gain the
     // UI cannot display, and an existing unknown key is never dropped.
 
-    /// <summary>Low-shelf gain, dB (-26…+6, 0 = bypass).</summary>
+    /// <summary>Low-shelf gain, dB (-50…+50, 0 = bypass).</summary>
     public double EqLowDb { get; set; }
 
-    /// <summary>Mid-bell gain, dB (-26…+6, 0 = bypass).</summary>
+    /// <summary>Mid-bell gain, dB (-50…+50, 0 = bypass).</summary>
     public double EqMidDb { get; set; }
 
-    /// <summary>High-shelf gain, dB (-26…+6, 0 = bypass).</summary>
+    /// <summary>High-shelf gain, dB (-50…+50, 0 = bypass).</summary>
     public double EqHighDb { get; set; }
 
     /// <summary>How a queued track is brought in when the current one ends.</summary>
@@ -575,10 +575,9 @@ public class AppSettings
         // persisted value honest).
         settings.MicLevel = Math.Clamp(settings.MicLevel, 0f, 2f);
 
-        // The mix EQ is a mixer EQ: it cuts much further than it boosts (-26…+6 dB),
-        // and 0 dB is a true bypass. A hand-edited or newer-build value outside that
-        // window is clamped here so the engine never receives a gain the UI cannot
-        // represent - without dropping the key.
+        // The mix EQ runs -50…+50 dB and 0 dB is a true bypass. A hand-edited or
+        // newer-build value outside that window is clamped here so the engine never
+        // receives a gain the UI cannot represent - without dropping the key.
         settings.EqLowDb = ClampEqDb(settings.EqLowDb);
         settings.EqMidDb = ClampEqDb(settings.EqMidDb);
         settings.EqHighDb = ClampEqDb(settings.EqHighDb);
@@ -727,7 +726,7 @@ public class AppSettings
     /// NaN/±∞ to the centre detent, so a corrupt file cannot poison the filters.
     /// </summary>
     private static double ClampEqDb(double db)
-        => double.IsNaN(db) ? 0.0 : Math.Clamp(db, -26.0, 6.0);
+        => double.IsNaN(db) ? 0.0 : Math.Clamp(db, -50.0, 50.0);
 
     /// <summary>
     /// Clamp one deck's output delay to the range the engine's delay line can hold.

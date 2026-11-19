@@ -6,14 +6,14 @@ namespace JockeyBox.Audio.Graph;
 /// <summary>Which of the three mix-EQ bands a gain applies to.</summary>
 public enum EqBand
 {
-    /// <summary>Low shelf at 70 Hz, -26…+6 dB. A shelf, not a bell: a bell at 70 Hz
+    /// <summary>Low shelf at 70 Hz, -50…+50 dB. A shelf, not a bell: a bell at 70 Hz
     /// leaves 30-40 Hz untouched and the bass kill would not kill the bass.</summary>
     Low = 0,
 
-    /// <summary>Peaking bell at 1 kHz, Q 0.6, -26…+6 dB.</summary>
+    /// <summary>Peaking bell at 1 kHz, Q 0.6, -50…+50 dB.</summary>
     Mid = 1,
 
-    /// <summary>High shelf at 13 kHz, -26…+6 dB.</summary>
+    /// <summary>High shelf at 13 kHz, -50…+50 dB.</summary>
     High = 2,
 }
 
@@ -56,11 +56,11 @@ public enum EqPath
 /// </summary>
 public sealed class MixEq
 {
-    /// <summary>Lowest band gain, dB. Deliberately asymmetric with the boost side.</summary>
-    public const float MinDb = -26f;
+    /// <summary>Lowest band gain, dB.</summary>
+    public const float MinDb = -50f;
 
     /// <summary>Highest band gain, dB.</summary>
-    public const float MaxDb = 6f;
+    public const float MaxDb = 50f;
 
     /// <summary>Below this magnitude a band is bypassed and its state zeroed.</summary>
     public const float BypassDb = 0.05f;
@@ -140,7 +140,7 @@ public sealed class MixEq
         return max;
     }
 
-    /// <summary>Set a band's gain from the UI thread. Clamped to -26…+6 dB.</summary>
+    /// <summary>Set a band's gain from the UI thread. Clamped to -50…+50 dB.</summary>
     public void SetTargetDb(EqBand band, float db)
     {
         if (float.IsNaN(db)) db = 0f;

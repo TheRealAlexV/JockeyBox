@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using JockeyBox.Audio.Graph;
 using JockeyBox.Settings;
 using JockeyBox.ViewModels;
 using Xunit;
@@ -111,6 +112,39 @@ public sealed class EqUiTests : IDisposable
             UiThread.Run(() => vm.EqHighDb = -0.02);
             Assert.Equal("0.0 dB", vm.EqHighText);
             Assert.True(vm.IsEqHighBypassed);
+        }
+        finally
+        {
+            UiThread.Run(() => vm.Dispose());
+        }
+    }
+
+    [Fact]
+    public void TheFullBoostAndTheFullCut_ReachTheEngineAndTheFileUnclamped()
+    {
+        // The widened range is only real if every door agrees: the view model takes
+        // ±50, the engine's own clamp keeps it, and the file reloads it as ±50 rather
+        // than as the old -26/+6. A slider that offers ±50 while the engine still
+        // held +6 would be a slider that lies.
+        var vm = UiThread.Run(() => new MainViewModel());
+        try
+        {
+            UiThread.Run(() => vm.InitializeEq());
+
+            UiThread.Run(() => vm.EqLowDb = 50);
+            UiThread.Run(() => vm.EqMidDb = -50);
+
+            Assert.Equal(50, vm.EqLowDb);
+            Assert.Equal("+50.0 dB", vm.EqLowText);
+            Assert.Equal(50f, vm.Transport.Engine.Eq.TargetDb(EqBand.Low));
+
+            Assert.Equal(-50, vm.EqMidDb);
+            Assert.Equal("−50.0 dB", vm.EqMidText);
+            Assert.Equal(-50f, vm.Transport.Engine.Eq.TargetDb(EqBand.Mid));
+
+            var reloaded = AppSettings.Load();
+            Assert.Equal(50, reloaded.EqLowDb);
+            Assert.Equal(-50, reloaded.EqMidDb);
         }
         finally
         {
