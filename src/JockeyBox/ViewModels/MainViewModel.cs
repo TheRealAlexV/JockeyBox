@@ -4131,9 +4131,20 @@ public partial class MainViewModel : ObservableObject, IDisposable
         // The section starts by reproducing the offset the user already hears,
         // so adding it changes nothing until they nudge it.
         var current = _trackMeta.GetEffectiveOffset(key, PlayheadMs(), _settings.LyricsOffsetMs);
-        var label = first == last
-            ? $"line {first + 1}"
-            : $"lines {first + 1}\u2013{last + 1}";
+
+        // Name the line the section actually starts on: a selection can start on
+        // an instrumental marker, and the selector resolves past it to the first
+        // real line. A selection with no real line is refused, as it is there.
+        int startLine = LyricSectionSelector.ResolveStartLine(document, first);
+        if (startLine < 0 || startLine > last)
+        {
+            StatusText = "Those lines have no usable timing.";
+            return;
+        }
+
+        var label = startLine == last
+            ? $"line {startLine + 1}"
+            : $"lines {startLine + 1}\u2013{last + 1}";
 
         if (LyricSectionSelector.FromLines(document, first, last, ToOffsetMs(current), label) is not { } span)
         {

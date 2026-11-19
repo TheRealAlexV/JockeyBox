@@ -28,6 +28,22 @@ namespace JockeyBox.Lyrics;
 public static class LyricSectionSelector
 {
     /// <summary>
+    /// Index of the first real (non-marker) line at or after
+    /// <paramref name="lineIndex"/>, or -1 when only markers follow. The same
+    /// resolution decides both where a section starts and what the auto label
+    /// calls it, so there is one rule for both.
+    /// </summary>
+    public static int ResolveStartLine(LyricsDocument? document, int lineIndex) =>
+        document?.Lines is { } lines ? ResolveStartLine(lines, lineIndex) : -1;
+
+    private static int ResolveStartLine(List<LyricLine> lines, int lineIndex)
+    {
+        int i = Math.Max(0, lineIndex);
+        while (i < lines.Count && lines[i].IsInstrumental) i++;
+        return i < lines.Count ? i : -1;
+    }
+
+    /// <summary>
     /// Span for lines <paramref name="firstLineIndex"/>..<paramref name="lastLineIndex"/>
     /// (inclusive, either order accepted).
     /// </summary>
@@ -48,7 +64,14 @@ public static class LyricSectionSelector
         if (firstLineIndex > lastLineIndex) (firstLineIndex, lastLineIndex) = (lastLineIndex, firstLineIndex);
         if (firstLineIndex < 0 || lastLineIndex >= lines.Count) return false;
 
-        var (startMs, endMs) = Span(lines, firstLineIndex, lastLineIndex);
+        // A marker line never starts a section either: it is not sung text, so the
+        // selection begins at the next real line. When that line is outside the
+        // selection (or there is none), the selection is only markers - refuse it
+        // rather than write a section at the marker's own mid-gap time.
+        int startLine = ResolveStartLine(lines, firstLineIndex);
+        if (startLine < 0 || startLine > lastLineIndex) return false;
+
+        var (startMs, endMs) = Span(lines, startLine, lastLineIndex);
         if (endMs <= startMs) return false;
 
         section = new LyricOffsetSection(startMs, endMs, offsetMs, label).Clamped();
