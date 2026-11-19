@@ -106,6 +106,12 @@ public partial class MainWindow : Window
         _vm.PropertyChanged += (_, e) =>
         {
             if (e.PropertyName == nameof(MainViewModel.IsPlaying)) UpdatePlayGlyph();
+            // A pair load swaps the pads the A strip reads its markers from.
+            else if (e.PropertyName == nameof(MainViewModel.PairCues))
+            {
+                HookCueSlots(_vm.PairCues?.Slots);
+                DrawDeckWaveforms();
+            }
         };
         _vm.DeckA.PropertyChanged += OnDeckPropertyChanged;
         _vm.DeckB.PropertyChanged += OnDeckPropertyChanged;
@@ -438,11 +444,37 @@ public partial class MainWindow : Window
     private readonly List<Canvas> _deckWaveforms = new();
     private readonly Dictionary<Canvas, Line> _deckPlayheads = new();
 
+    // Drag-to-seek on a primary strip. One pointer, one drag: the captured canvas
+    // owns the preview playhead until the release commits a single seek.
+    private WaveformDrag? _waveformDrag;
+    private Canvas? _dragCanvas;
+
+    // Pads that already report to OnCueSlotChanged. The deck banks live as long
+    // as the deck does; the pair bank is rebuilt on every pair load, but its pads
+    // are new objects each time, so they hook themselves.
+    private readonly HashSet<CueSlotViewModel> _hookedCueSlots = new();
+
     private void OnDeckWaveformLoaded(object sender, RoutedEventArgs e)
     {
         if (sender is not Canvas canvas) return;
         if (!_deckWaveforms.Contains(canvas)) _deckWaveforms.Add(canvas);
+        HookCueSlots((canvas.DataContext as DeckViewModel)?.Cues.Slots);
         DrawDeckWaveform(canvas);
+    }
+
+    /// <summary>A pad changed: its marker moved, appeared or went away.</summary>
+    private void OnCueSlotChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(CueSlotViewModel.PositionMs)
+                             or nameof(CueSlotViewModel.HasPosition))
+            DrawDeckWaveforms();
+    }
+
+    private void HookCueSlots(IEnumerable<CueSlotViewModel>? slots)
+    {
+        if (slots == null) return;
+        foreach (var slot in slots)
+            if (_hookedCueSlots.Add(slot)) slot.PropertyChanged += OnCueSlotChanged;
     }
 
     private void OnDeckWaveformSizeChanged(object sender, SizeChangedEventArgs e)
@@ -478,6 +510,10 @@ public partial class MainWindow : Window
     {
         foreach (var (canvas, line) in _deckPlayheads)
         {
+            // The 30 Hz tick must not fight the pointer: while a strip is being
+            // dragged, its playhead belongs to the drag preview.
+            if (canvas == _dragCanvas) continue;
+
             var x = canvas.ActualWidth * GetProgress(canvas);
             line.X1 = x;
             line.X2 = x;
@@ -514,6 +550,10 @@ public partial class MainWindow : Window
         if (data != null && data.Count > 1)
             RenderWaveform(canvas, data, w, h, color);
 
+        // Cue pads last of the data layers, so they sit above the peaks but below
+        // the playhead; only the primary strip carries them.
+        if (!isKaraoke) RenderCueMarkers(canvas, deck, w, h, color);
+
         var x = w * GetProgress(canvas);
         var playhead = new Line
         {
@@ -523,6 +563,57 @@ public partial class MainWindow : Window
         };
         canvas.Children.Add(playhead);
         _deckPlayheads[canvas] = playhead;
+    }
+
+    /// <summary>
+    /// Cue pads on the strip: a short tick growing up from the bottom edge, so it
+    /// cannot cover the peaks or the beat ticks, with the pad number beside it.
+    /// </summary>
+    private void RenderCueMarkers(Canvas canvas, DeckViewModel? deck, double w, double h, Color color)
+    {
+        if (deck == null) return;
+
+        var slots = deck.DeckTarget == PlaybackDeck.A && _vm.PairCues is { } pair
+            ? pair.Slots
+            : deck.Cues.Slots;
+
+        var markers = WaveformGeometry.CueMarkers(slots, w, deck.DurationSeconds);
+        if (markers.Count == 0) return;
+
+        var brush = new SolidColorBrush(color);
+        brush.Freeze();
+
+        // A pad mark hangs from the bottom: the count-against ticks own the top.
+        var tickH = Math.Max(5.0, h * 0.35);
+
+        // One geometry for every tick, as with the beat ruler: a bank is at most
+        // eight pads, but the redraw rides every load.
+        var ticks = new StreamGeometry();
+        using (var ctx = ticks.Open())
+        {
+            foreach (var marker in markers)
+            {
+                ctx.BeginFigure(new Point(marker.X, h), false, false);
+                ctx.LineTo(new Point(marker.X, h - tickH), true, false);
+            }
+        }
+        ticks.Freeze();
+        canvas.Children.Add(new Path { Data = ticks, Stroke = brush, StrokeThickness = 1.5 });
+
+        foreach (var marker in markers)
+        {
+            var label = new TextBlock
+            {
+                Text = marker.Label,
+                FontSize = 9,
+                FontFamily = new FontFamily("Consolas"),
+                Foreground = brush,
+                IsHitTestVisible = false,
+            };
+            Canvas.SetLeft(label, marker.X + 2);
+            Canvas.SetTop(label, h - 12);
+            canvas.Children.Add(label);
+        }
     }
 
     /// <summary>
@@ -620,6 +711,68 @@ public partial class MainWindow : Window
 
         canvas.Children.Add(polygon);
         canvas.Children.Add(polyline);
+    }
+
+    // ---- drag to seek on a waveform strip ----------------------------------
+
+    private void OnDeckWaveformMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not Canvas canvas || _waveformDrag != null) return;
+        if (canvas.DataContext is not DeckViewModel deck) return;
+
+        var drag = new WaveformDrag();
+        if (!drag.Begin(e.GetPosition(canvas).X, canvas.ActualWidth, deck.DurationSeconds)) return;
+
+        // The same pair the seek bar uses, so the readout freezes and the commit
+        // goes through the transport's own mirroring rules.
+        deck.BeginSeek();
+        _waveformDrag = drag;
+        _dragCanvas = canvas;
+        canvas.CaptureMouse();
+        PreviewWaveformPlayhead(canvas, drag.X);
+        e.Handled = true;
+    }
+
+    private void OnDeckWaveformMouseMove(object sender, MouseEventArgs e)
+    {
+        if (sender is not Canvas canvas || canvas != _dragCanvas) return;
+        if (_waveformDrag is not { } drag) return;
+
+        // Preview only: seeking during a move would fight the audio engine.
+        if (drag.Move(e.GetPosition(canvas).X)) PreviewWaveformPlayhead(canvas, drag.X);
+    }
+
+    private void OnDeckWaveformMouseUp(object sender, MouseButtonEventArgs e)
+    {
+        if (sender is not Canvas canvas || canvas != _dragCanvas) return;
+        CommitWaveformDrag(canvas, e.GetPosition(canvas).X);
+    }
+
+    private void OnDeckWaveformLostCapture(object sender, MouseEventArgs e)
+    {
+        if (sender is not Canvas canvas || canvas != _dragCanvas) return;
+        CommitWaveformDrag(canvas, null);
+    }
+
+    private void CommitWaveformDrag(Canvas canvas, double? x)
+    {
+        var drag = _waveformDrag;
+        var deck = canvas.DataContext as DeckViewModel;
+
+        // Clear first: releasing the capture below re-enters through
+        // LostMouseCapture, which must find nothing left to commit.
+        _waveformDrag = null;
+        _dragCanvas = null;
+        if (canvas.IsMouseCaptured) canvas.ReleaseMouseCapture();
+
+        if (drag?.Release(x) is { } seconds && deck != null) deck.EndSeek(seconds);
+    }
+
+    private void PreviewWaveformPlayhead(Canvas canvas, double x)
+    {
+        if (!_deckPlayheads.TryGetValue(canvas, out var line)) return;
+        line.X1 = x;
+        line.X2 = x;
     }
 
     // ---- deck seek bars (inside the deck card template) --------------------

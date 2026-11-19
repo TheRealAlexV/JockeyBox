@@ -1766,8 +1766,13 @@
                             </Border.Background>
                         </Border>
                         <Canvas x:Name="WaveformA" MinHeight="30" ClipToBounds="True" Tag="primary"
+                                Cursor="Hand" Background="Transparent"
                                 Loaded="OnDeckWaveformLoaded"
-                                SizeChanged="OnDeckWaveformSizeChanged"/>
+                                SizeChanged="OnDeckWaveformSizeChanged"
+                                MouseLeftButtonDown="OnDeckWaveformMouseDown"
+                                MouseMove="OnDeckWaveformMouseMove"
+                                MouseLeftButtonUp="OnDeckWaveformMouseUp"
+                                LostMouseCapture="OnDeckWaveformLostCapture"/>
                         <TextBlock Text="A" Margin="7,2,0,0" FontSize="11" FontWeight="Black"
                                    HorizontalAlignment="Left" VerticalAlignment="Top"
                                    Foreground="{StaticResource AccentABrush}"
@@ -1816,8 +1821,13 @@
                             </Border.Background>
                         </Border>
                         <Canvas x:Name="WaveformB" MinHeight="30" ClipToBounds="True" Tag="primary"
+                                Cursor="Hand" Background="Transparent"
                                 Loaded="OnDeckWaveformLoaded"
-                                SizeChanged="OnDeckWaveformSizeChanged"/>
+                                SizeChanged="OnDeckWaveformSizeChanged"
+                                MouseLeftButtonDown="OnDeckWaveformMouseDown"
+                                MouseMove="OnDeckWaveformMouseMove"
+                                MouseLeftButtonUp="OnDeckWaveformMouseUp"
+                                LostMouseCapture="OnDeckWaveformLostCapture"/>
                         <TextBlock Text="B" Margin="7,2,0,0" FontSize="11" FontWeight="Black"
                                    HorizontalAlignment="Left" VerticalAlignment="Top"
                                    Foreground="{StaticResource AccentBBrush}"
