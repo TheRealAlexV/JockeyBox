@@ -3696,6 +3696,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
         LyricsStatus = doc.Synced
             ? $"Synced lyrics \u00b7 {doc.Source}"
             : $"Lyrics (not time-synced) \u00b7 {doc.Source}";
+        // A document kept despite overrunning the file (see LyricsService) says so
+        // anywhere the operator reads the lyrics status.
+        if (!string.IsNullOrWhiteSpace(missStatus)) LyricsStatus += $" \u00b7 {missStatus}";
     }
 
     // ---- lyrics header (offset + source) ---------------------------------
