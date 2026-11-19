@@ -72,6 +72,25 @@ public class LyricsDurationFitTests : IDisposable
             .ToList(),
     };
 
+    /// <summary>A provider that always hands back the same document.</summary>
+    private sealed class FixedProvider : ILyricsProvider
+    {
+        private readonly LyricsDocument? _document;
+
+        public FixedProvider(string id, string name, LyricsDocument? document)
+        {
+            Id = id;
+            Name = name;
+            _document = document;
+        }
+
+        public string Id { get; }
+        public string Name { get; }
+
+        public Task<LyricsDocument?> GetLyricsAsync(TrackEntry track, CancellationToken ct) =>
+            Task.FromResult(_document);
+    }
+
     /// <summary>A provider that always misses, so the chain can only answer from cache.</summary>
     private sealed class SilentProvider : ILyricsProvider
     {
@@ -120,6 +139,25 @@ public class LyricsDurationFitTests : IDisposable
         var lookup = await Service(
             new SilentProvider("lrcmux", "lrcmux"),
             new SilentProvider("lrclib", "LRCLIB")).GetLyricsAsync(track, CancellationToken.None);
+
+        Assert.NotNull(lookup.Document);
+        Assert.Equal("lrclib", lookup.Document!.SourceId);
+        Assert.Equal(TimeSpan.FromSeconds(27.570), lookup.Document.Lines[0].Time);
+    }
+
+    [Fact]
+    public async Task PreferredProviderDocument_ThatCannotFitTheFile_FallsThroughToTheChain()
+    {
+        var track = Headlights();
+        // The same wrong edit as above, but handed back by the pinned provider's
+        // live lookup instead of the cache: an explicit source choice must not skip
+        // the duration guard. A fitting document is already cached.
+        Seed(track, Timed("lrclib", "LRCLIB", 27.570, 90.0, 148.860), "lrclib");
+
+        var lookup = await Service(
+            new FixedProvider("lrcmux", "lrcmux", Timed("lrcmux", "lrcmux", 51.047, 96.0, 217.750)),
+            new SilentProvider("lrclib", "LRCLIB"))
+            .GetLyricsAsync(track, CancellationToken.None, preferredSourceId: "lrcmux");
 
         Assert.NotNull(lookup.Document);
         Assert.Equal("lrclib", lookup.Document!.SourceId);

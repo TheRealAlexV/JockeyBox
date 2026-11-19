@@ -132,8 +132,13 @@ public class LyricsService
             var chosen = await SafeGetAsync(preferred, effective, ct);
             if (chosen != null)
             {
-                if (preferred.Id != SidecarSourceId) WriteCache(effective, chosen);
-                return new LyricsLookup(chosen, null);
+                if (FitsFile(chosen, effective.Duration, "preferred", out _))
+                {
+                    if (preferred.Id != SidecarSourceId) WriteCache(effective, chosen);
+                    return new LyricsLookup(chosen, null);
+                }
+                // The pinned source returned another edit's timeline: let the chain
+                // look for one that fits rather than showing this one.
             }
             // Preferred source had nothing: fall through to the normal chain.
         }
@@ -283,27 +288,9 @@ public class LyricsService
         // records how far past the end it runs and returns null.
         LyricsDocument? Accept(LyricsDocument document, string origin)
         {
-            var first = document.Lines.Count == 0 ? TimeSpan.Zero : document.Lines[0].Time;
-            var last = LastLineTime(document);
-            var overrun = last - duration;
-            // Zero duration means "unknown" (a pinned query drops it, see ApplyQuery),
-            // so there is nothing to measure against and the document passes.
-            var fits = duration <= TimeSpan.Zero || overrun <= OverrunTolerance(duration);
-
-            Log.Info($"lyrics candidate: origin={origin} source={document.SourceId} "
-                + $"span={Span(first)}-{Span(last)} duration={duration.TotalSeconds:0.###}s "
-                + $"overrun={overrun.TotalSeconds:+0.###;-0.###;0}s {(fits ? "fits" : "REJECTED")}");
-
-            if (fits) return document;
+            if (FitsFile(document, duration, origin, out var overrun)) return document;
 
             overrunning.Add((document, overrun));
-            // Feeds the "lyrics miss" line, which used to name the source and never
-            // its span: that omission is why a wrong-edit timeline looked like an
-            // offset problem for two rounds of investigation.
-            LyricsTrace.Note(
-                string.IsNullOrWhiteSpace(document.SourceId) ? "cache" : document.SourceId,
-                $"timeline {Span(first)}-{Span(last)} runs {overrun.TotalSeconds:0.#}s "
-                + $"past the {duration.TotalSeconds:0.#}s file");
             return null;
         }
 
@@ -365,6 +352,40 @@ public class LyricsService
         }
 
         return (null, null);
+    }
+
+    /// <summary>
+    /// True when the document's timeline can belong to a file of this length. Logs
+    /// the measured span either way and traces a rejection, so a wrong-edition
+    /// timeline shows up whichever path produced it (sidecar, cache, live chain or
+    /// the preferred provider's early return).
+    /// </summary>
+    private static bool FitsFile(
+        LyricsDocument document, TimeSpan duration, string origin, out TimeSpan overrun)
+    {
+        var first = document.Lines.Count == 0 ? TimeSpan.Zero : document.Lines[0].Time;
+        var last = LastLineTime(document);
+        overrun = last - duration;
+        // Zero duration means "unknown" (a pinned query drops it, see ApplyQuery),
+        // so there is nothing to measure against and the document passes.
+        var fits = duration <= TimeSpan.Zero || overrun <= OverrunTolerance(duration);
+
+        Log.Info($"lyrics candidate: origin={origin} source={document.SourceId} "
+            + $"span={Span(first)}-{Span(last)} duration={duration.TotalSeconds:0.###}s "
+            + $"overrun={overrun.TotalSeconds:+0.###;-0.###;0}s {(fits ? "fits" : "REJECTED")}");
+
+        if (!fits)
+        {
+            // Feeds the "lyrics miss" line, which used to name the source and never
+            // its span: that omission is why a wrong-edit timeline looked like an
+            // offset problem for two rounds of investigation.
+            LyricsTrace.Note(
+                string.IsNullOrWhiteSpace(document.SourceId) ? "cache" : document.SourceId,
+                $"timeline {Span(first)}-{Span(last)} runs {overrun.TotalSeconds:0.#}s "
+                + $"past the {duration.TotalSeconds:0.#}s file");
+        }
+
+        return fits;
     }
 
     /// <summary>
