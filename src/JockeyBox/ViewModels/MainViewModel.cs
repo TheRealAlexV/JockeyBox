@@ -3779,8 +3779,12 @@ public partial class MainViewModel : ObservableObject, IDisposable
             stored = section.OffsetMs;
             scope = "SECTION";
         }
-        else if (key != null && _trackMeta.HasOwnOffset(key))
+        else if (key != null)
         {
+            // No section, so the next move writes this track's own offset whether
+            // or not it has one yet (see OnLyricsOffsetMsChanged). The label names
+            // the scope the control is about to use; reporting GLOBAL until the
+            // first move advertised a scope the control never used.
             stored = _trackMeta.GetBaseOffset(key, _settings.LyricsOffsetMs);
             scope = "TRACK";
         }

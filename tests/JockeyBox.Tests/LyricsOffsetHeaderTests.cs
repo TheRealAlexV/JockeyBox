@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Reflection;
+using JockeyBox.Library;
 using JockeyBox.ViewModels;
 using Xunit;
 
@@ -61,6 +62,43 @@ public sealed class LyricsOffsetHeaderTests : IDisposable
         // ...and a nudge steps from 5 s, not from the old 2 s ceiling.
         UiThread.Run(() => _vm.NudgeLyricsCommand.Execute("100"));
         Assert.Equal(5100, _vm.LyricsOffsetMs);
+    }
+
+    /// <summary>
+    /// The header's scope word must name the number the next move will write. A
+    /// loaded track with no offset of its own still writes a track override on the
+    /// first move, so the word is TRACK, not GLOBAL: the word used to disagree with
+    /// the tooltip and with what the control actually did.
+    /// </summary>
+    [Fact]
+    public void TrackLoadedWithoutAnOwnOffset_IndicatorSaysTrack()
+    {
+        UiThread.Run(() =>
+        {
+            _vm.LoadedTrack = new TrackEntry
+            {
+                RelativeKey = "covers/song",
+                RelativePath = "covers/Song.mp3",
+                Title = "Song",
+                Artist = "Band",
+                Duration = TimeSpan.FromMinutes(3),
+            };
+            Invoke(_vm, "SyncLyricsOffsetEditor");
+        });
+
+        Assert.Equal("TRACK", _vm.LyricsOffsetScope);
+
+        // ...and the label is honest: the first move writes that track's offset.
+        UiThread.Run(() => _vm.LyricsOffsetMs = 240);
+        Assert.Equal(240, _vm.LyricsOffsetMs);
+        Assert.Equal("TRACK", _vm.LyricsOffsetScope);
+    }
+
+    [Fact]
+    public void NothingLoaded_IndicatorSaysGlobal()
+    {
+        UiThread.Run(() => Invoke(_vm, "SyncLyricsOffsetEditor"));
+        Assert.Equal("GLOBAL", _vm.LyricsOffsetScope);
     }
 
     private static object? Invoke(MainViewModel vm, string name, params object?[] args) =>

@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using JockeyBox.ViewModels;
@@ -247,6 +249,7 @@ public partial class LyricsPanel : UserControl
         _vm.CurrentWordChanged += ScheduleBallMeasure;
         _vm.PropertyChanged += OnViewModelPropertyChanged;
         _vm.LyricLines.CollectionChanged += OnLyricLinesChanged;
+        RefreshOffsetField();
     }
 
     private void Detach()
@@ -263,6 +266,96 @@ public partial class LyricsPanel : UserControl
     {
         // Turning word-follow on/off changes which line needs measuring.
         if (e.PropertyName == nameof(MainViewModel.IsWordFollow)) ScheduleBallMeasure();
+
+        // A document load, a track change or a section edit re-reads the offset;
+        // the field follows it, except while the operator is typing into it.
+        if (e.PropertyName == nameof(MainViewModel.LyricsOffsetText)) RefreshOffsetField();
+    }
+
+    // ---- the offset field (header row 2) ---------------------------------
+
+    /// <summary>
+    /// Shows the offset in ms and writes it back through
+    /// <see cref="MainViewModel.LyricsOffsetMs"/>, so typing takes the same
+    /// three-way dispatch as the slider and the nudge buttons (section, else the
+    /// track, else the global default).
+    ///
+    /// <para><b>No clamp here.</b> The store clamps; a second clamp in the view
+    /// could disagree with it. <b>No binding either:</b> a binding would push this
+    /// text back on every keystroke and would let a refresh overwrite a half-typed
+    /// value, so the two view-model members are read and written by hand.</para>
+    ///
+    /// <para>Keystrokes typed here stay here: the field marks them handled, so no
+    /// window-level binding sees a digit meant for the number.</para>
+    /// </summary>
+    private void OnOffsetBoxKeyDown(object sender, KeyEventArgs e)
+    {
+        switch (e.Key)
+        {
+            case Key.Enter:
+                e.Handled = true;   // never reach a default button
+                CommitOffsetField();
+                break;
+
+            case Key.Escape:
+                e.Handled = true;
+                RefreshOffsetField(force: true);
+                break;
+
+            case Key.Tab:
+                break;              // keyboard navigation keeps working
+
+            default:
+                // Editing keys are already handled by the TextBox's own class
+                // handler by now; this stops anything above it acting on the key.
+                e.Handled = true;
+                break;
+        }
+    }
+
+    private void OnOffsetBoxLostFocus(object sender, RoutedEventArgs e) => CommitOffsetField();
+
+    /// <summary>
+    /// Names the number the next move will write, before the operator moves
+    /// anything: a section, the loaded track, or the global default.
+    /// </summary>
+    private void RefreshOffsetField(bool force = false)
+    {
+        if (_vm == null) return;
+        if (OffsetValueBox == null) return;
+        if (!force && OffsetValueBox.IsKeyboardFocusWithin) return;
+        OffsetValueBox.Text = _vm.LyricsOffsetText;
+    }
+
+    private void CommitOffsetField()
+    {
+        if (_vm == null) return;
+
+        // Writing the same number back would create a track offset where the
+        // track had none, so an unchanged field writes nothing.
+        if (TryParseOffsetMs(OffsetValueBox.Text, out double ms) && ms != _vm.LyricsOffsetMs)
+            _vm.LyricsOffsetMs = ms;
+
+        // Show what the store kept: the clamped value, or the old one when the
+        // text was not a number at all.
+        OffsetValueBox.Text = _vm.LyricsOffsetText;
+    }
+
+    /// <summary>
+    /// A signed millisecond count. The readout's " ms" suffix is tolerated so a
+    /// value copied out of the field goes back in. Out-of-range values are left
+    /// for the store to clamp rather than clamped a second time here.
+    /// </summary>
+    internal static bool TryParseOffsetMs(string? text, out double ms)
+    {
+        ms = 0;
+        string value = (text ?? string.Empty).Trim();
+        if (value.EndsWith("ms", StringComparison.OrdinalIgnoreCase))
+            value = value[..^2].Trim();
+        if (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int parsed))
+            return false;
+        ms = parsed;
+        return true;
     }
 
     private void OnLyricLinesChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)

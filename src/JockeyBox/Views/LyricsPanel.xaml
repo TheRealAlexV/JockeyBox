@@ -207,10 +207,30 @@
                               Command="{Binding NudgeLyricsCommand}" CommandParameter="100"
                               ToolTip="+100 ms"/>
 
-                <TextBlock Grid.Column="6" Text="{Binding LyricsOffsetText}" Width="52"
-                           Margin="8,0,0,0" VerticalAlignment="Center" TextAlignment="Right"
-                           FontFamily="Consolas" FontSize="10"
-                           Foreground="{StaticResource TextBrush}"/>
+                <!-- Editable, and the same footprint as the readout it replaces:
+                     the header's height is the nudge buttons' 20, so the field is
+                     pinned to that and never reflows under the slider. -->
+                <TextBox x:Name="OffsetValueBox" Grid.Column="6" Width="52" Height="20"
+                         Margin="8,0,0,0" VerticalAlignment="Center"
+                         TextAlignment="Right" FontFamily="Consolas" FontSize="10"
+                         KeyDown="OnOffsetBoxKeyDown" LostFocus="OnOffsetBoxLostFocus"
+                         ToolTip="Type a signed offset in ms (Enter applies, Escape cancels). Writes the same scope as the slider.">
+                    <TextBox.Style>
+                        <Style TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
+                            <!-- No box of its own: it has to read as the readout it
+                                 replaced, and only the focus ring marks it as a field. -->
+                            <Setter Property="MinHeight" Value="0"/>
+                            <Setter Property="Padding" Value="0"/>
+                            <Setter Property="Background" Value="Transparent"/>
+                            <Setter Property="BorderBrush" Value="Transparent"/>
+                            <Style.Triggers>
+                                <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                    <Setter Property="BorderBrush" Value="{StaticResource AccentABrush}"/>
+                                </Trigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBox.Style>
+                </TextBox>
 
                 <Button Grid.Column="7" Content="Reset" Height="20" Margin="6,0,0,0"
                         FontSize="9" Padding="6,1"
