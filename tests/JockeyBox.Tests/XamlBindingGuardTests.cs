@@ -62,13 +62,24 @@ public sealed class XamlBindingGuardTests
     [Fact]
     public void MonitorClusterAndDeckTitleBindingsArePresentAndResolvable()
     {
-        string xaml = File.ReadAllText(MainWindowXaml());
+        var doc = XDocument.Load(MainWindowXaml());
+        var bindings = BindingsIn(doc);
 
         foreach (var name in new[] { "MonitorEnabled", "MonitorAGain", "MonitorBGain", "MonitorSyncEnabled" })
         {
-            Assert.Contains($"Binding {name}", xaml);
+            // A plain path binds on the element's own data context. The cue levels
+            // live on the shared deck card, so they re-root to the window with
+            // RelativeSource and read DataContext.<name>. Both forms name the same
+            // property, and a typo in either matches neither.
+            Assert.True(BoundTo(bindings, name).Any(),
+                $"no binding to {name} (plain or DataContext-qualified) in the main window");
             Assert.NotNull(typeof(MainViewModel).GetProperty(name, BindingFlags.Public | BindingFlags.Instance));
         }
+
+        // The cue sliders write the level back, so two-way is part of the contract
+        // this guard claims to protect.
+        foreach (var name in new[] { "MonitorAGain", "MonitorBGain" })
+            Assert.All(BoundTo(bindings, name), b => Assert.Contains("Mode=TwoWay", b.Value));
 
         // The engine carries the bus itself; MVSYNC is a property of the sliders,
         // so it is the one name that must stop at the view model.
@@ -77,12 +88,69 @@ public sealed class XamlBindingGuardTests
 
         // The deck header is a single TextBlock bound to Title; the prefix is part
         // of that string and DeckPrefix is what composes it.
-        Assert.Contains("{Binding Title}", xaml);
+        Assert.Contains(bindings, b => b.Path == "Title");
         Assert.NotNull(typeof(DeckViewModel).GetProperty("Title"));
         Assert.NotNull(typeof(DeckViewModel).GetProperty("DeckPrefix"));
     }
 
     // ---- helpers -----------------------------------------------------------
+
+    /// <summary>
+    /// Every parsed binding in the document. Comments contribute nothing: an
+    /// XComment is not an attribute, so a name quoted in prose cannot satisfy an
+    /// assertion here.
+    /// </summary>
+    private static List<(string Path, string Value)> BindingsIn(XDocument doc)
+    {
+        var bindings = new List<(string Path, string Value)>();
+        foreach (var attribute in doc.Descendants().SelectMany(e => e.Attributes()))
+        {
+            string? path = DataContextPathOf(attribute.Value);
+            if (path != null) bindings.Add((path, attribute.Value));
+        }
+        return bindings;
+    }
+
+    /// <summary>
+    /// The path of a binding that resolves against a data context, plain
+    /// (<c>Binding Name</c>) or re-rooted by RelativeSource (<c>Binding
+    /// DataContext.Name, RelativeSource=...</c>). Null for everything else,
+    /// including bindings that name their own Source or ElementName.
+    /// </summary>
+    private static string? DataContextPathOf(string value)
+    {
+        if (!value.StartsWith("{Binding", StringComparison.Ordinal)) return null;
+        var body = value["{Binding".Length..].TrimEnd('}').Trim();
+        if (body.Length == 0) return null;
+
+        var arguments = body.Split(',');
+        var head = arguments[0].Trim();
+        if (head.StartsWith("Path=", StringComparison.Ordinal)) head = head["Path=".Length..].Trim();
+        if (head.Length == 0) return null;
+
+        // Source= and ElementName= point at some other object, so such a binding
+        // is not a data-context path. Matched at the start of an argument: the
+        // plain "Source=" contains-check would also reject RelativeSource=.
+        bool NamesAnotherObject(string argument)
+        {
+            var a = argument.TrimStart();
+            return a.StartsWith("Source=", StringComparison.Ordinal)
+                || a.StartsWith("ElementName=", StringComparison.Ordinal);
+        }
+
+        if (NamesAnotherObject(head) || arguments.Skip(1).Any(NamesAnotherObject)) return null;
+        return head;
+    }
+
+    /// <summary>
+    /// The bindings that name this property, either directly or re-rooted through
+    /// the window as <c>DataContext.&lt;name&gt;</c> (a RelativeSource binding on
+    /// the shared card). The path is compared whole, so a name that is merely a
+    /// prefix of the bound path does not count.
+    /// </summary>
+    private static IEnumerable<(string Path, string Value)> BoundTo(
+        List<(string Path, string Value)> bindings, string name)
+        => bindings.Where(b => b.Path == name || b.Path == "DataContext." + name);
 
     private static string MainWindowXaml()
     {
