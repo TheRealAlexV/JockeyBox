@@ -42,6 +42,19 @@
 
         <views:ActivityElapsedConverter x:Key="ActivityElapsed"/>
 
+        <!-- The fill a cue toggle lights with when it is engaged. Cyan is what the
+             header MON and the mic strip's MON already light with (deck A's own
+             accent), and each deck card overrides this key beside DeckAccent, so a
+             deck's cue button lights in that deck's colour. One key, one look. -->
+        <SolidColorBrush x:Key="DeckCueBrush" Color="#00C8FF"/>
+
+        <!-- One row shape for every device dropdown in this window: the friendly
+             name, trimmed rather than clipped, because "Microphone (Realtek Audio)"
+             does not fit a 128 px strip and a hard clip looks like a broken box. -->
+        <DataTemplate x:Key="DeviceChoiceRow">
+            <TextBlock Text="{Binding FriendlyName}" TextTrimming="CharacterEllipsis"/>
+        </DataTemplate>
+
         <!-- Per-deck transport buttons: smaller and dimmer than the main row,
              which stays the primary surface for the active deck. -->
         <Style x:Key="DeckSecondaryButton" TargetType="Button"
@@ -131,6 +144,55 @@
             </Setter>
         </Style>
 
+        <!-- Toggle pill for the cue strips: 18 px, dim until engaged, accent fill
+        while on. One style, three places - the header's MON/MVSYNC, the mic
+        strip's MON/MUTE and each deck card's CUE - so they read as the same kind
+        of switch. It has to be declared before the deck card template: a
+        StaticResource inside a DataTemplate resolves against the dictionary as
+        it stood at that point, so a style defined further down is not found. -->
+        <Style x:Key="MicToggle" TargetType="ToggleButton">
+        <Setter Property="Height" Value="18"/>
+        <Setter Property="Padding" Value="0"/>
+        <Setter Property="FontSize" Value="9"/>
+        <Setter Property="FontWeight" Value="Bold"/>
+        <Setter Property="VerticalAlignment" Value="Center"/>
+        <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+        <Setter Property="Cursor" Value="Hand"/>
+        <Setter Property="Template">
+        <Setter.Value>
+        <ControlTemplate TargetType="ToggleButton">
+        <Border x:Name="bd" Background="{StaticResource PanelAltBrush}"
+        BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+        CornerRadius="3">
+        <!-- A TextBlock with its own Foreground, not a presenter:
+        a ContentPresenter does not follow these triggers, so
+        the checked state painted light text on the cyan fill. -->
+        <TextBlock x:Name="label" Text="{TemplateBinding Content}"
+        Foreground="{TemplateBinding Foreground}"
+        HorizontalAlignment="Center"
+        VerticalAlignment="Center"/>
+        </Border>
+        <ControlTemplate.Triggers>
+        <Trigger Property="IsMouseOver" Value="True">
+        <Setter TargetName="bd" Property="Background"
+        Value="{StaticResource HoverBrush}"/>
+        </Trigger>
+        <Trigger Property="IsChecked" Value="True">
+        <Setter TargetName="bd" Property="Background"
+        Value="{DynamicResource DeckCueBrush}"/>
+        <Setter TargetName="label" Property="Foreground" Value="#08131A"/>
+        </Trigger>
+        <!-- Keyboard focus. The pill has no chrome to lose, so without this a
+        tabbed-to MON or CUE looks identical to the one beside it. -->
+        <Trigger Property="IsKeyboardFocused" Value="True">
+        <Setter TargetName="bd" Property="BorderBrush"
+        Value="{StaticResource TextBrush}"/>
+        </Trigger>
+        </ControlTemplate.Triggers>
+        </ControlTemplate>
+        </Setter.Value>
+        </Setter>
+        </Style>
         <DataTemplate x:Key="DeckCardTemplate" DataType="{x:Type vm:DeckViewModel}">
             <!-- Bottom padding matched to the top: 20 px of it hung below the cue
                  bank as an empty band on both cards, which is the slack the review
@@ -226,17 +288,80 @@
                     <ComboBox Grid.Row="2" Grid.Column="2" Margin="0,0,0,5"
                               ItemsSource="{Binding Devices}" SelectedItem="{Binding SelectedDevice}"/>
 
-                    <!-- Volume -->
+                    <!-- Volume, with this deck's cue pair on the same line. The
+                         button gates the deck into the monitor bus and the short
+                         fader beside it is that deck's cue level - audible ahead
+                         of the program fader while MON is on, the way a channel
+                         CUE on a DDJ-FLX4 hears a trimmed-down channel. Both sit
+                         on the VOL row rather than a new one: the card's height is
+                         what keeps the browser and lyrics box fed, so the pair
+                         shares the row and the deck fader gives up the width. -->
                     <TextBlock Grid.Row="3" Grid.Column="0" Text="VOL" VerticalAlignment="Center"
                                FontSize="10" Foreground="{StaticResource TextDimBrush}"/>
+
+                    <Grid Grid.Row="3" Grid.Column="2">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
                     <!-- TickFrequency stays: the shared slider style draws its
                          ladder from it, and the recentre tick at the middle. Snapping
                          is the style's business now - IsSnapToTickEnabled="True" here
                          said one thing while the template forced the other, so the
                          attribute was a claim the control did not honour. -->
-                    <Slider Grid.Row="3" Grid.Column="2" Minimum="0" Maximum="1.2"
+                    <Slider Grid.Row="3" Grid.Column="0" Minimum="0" Maximum="1.2"
                             TickFrequency="0.1"
                             Value="{Binding Volume}"/>
+
+                        <!-- One template, both decks: neither the card nor its deck
+                             object knows whether it is A or B, so the pair binds to
+                             deck A's gate and level and a DeckPrefix trigger swaps
+                             in deck B's. DeckPrefix is fixed for the life of the
+                             card, so this reads the same as two copies would. -->
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="12,0,0,0"
+                                    VerticalAlignment="Center">
+                            <ToggleButton x:Name="CueSwitch" Width="44" Content="CUE"
+                                          AutomationProperties.Name="Cue this deck to the monitor output">
+                                <ToggleButton.Style>
+                                    <Style TargetType="ToggleButton" BasedOn="{StaticResource MicToggle}">
+                                        <Setter Property="ToolTip" Value="Deck A on the monitor output, ahead of its fader"/>
+                                        <Setter Property="IsChecked" Value="{Binding DataContext.DeckACueEnabled, RelativeSource={RelativeSource AncestorType=Window}, Mode=TwoWay}"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding DeckPrefix}" Value="Deck B">
+                                                <Setter Property="ToolTip" Value="Deck B on the monitor output, ahead of its fader"/>
+                                                <Setter Property="IsChecked" Value="{Binding DataContext.DeckBCueEnabled, RelativeSource={RelativeSource AncestorType=Window}, Mode=TwoWay}"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </ToggleButton.Style>
+                            </ToggleButton>
+                            <Slider Width="88" Margin="6,0,0,0" Minimum="0" Maximum="1.2"
+                                    TickFrequency="0.1"
+                                    AutomationProperties.Name="Cue level for this deck">
+                                <Slider.Style>
+                                    <Style TargetType="Slider" BasedOn="{StaticResource {x:Type Slider}}">
+                                        <Setter Property="ToolTip" Value="Deck A cue level"/>
+                                        <Setter Property="Value" Value="{Binding DataContext.MonitorAGain, RelativeSource={RelativeSource AncestorType=Window}, Mode=TwoWay}"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding DeckPrefix}" Value="Deck B">
+                                                <Setter Property="ToolTip" Value="Deck B cue level"/>
+                                                <Setter Property="Value" Value="{Binding DataContext.MonitorBGain, RelativeSource={RelativeSource AncestorType=Window}, Mode=TwoWay}"/>
+                                            </DataTrigger>
+                                            <!-- Cue off: the level is still settable - a
+                                                 hand presets it before pressing CUE, as
+                                                 on a channel trim - but it steps back so
+                                                 two live-looking faders never suggest the
+                                                 deck is being monitored when it is not. -->
+                                            <DataTrigger Binding="{Binding IsChecked, ElementName=CueSwitch}" Value="False">
+                                                <Setter Property="Opacity" Value="0.4"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Slider.Style>
+                            </Slider>
+                        </StackPanel>
+                    </Grid>
 
                     <!-- Tempo / BPM (plan item 5): a slim, centre-detented pitch fader
                          with its auto-centre button and the live readout. The fader is
@@ -977,46 +1102,6 @@
                 </Setter.Value>
             </Setter>
         </Style>
-        <!-- Toggle pill for the monitor and mic strips: 18 px, dim until engaged,
-        accent fill while on. One style, two strips - the header's MON/MVSYNC
-        and the mic strip's MON/MUTE - so the two read as the same kind of switch. -->
-        <Style x:Key="MicToggle" TargetType="ToggleButton">
-        <Setter Property="Height" Value="18"/>
-        <Setter Property="Padding" Value="0"/>
-        <Setter Property="FontSize" Value="9"/>
-        <Setter Property="FontWeight" Value="Bold"/>
-        <Setter Property="VerticalAlignment" Value="Center"/>
-        <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
-        <Setter Property="Cursor" Value="Hand"/>
-        <Setter Property="Template">
-        <Setter.Value>
-        <ControlTemplate TargetType="ToggleButton">
-        <Border x:Name="bd" Background="{StaticResource PanelAltBrush}"
-        BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
-        CornerRadius="3">
-        <!-- A TextBlock with its own Foreground, not a presenter:
-        a ContentPresenter does not follow these triggers, so
-        the checked state painted light text on the cyan fill. -->
-        <TextBlock x:Name="label" Text="{TemplateBinding Content}"
-        Foreground="{TemplateBinding Foreground}"
-        HorizontalAlignment="Center"
-        VerticalAlignment="Center"/>
-        </Border>
-        <ControlTemplate.Triggers>
-        <Trigger Property="IsMouseOver" Value="True">
-        <Setter TargetName="bd" Property="Background"
-        Value="{StaticResource HoverBrush}"/>
-        </Trigger>
-        <Trigger Property="IsChecked" Value="True">
-        <Setter TargetName="bd" Property="Background"
-        Value="{StaticResource AccentABrush}"/>
-        <Setter TargetName="label" Property="Foreground" Value="#08131A"/>
-        </Trigger>
-        </ControlTemplate.Triggers>
-        </ControlTemplate>
-        </Setter.Value>
-        </Setter>
-        </Style>
         </ResourceDictionary>
     </Window.Resources>
 
@@ -1092,60 +1177,40 @@
             <Button DockPanel.Dock="Right" Content="&#x2699; Settings" HorizontalAlignment="Right"
                     Click="OnSettingsClick"/>
 
-            <!-- Monitor cluster: MON, one send per deck, MVSYNC. It lives on this
-                 line because it has nowhere else to go that costs nothing: the deck
-                 block, the browser row and the folders strip already fill the
-                 viewport at 1518x900 to the pixel, so a second line under MON would
-                 have to be taken out of the lyrics box, which is the other thing this
-                 pass is asked to grow. One line, and window-wide state on the strip
-                 that is always visible: the monitor is one bus, not a deck's property.
+            <!-- Monitor cluster: the MON switch, the output it plays on, and
+                 MVSYNC. It lives on this line because it has nowhere else to go
+                 that costs nothing: the deck block, the browser row and the
+                 folders strip already fill the viewport at 1518x900 to the pixel,
+                 so a second line under MON would have to be taken out of the
+                 lyrics box. One line, window-wide state that is always visible.
 
-                 Each slider is the shared slider style with nothing local but an
-                 opacity trigger, so the tick ladder and the recentre tick come from
-                 the style and are not hand-rolled. MON off dims the pair and disables
-                 it; every width is fixed here, so the row cannot resize or shift when
-                 MON toggles. The A and B labels carry the deck colours - the letter is
-                 the label, the colour only says which card it belongs to. -->
+                 MON is the master gate; each deck's own cue button and cue level
+                 are on that deck's card, beside its fader, so "cue deck A" sits
+                 on deck A. The dropdown is the monitor endpoint itself - the same
+                 saved field the Settings dialog writes, offered here so the
+                 operator does not have to open Settings to move the monitor. It
+                 takes the width the two deck sliders used to, so this row is
+                 narrower than it was, not wider.
+
+                 Every width is fixed here, so the row cannot resize or shift when
+                 MON toggles. MVSYNC still links the two cue levels on the cards;
+                 it is session state, not a saved setting. -->
             <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center"
                         Margin="16,0,10,0">
                 <ToggleButton Style="{StaticResource MicToggle}" Width="42" Margin="0,0,10,0"
                               Content="MON" IsChecked="{Binding MonitorEnabled}"
-                              ToolTip="Play both decks on the monitor output"/>
-                <TextBlock Text="A" FontSize="9" FontWeight="Bold" VerticalAlignment="Center"
-                           Margin="0,0,5,0" Foreground="{StaticResource AccentABrush}"/>
-                <Slider Width="92" Minimum="0" Maximum="1.2" TickFrequency="0.1"
-                        Value="{Binding MonitorAGain}" IsEnabled="{Binding MonitorEnabled}"
-                        ToolTip="Deck A monitor level">
-                    <Slider.Style>
-                        <Style TargetType="Slider" BasedOn="{StaticResource {x:Type Slider}}">
-                            <Setter Property="Opacity" Value="0.35"/>
-                            <Style.Triggers>
-                                <DataTrigger Binding="{Binding MonitorEnabled}" Value="True">
-                                    <Setter Property="Opacity" Value="1"/>
-                                </DataTrigger>
-                            </Style.Triggers>
-                        </Style>
-                    </Slider.Style>
-                </Slider>
-                <TextBlock Text="B" FontSize="9" FontWeight="Bold" VerticalAlignment="Center"
-                           Margin="10,0,5,0" Foreground="{StaticResource AccentBBrush}"/>
-                <Slider Width="92" Minimum="0" Maximum="1.2" TickFrequency="0.1"
-                        Value="{Binding MonitorBGain}" IsEnabled="{Binding MonitorEnabled}"
-                        ToolTip="Deck B monitor level">
-                    <Slider.Style>
-                        <Style TargetType="Slider" BasedOn="{StaticResource {x:Type Slider}}">
-                            <Setter Property="Opacity" Value="0.35"/>
-                            <Style.Triggers>
-                                <DataTrigger Binding="{Binding MonitorEnabled}" Value="True">
-                                    <Setter Property="Opacity" Value="1"/>
-                                </DataTrigger>
-                            </Style.Triggers>
-                        </Style>
-                    </Slider.Style>
-                </Slider>
+                              ToolTip="Play the cued decks on the monitor output"/>
+                <ComboBox Width="150" MinHeight="22" FontSize="9" Padding="6,0"
+                          VerticalAlignment="Center"
+                          ItemsSource="{Binding MonitorDeviceChoices}"
+                          ItemTemplate="{StaticResource DeviceChoiceRow}"
+                          SelectedValuePath="Id"
+                          SelectedValue="{Binding SelectedMonitorDeviceId, Mode=TwoWay}"
+                          AutomationProperties.Name="Monitor output device"
+                          ToolTip="Where MON plays. The same setting as the monitor output in Settings."/>
                 <ToggleButton Style="{StaticResource MicToggle}" Width="58" Margin="12,0,0,0"
                               Content="MVSYNC" IsChecked="{Binding MonitorSyncEnabled}"
-                              ToolTip="Move both monitor sliders together"/>
+                              ToolTip="Move both decks' cue levels together"/>
             </StackPanel>
 
             <TextBlock DockPanel.Dock="Left" Text="JOCKEY" FontSize="20" FontWeight="Black"/>
@@ -1192,6 +1257,8 @@
                             ContentTemplate="{StaticResource DeckCardTemplate}">
                 <ContentControl.Resources>
                     <SolidColorBrush x:Key="DeckAccent" Color="#00C8FF"/>
+                    <!-- the cue button lights in this deck's own colour -->
+                    <SolidColorBrush x:Key="DeckCueBrush" Color="#00C8FF"/>
                 </ContentControl.Resources>
             </ContentControl>
 
@@ -1200,6 +1267,8 @@
                             ContentTemplate="{StaticResource DeckCardTemplate}">
                 <ContentControl.Resources>
                     <SolidColorBrush x:Key="DeckAccent" Color="#FF3DAD"/>
+                    <!-- the cue button lights in this deck's own colour -->
+                    <SolidColorBrush x:Key="DeckCueBrush" Color="#FF3DAD"/>
                 </ContentControl.Resources>
             </ContentControl>
 
@@ -1334,18 +1403,21 @@
                          wider than its column is arranged past it, not clipped:
                          at 1500 the pill drew over the B snap button and read
                          "ARAOKE", at 1400 it fell out of the slot entirely.
-                         Star plus a 575 floor pins the column to the group's
+                         Star plus a 665 floor pins the column to the group's
                          real width, so it can never overflow, and still lets it
-                         grow with the card. Centring needs 2*575 + 384 = 1534 px
-                         of card (a ~1600 window); from there up both stars stay
-                         equal and the fader is exactly centred again, instead of
-                         drifting right the way an Auto column did. Below it the
-                         min wins over the star split and the left column gives
-                         up the difference: 0 offset at >= 1600, 9 px left of
-                         card centre at 1580, 49 px at 1500, 99 px at 1400. -->
+                         grow with the card. The floor grew from 575 when the
+                         "MIC 1" label became the microphone dropdown: 128 px of
+                         combo where 40 px of text used to sit. Centring needs
+                         2*665 + 384 = 1714 px of card (a ~1780 window); from
+                         there up both stars stay equal and the fader is exactly
+                         centred again, instead of drifting right the way an Auto
+                         column did. Below it the min wins over the star split and
+                         the left column gives up the difference: 49 px left of
+                         card centre at 1580 becomes ~139 px at 1518, which is
+                         still inside the column the crossfader sits in. -->
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*" MinWidth="575"/>
+                    <ColumnDefinition Width="*" MinWidth="665"/>
                 </Grid.ColumnDefinitions>
 
                 <!-- Transition status: live state, not a control. Collapsed
@@ -1415,9 +1487,22 @@
                          and a mute that closes the voice without closing the
                          device. Fits on the master row, so the 1400x900 stack
                          does not grow a row. -->
-                    <TextBlock Text="{Binding MicStripLabel}" FontSize="9" VerticalAlignment="Center" Margin="0,0,7,0"
-                               Foreground="{StaticResource TextDimBrush}"
-                               ToolTip="{Binding MicStatusText}"/>
+                    <!-- Which microphone the strip edits. That was the "MIC 1"
+                         label: it named the device but could not change it, so a
+                         setup with two microphones had one strip and no way to
+                         reach the second. The four controls to the right already
+                         retarget through the view model, so this only chooses; it
+                         does not re-wire anything. A device that was enabled and
+                         has gone away stays selectable and MicStatusText says so
+                         in the tooltip, instead of the strip jumping elsewhere. -->
+                    <ComboBox Width="128" MinHeight="22" FontSize="9" Padding="6,0"
+                              Margin="0,0,7,0" VerticalAlignment="Center"
+                              ItemsSource="{Binding MicDeviceChoices}"
+                              ItemTemplate="{StaticResource DeviceChoiceRow}"
+                              SelectedValuePath="Id"
+                              SelectedValue="{Binding SelectedMicDeviceId, Mode=TwoWay}"
+                              AutomationProperties.Name="Microphone device"
+                              ToolTip="{Binding MicStatusText}"/>
                     <Slider x:Name="MicLevelSlider" Width="90" VerticalAlignment="Center"
                             Minimum="0" Maximum="2"
                             SmallChange="0.01" LargeChange="0.1"
