@@ -15,7 +15,6 @@ public class SmokeTests
     {
         var s = new JockeyBox.Settings.AppSettings();
         Assert.Null(s.ProgramOutputDeviceId);
-        Assert.Null(s.SecondOutputDeviceId);
         Assert.Null(s.MonitorOutputDeviceId);
         Assert.False(s.DeckACueEnabled);
         Assert.False(s.DeckBCueEnabled);

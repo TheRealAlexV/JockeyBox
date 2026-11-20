@@ -166,13 +166,17 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         DeckA = new DeckViewModel("DECK A", PlaybackDeck.A, channelA, _transport, PersistDeckSettings,
             id => id != null && _settings.DeviceDelays.TryGetValue(id, out var d) ? d : 0,
-            (id, delay) => { if (id != null) _settings.DeviceDelays[id] = delay; });
+            (id, delay) => { if (id != null) _settings.DeviceDelays[id] = delay; },
+            () => _settings.MainOutputDeviceId);
         DeckB = new DeckViewModel("DECK B", PlaybackDeck.B, channelB, _transport, PersistDeckSettings,
             id => id != null && _settings.DeviceDelays.TryGetValue(id, out var d) ? d : 0,
-            (id, delay) => { if (id != null) _settings.DeviceDelays[id] = delay; });
-        DeckA.RestoreSettings(_settings.DeckADeviceId, _settings.DeckADelayMs, _settings.DeckAVolume,
+            (id, delay) => { if (id != null) _settings.DeviceDelays[id] = delay; },
+            () => _settings.KaraokeAidOutputDeviceId);
+        // A deck's output is a route field, not a per-deck setting: deck A plays
+        // what Settings calls "Deck A Output", deck B what it calls "Karaoke Aid".
+        DeckA.RestoreSettings(_settings.MainOutputDeviceId, _settings.DeckADelayMs, _settings.DeckAVolume,
             _settings.DeckAOutputDelayMs);
-        DeckB.RestoreSettings(_settings.DeckBDeviceId, _settings.DeckBDelayMs, _settings.DeckBVolume,
+        DeckB.RestoreSettings(_settings.KaraokeAidOutputDeviceId, _settings.DeckBDelayMs, _settings.DeckBVolume,
             _settings.DeckBOutputDelayMs);
         SyncDeckActivation();
         // Endpoint enumeration deliberately does not happen here: it blocks on
@@ -4687,8 +4691,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
     private void PersistDeckSettings()
     {
-        _settings.DeckADeviceId = DeckA.SelectedDevice?.Id;
-        _settings.DeckBDeviceId = DeckB.SelectedDevice?.Id;
+        // Decks write the route fields the engine reads, so the deck combos and
+        // the Settings window are two views of one routing configuration. "None"
+        // is null, never "" - the engine reads null as None.
+        _settings.MainOutputDeviceId = NullIfBlank(DeckA.SelectedDevice?.Id);
+        _settings.KaraokeAidOutputDeviceId = NullIfBlank(DeckB.SelectedDevice?.Id);
         _settings.DeckADelayMs = DeckA.DelayMs;
         _settings.DeckBDelayMs = DeckB.DelayMs;
         _settings.DeckAOutputDelayMs = DeckA.OutputDelayMs;
@@ -4697,6 +4704,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _settings.DeckBVolume = DeckB.Volume;
         _settings.Save();
     }
+
+    /// <summary>None is null, never "" - the engine and BuildRoute read null as None.</summary>
+    private static string? NullIfBlank(string? id) =>
+        string.IsNullOrWhiteSpace(id) ? null : id;
 
     /// <summary>(Re)arm the playlist auto-sync timer from the current setting.</summary>
     private void ScheduleAutoSync()

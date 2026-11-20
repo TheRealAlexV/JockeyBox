@@ -13,6 +13,7 @@ using JockeyBox.Separation;
 using JockeyBox.Settings;
 using JockeyBox.Sources;
 using JockeyBox.Tools;
+using JockeyBox.ViewModels;
 
 namespace JockeyBox.Views;
 
@@ -136,32 +137,21 @@ public partial class SettingsWindow : Window
     private static void FillDeviceBox(ComboBox box, IReadOnlyList<AudioDeviceInfo> devices, string? selectedId)
     {
         box.Items.Clear();
-        box.Items.Add(new ComboBoxItem { Content = "None", Tag = "" });
 
-        foreach (var device in devices)
+        // The same rows the deck combos offer: None, the live endpoints, then the
+        // saved one when it is not connected.
+        var rows = OutputDeviceChoices.Build(devices, selectedId);
+        foreach (var choice in rows)
             box.Items.Add(new ComboBoxItem
             {
-                Content = device.FriendlyName,
-                Tag = device.Id,
-                ToolTip = device.FriendlyName,
+                Content = choice.FriendlyName,
+                Tag = choice.Id,
+                ToolTip = choice.FriendlyName,
             });
 
-        var match = box.Items.OfType<ComboBoxItem>().FirstOrDefault(
-            i => !string.IsNullOrEmpty(selectedId)
-                 && string.Equals((string?)i.Tag, selectedId, StringComparison.OrdinalIgnoreCase));
-
-        if (match == null && !string.IsNullOrEmpty(selectedId))
-        {
-            match = new ComboBoxItem
-            {
-                Content = "Saved device (not connected)",
-                Tag = selectedId,
-                ToolTip = selectedId,
-            };
-            box.Items.Add(match);
-        }
-
-        box.SelectedItem = match ?? box.Items[0];
+        var wanted = OutputDeviceChoices.Select(rows, selectedId);
+        box.SelectedItem = box.Items.OfType<ComboBoxItem>().First(
+            i => string.Equals((string?)i.Tag, wanted.Id, StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>Selected endpoint id, or null for the None entry.</summary>

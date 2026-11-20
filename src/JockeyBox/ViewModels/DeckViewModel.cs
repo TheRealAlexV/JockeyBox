@@ -28,6 +28,8 @@ public partial class DeckViewModel : ObservableObject, IDisposable
     private readonly Action _persistSettings;
     private readonly Func<string?, double> _getDeviceDelay; // lookup per-device offset
     private readonly Action<string?, double> _setDeviceDelay;
+    /// <summary>The route field this deck's output maps to (Main for A, Karaoke aid for B).</summary>
+    private readonly Func<string?> _getRouteDeviceId;
     private readonly DispatcherTimer _resyncDebounce;
     private bool _suppressApply;   // true while restoring saved settings
     private bool _isUserSeeking;   // view is dragging a seek bar
@@ -90,7 +92,8 @@ public partial class DeckViewModel : ObservableObject, IDisposable
     public DeckViewModel(string title, PlaybackDeck deckTarget, DeckChannel channel,
                           DualDeckTransport transport,
                           Action persistSettings,
-                          Func<string?, double> getDeviceDelay, Action<string?, double> setDeviceDelay)
+                          Func<string?, double> getDeviceDelay, Action<string?, double> setDeviceDelay,
+                          Func<string?> getRouteDeviceId)
     {        Title = title;
         _baseTitle = title;
         DeckTarget = deckTarget;
@@ -99,6 +102,7 @@ public partial class DeckViewModel : ObservableObject, IDisposable
         _persistSettings = persistSettings;
         _getDeviceDelay = getDeviceDelay;
         _setDeviceDelay = setDeviceDelay;
+        _getRouteDeviceId = getRouteDeviceId;
 
         // The channel loads the track on a worker, so the flags sampled in
         // SetTrack are stale by construction. Subscribe once, here, and let the
@@ -308,16 +312,20 @@ public partial class DeckViewModel : ObservableObject, IDisposable
         finally { _suppressApply = false; }
     }
 
-    /// <summary>Repopulate the device dropdown, keeping the current selection.</summary>
+    /// <summary>
+    /// Repopulate the device dropdown from the route field this deck maps to, so a
+    /// deck selector and the matching Settings box are one list and one value.
+    /// </summary>
     public void RefreshDevices(IEnumerable<AudioDeviceInfo> devices)
     {
-        var targetId = _channel.DeviceId;
+        var targetId = _getRouteDeviceId();
         _suppressApply = true;
         try
         {
             Devices.Clear();
-            foreach (var d in devices) Devices.Add(d);
-            SelectedDevice = Devices.FirstOrDefault(d => d.Id == targetId) ?? Devices.FirstOrDefault();
+            foreach (var choice in OutputDeviceChoices.Build(devices, targetId))
+                Devices.Add(choice);
+            SelectedDevice = OutputDeviceChoices.Select(Devices, targetId);
         }
         finally { _suppressApply = false; }
     }
@@ -678,15 +686,21 @@ public partial class DeckViewModel : ObservableObject, IDisposable
     partial void OnSelectedDeviceChanged(AudioDeviceInfo? value)
     {
         if (value == null) return;
-        _channel.DeviceId = value.Id;
+        var deviceId = string.IsNullOrWhiteSpace(value.Id) ? null : value.Id;
+        _channel.DeviceId = deviceId;
         if (_suppressApply) return;
 
-        var deviceDelay = _getDeviceDelay(value.Id);
-        if (deviceDelay != 0)
-            DelayMs = deviceDelay;
+        if (deviceId != null)
+        {
+            var deviceDelay = _getDeviceDelay(deviceId);
+            if (deviceDelay != 0)
+                DelayMs = deviceDelay;
+        }
 
-        _transport.ApplyDeckSettingsChange(DeckTarget);
+        // Persist first: the transport re-reads the settings file and only then
+        // builds the route, so the route field has to be on disk before it looks.
         _persistSettings();
+        _transport.ApplyDeckSettingsChange(DeckTarget);
     }
 
     partial void OnDelayMsChanged(double value)
@@ -767,4 +781,41 @@ public partial class DeckVersion : ObservableObject
 
     /// <summary>The header text, with a trailing tick on the selected entry.</summary>
     public string MenuText => IsSelected ? Label + "   \u2713" : Label;
+}
+
+/// <summary>
+/// The one list of output choices both routing surfaces show: the deck combos and
+/// the Settings routing boxes. "None" first, then the live endpoints, then - only
+/// when the stored id is not in the live list - a "Saved device (not connected)"
+/// row, so saving either surface cannot quietly change a route to None just
+/// because the endpoint is unplugged.
+/// </summary>
+public static class OutputDeviceChoices
+{
+    public const string NoneName = "None";
+    public const string NotConnectedName = "Saved device (not connected)";
+
+    /// <summary>None + the live endpoints + the saved id when it is not live.</summary>
+    public static List<AudioDeviceInfo> Build(IEnumerable<AudioDeviceInfo> devices, string? savedId)
+    {
+        var rows = new List<AudioDeviceInfo> { new("", NoneName) };
+        rows.AddRange(devices);
+
+        if (!string.IsNullOrWhiteSpace(savedId) &&
+            !rows.Any(d => string.Equals(d.Id, savedId, StringComparison.OrdinalIgnoreCase)))
+            rows.Add(new AudioDeviceInfo(savedId!, NotConnectedName));
+
+        return rows;
+    }
+
+    /// <summary>
+    /// The row for <paramref name="savedId"/>: the matching endpoint, the saved
+    /// row, or None. A null/blank id is None - never the first live device, which
+    /// would show a route the bus is not using.
+    /// </summary>
+    public static AudioDeviceInfo Select(IReadOnlyList<AudioDeviceInfo> rows, string? savedId) =>
+        (string.IsNullOrWhiteSpace(savedId)
+            ? null
+            : rows.FirstOrDefault(d => string.Equals(d.Id, savedId, StringComparison.OrdinalIgnoreCase)))
+        ?? rows[0];
 }

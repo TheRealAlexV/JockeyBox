@@ -74,9 +74,9 @@ public class AppSettings
     /// </summary>
     public LibraryLayout LibraryLayout { get; set; } = LibraryLayout.ArtistAlbum;
 
-    // Per-deck audio routing / sync
-    public string? DeckADeviceId { get; set; }
-    public string? DeckBDeviceId { get; set; }
+    // Per-deck audio routing / sync. A deck's output device is a route field -
+    // MainOutputDeviceId for deck A, KaraokeAidOutputDeviceId for deck B - not a
+    // per-deck setting, so the deck combos and Settings cannot disagree.
     public double DeckADelayMs { get; set; }
     public double DeckBDelayMs { get; set; }
 
@@ -101,15 +101,15 @@ public class AppSettings
     // outputs and the per-deck sends are extra tee'd endpoints; every one of
     // them is off when its id is null/empty ("None" in the UI).
     //
-    // DeckADeviceId/DeckBDeviceId keep their 1.x meaning as the per-deck send
-    // *device*, but the send is only live when DeckACueEnabled/DeckBCueEnabled
-    // is true. Migration into schema 2 leaves the stored ids in place and both
-    // sends disabled, so an upgraded install does not suddenly render every
-    // deck twice (to its old device and to the program bus).
+    // The 1.x per-deck send device fields (DeckADeviceId/DeckBDeviceId) are gone
+    // as of schema 5: the deck selectors now write the route fields below, so a
+    // deck choice and a Settings choice are one value. Schema 5 drops the old
+    // keys and never promotes them - on some profiles they disagree with where
+    // the deck actually plays.
     // ------------------------------------------------------------------
 
     /// <summary>Bumped when a migration in <see cref="MigrateAudioRouting"/> is needed.</summary>
-    public int SettingsSchemaVersion { get; set; } = 3;
+    public int SettingsSchemaVersion { get; set; } = 5;
 
     /// <summary>
     /// True once the settings dialog has stored a routing choice (including
@@ -164,8 +164,6 @@ public class AppSettings
     /// app-domain volume, mute and monitor. Replaces the single <see cref="MicDeviceId"/>.
     /// </summary>
     public List<MicDeviceSettings> MicDevices { get; set; } = new();
-    /// <summary>Optional second copy of the program mix; null = None.</summary>
-    public string? SecondOutputDeviceId { get; set; }
     /// <summary>Optional monitor copy, taken before the global delay; null = None.</summary>
     public string? MonitorOutputDeviceId { get; set; }
 
@@ -627,43 +625,19 @@ public class AppSettings
     }
 
     /// <summary>
-    /// Schema 1 → 2: the per-deck device stops being the deck's only output and
-    /// becomes an optional send. Existing installs keep their stored device ids
-    /// but start with both sends disabled, so audio only flows through the new
-    /// program bus until the user enables a send on purpose.
+    /// <summary>
+    /// Carries an older settings file up to the current schema. Every step only
+    /// fills in what the file could not have known; none of them may change a
+    /// route field's value, because the engine is already playing that value.
     /// </summary>
     private void MigrateAudioRouting()
     {
         if (string.IsNullOrEmpty(ApiToken)) ApiToken = NewApiToken();
 
-        if (SettingsSchemaVersion >= 4) return;
+        if (SettingsSchemaVersion >= 5) return;
 
         DeckACueEnabled = false;
         DeckBCueEnabled = false;
-
-        if (SettingsSchemaVersion < 2)
-        {
-            // Both decks on the SAME endpoint is the common case, and it is also
-            // the strongest signal that this is the endpoint the user listens to:
-            // 1.x let each deck pick a device separately, so two decks agreeing
-            // means one physical output. Take it either way round.
-            var shared = !string.IsNullOrEmpty(DeckADeviceId) ? DeckADeviceId : DeckBDeviceId;
-            if (string.IsNullOrEmpty(ProgramOutputDeviceId) && !string.IsNullOrEmpty(shared))
-                ProgramOutputDeviceId = shared;
-        }
-
-        if (SettingsSchemaVersion < 3)
-        {
-            // Schema 2 as first shipped only promoted deck A's device when it
-            // differed from deck B's, so a single-endpoint install migrated to
-            // "program = None" and played into silence. Repair that: an install
-            // that has never stored a program device takes the deck send device.
-            if (string.IsNullOrEmpty(ProgramOutputDeviceId))
-            {
-                var legacy = !string.IsNullOrEmpty(DeckADeviceId) ? DeckADeviceId : DeckBDeviceId;
-                if (!string.IsNullOrEmpty(legacy)) ProgramOutputDeviceId = legacy;
-            }
-        }
 
         if (SettingsSchemaVersion < 4)
         {
@@ -671,6 +645,11 @@ public class AppSettings
             // turns the microphone into a list, so carry the old choices across:
             // program becomes Main, the saved mic becomes the first mixer entry
             // (monitor off - monitoring a mic through speakers feeds back).
+            //
+            // The pre-2.0 deck send ids (DeckADeviceId/DeckBDeviceId) are not a
+            // route and are never promoted: on a real profile they can disagree
+            // with where the deck actually plays, and promoting them would move
+            // that deck to the wrong device. See the schema 4 -> 5 note below.
             if (string.IsNullOrEmpty(MainOutputDeviceId) && !string.IsNullOrEmpty(ProgramOutputDeviceId))
                 MainOutputDeviceId = ProgramOutputDeviceId;
             ProgramOutputDeviceId = null;
@@ -702,7 +681,13 @@ public class AppSettings
             DeckBCueEnabled = false;
         }
 
-        SettingsSchemaVersion = 4;
+        // Schema 4 -> 5: the per-deck send ids no longer exist as settings, so the
+        // save below rewrites the file without them. They are deliberately not
+        // promoted onto Main/Karaoke Aid: on a real profile they disagree with
+        // where the deck actually plays, so a promotion is the one migration that
+        // could move a working deck to the wrong output.
+
+        SettingsSchemaVersion = 5;
         Save();
     }
 
