@@ -4070,12 +4070,22 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         var merged = new List<LyricLineEdit>(_trackMeta.GetLyricEdits(key));
         int edited = 0;
+        int markersSkipped = 0;
 
         if (lineIndexes != null)
         {
             foreach (var index in lineIndexes)
             {
                 if (index < 0 || index >= LyricLines.Count) continue;
+
+                // A marker is not sung text: an edit written at its time would be
+                // an orphan, because LyricLineEdit.FindLine only matches real
+                // lines and would never apply it.
+                if (LyricLines[index].IsInstrumental)
+                {
+                    markersSkipped++;
+                    continue;
+                }
 
                 var timeMs = (int)Math.Round(LyricLines[index].Time.TotalMilliseconds);
                 merged.RemoveAll(e => string.Equals(e.SourceId, sourceId, StringComparison.Ordinal)
@@ -4087,7 +4097,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         if (edited == 0)
         {
-            StatusText = "Select one or more lyric lines first.";
+            StatusText = markersSkipped > 0
+                ? "Instrumental lines carry no text to edit."
+                : "Select one or more lyric lines first.";
             return;
         }
 

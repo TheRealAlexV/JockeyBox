@@ -303,4 +303,42 @@ public sealed class LyricsEditTests : IDisposable
 
         Assert.Contains("lyricEdits", File.ReadAllText(path));
     }
+
+    // ---- 6. a marker line is not text, so it cannot be edited --------------
+
+    [Fact]
+    public void SetLyricLineText_OnAnInstrumentalMarker_WritesNoEdit()
+    {
+        // The panel renders marker rows next to sung ones, so a selection can
+        // include one. An edit written at a marker's time would be an orphan:
+        // LyricLineEdit.FindLine matches real lines and would never apply it.
+        var doc = Synced((2000, "hold on"), (7000, InstrumentalGap.Marker), (42000, "next verse"));
+        doc.Lines[1] = doc.Lines[1] with { IsInstrumental = true };
+
+        var vm = UiThread.Run(() => new MainViewModel());
+        try
+        {
+            UiThread.Run(() =>
+            {
+                vm.LoadedTrack = Track();
+                Invoke(vm, "ApplyLyricsDocument", doc, null);
+            });
+            Assert.True(vm.LyricLines[1].IsInstrumental);
+
+            UiThread.Run(() => vm.SetLyricLineText(new[] { 1 }, "operator text"));
+
+            // The marker's rendered text is untouched...
+            Assert.Equal(InstrumentalGap.Marker, vm.LyricLines[1].Text);
+
+            // ...and nothing reached the store.
+            var store = (TrackMetadataStore)typeof(MainViewModel)
+                .GetField("_trackMeta", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .GetValue(vm)!;
+            Assert.Empty(store.GetLyricEdits(Track().RelativeKey));
+        }
+        finally
+        {
+            UiThread.Run(() => vm.Dispose());
+        }
+    }
 }

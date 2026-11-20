@@ -304,27 +304,44 @@
                                      trailing margin is the inter-word space (kept out of
                                      the measured box, so the bouncing ball sits on the
                                      glyphs). -->
-                                <ItemsControl ItemsSource="{Binding Words}"
-                                              HorizontalAlignment="Center">
+                                <ItemsControl ItemsSource="{Binding Words}">
                                     <ItemsControl.Style>
                                         <Style TargetType="ItemsControl">
+                                            <Setter Property="HorizontalAlignment" Value="Center"/>
+                                            <Setter Property="ItemsPanel">
+                                                <Setter.Value>
+                                                    <ItemsPanelTemplate>
+                                                        <WrapPanel Orientation="Horizontal"/>
+                                                    </ItemsPanelTemplate>
+                                                </Setter.Value>
+                                            </Setter>
                                             <Setter Property="Visibility" Value="Collapsed"/>
                                             <Style.Triggers>
                                                 <DataTrigger Binding="{Binding HasWords}" Value="True">
                                                     <Setter Property="Visibility" Value="Visible"/>
                                                 </DataTrigger>
+                                                <!-- An instrumental marker fills the whole row:
+                                                     a UniformGrid held to one row gives every
+                                                     glyph an equal slice of the width and cannot
+                                                     wrap, at any panel width. Sung lines keep the
+                                                     WrapPanel above, unchanged. -->
+                                                <DataTrigger Binding="{Binding IsInstrumental}" Value="True">
+                                                    <Setter Property="HorizontalAlignment" Value="Stretch"/>
+                                                    <Setter Property="ItemsPanel">
+                                                        <Setter.Value>
+                                                            <ItemsPanelTemplate>
+                                                                <UniformGrid Rows="1"/>
+                                                            </ItemsPanelTemplate>
+                                                        </Setter.Value>
+                                                    </Setter>
+                                                </DataTrigger>
                                             </Style.Triggers>
                                         </Style>
                                     </ItemsControl.Style>
-                                    <ItemsControl.ItemsPanel>
-                                        <ItemsPanelTemplate>
-                                            <WrapPanel Orientation="Horizontal"/>
-                                        </ItemsPanelTemplate>
-                                    </ItemsControl.ItemsPanel>
                                     <ItemsControl.ItemTemplate>
                                         <DataTemplate>
                                             <TextBlock Text="{Binding Text}" Margin="0,0,5,0"
-                                                       FontSize="16">
+                                                       FontSize="16" TextAlignment="Center">
                                                 <TextBlock.Style>
                                                     <Style TargetType="TextBlock">
                                                         <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>

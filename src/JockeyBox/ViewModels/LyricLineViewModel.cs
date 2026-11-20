@@ -24,7 +24,9 @@ public partial class LyricLineViewModel : ObservableObject
         Time = time;
         Text = string.IsNullOrWhiteSpace(text) ? "\u266a" : text;
         IsInstrumental = isInstrumental;
-        Words = !isInstrumental && words is { Count: > 0 }
+        // A marker line keeps its words: they are what lets the panel lay the
+        // glyphs across the row and the follower walk them through the gap.
+        Words = words is { Count: > 0 }
             ? words.Select(w => new LyricWordViewModel(w)).ToArray()
             : Array.Empty<LyricWordViewModel>();
     }

@@ -38,6 +38,23 @@ public static class InstrumentalGap
     /// <summary>Text of the marker line: music symbols, no words to time.</summary>
     public const string Marker = "\u266a\u266b\u2669\u266c\u266d";
 
+    /// <summary>
+    /// How long one glyph word holds the follower. The row is a single
+    /// non-wrapping line whatever this is, so it paces the highlight rather than
+    /// sizing the row.
+    /// </summary>
+    public const int GlyphIntervalMs = 2_000;
+
+    /// <summary>Fewest glyph words a marker gets: one of each symbol.</summary>
+    public const int MinGlyphs = 5;
+
+    /// <summary>
+    /// Most glyph words a marker gets. The panel splits the row width between
+    /// them, so the cap keeps a single glyph legible on the narrowest panel the
+    /// app runs at.
+    /// </summary>
+    public const int MaxGlyphs = 12;
+
     private static readonly TimeSpan SungCap = TimeSpan.FromMilliseconds(SungCapMs);
 
     /// <summary>
@@ -58,7 +75,7 @@ public static class InstrumentalGap
         // Instrumental intro: nothing has been sung yet, so the marker opens the
         // document and holds the highlight until the first line.
         if (lines[0].Time.TotalMilliseconds >= GapThresholdMs)
-            filled.Add(MarkerLine(TimeSpan.Zero));
+            filled.Add(MarkerLine(TimeSpan.Zero, lines[0].Time));
 
         for (int i = 0; i < lines.Count; i++)
         {
@@ -67,7 +84,7 @@ public static class InstrumentalGap
 
             var gap = lines[i + 1].Time - lines[i].Time;
             if (gap.TotalMilliseconds >= GapThresholdMs)
-                filled.Add(MarkerLine(lines[i].Time + SungCap));
+                filled.Add(MarkerLine(lines[i].Time + SungCap, lines[i + 1].Time));
         }
 
         if (filled.Count == lines.Count) return doc;
@@ -83,7 +100,32 @@ public static class InstrumentalGap
         };
     }
 
-    private static LyricLine MarkerLine(TimeSpan time) => new(time, Marker) { IsInstrumental = true };
+    private static LyricLine MarkerLine(TimeSpan start, TimeSpan end)
+    {
+        var span = end - start;
+        if (span <= TimeSpan.Zero) return new LyricLine(start, Marker) { IsInstrumental = true };
+
+        // One glyph per word, tiled across the marker's own window so the last
+        // one ends exactly where singing resumes. The count sets the follower's
+        // pace, not the row width: the panel lays these out in a UniformGrid with
+        // a single row, so any count fills the width and none of them wraps.
+        int count = Math.Clamp(
+            (int)Math.Round(span.TotalMilliseconds / GlyphIntervalMs), MinGlyphs, MaxGlyphs);
+
+        var words = new LyricWord[count];
+        for (int i = 0; i < count; i++)
+        {
+            long from = start.Ticks + span.Ticks * i / count;
+            long to = start.Ticks + span.Ticks * (i + 1) / count;
+            words[i] = new LyricWord(
+                new TimeSpan(from),
+                new TimeSpan(to),
+                Marker[i % Marker.Length].ToString(),
+                IsSynthetic: true);
+        }
+
+        return new LyricLine(start, Marker) { IsInstrumental = true, Words = words };
+    }
 
     private static bool HasMarker(List<LyricLine> lines)
     {
