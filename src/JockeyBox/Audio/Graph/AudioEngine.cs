@@ -135,6 +135,16 @@ public sealed class AudioEngine : IDisposable
     private readonly List<DeviceOutput> _outputs = new();
 
     /// <summary>
+    /// Per-endpoint output delays (ms), keyed by resolved device id. Kept on the
+    /// engine, not on DeviceOutput alone, so a route rebuild (device unplugged,
+    /// route change) recreates the session at the delay the operator set instead
+    /// of silently snapping back to 0.
+    /// </summary>
+    private readonly Dictionary<string, int> _deviceDelays =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly object _deviceDelayLock = new();
+
+    /// <summary>
     /// The first open device sink. Only used as the "is there any device at all?"
     /// sentinel for Start()/failure detection - it is no longer a program sink.
     /// </summary>
@@ -366,6 +376,67 @@ public sealed class AudioEngine : IDisposable
     private DelayBuffer DeckDelayLine(bool isDeckA) => isDeckA ? _deckADelay : _deckBDelay;
 
     /// <summary>
+    /// One endpoint's output delay in ms (0…2000), 0 for a device with none.
+    /// </summary>
+    public int DeviceDelayMs(string? deviceId)
+    {
+        if (string.IsNullOrWhiteSpace(deviceId)) return 0;
+        lock (_deviceDelayLock)
+            return _deviceDelays.TryGetValue(deviceId, out var ms) ? ms : 0;
+    }
+
+    /// <summary>
+    /// Set one endpoint's output delay. The value is kept even while no session is
+    /// open (a route rebuild reopens every device) and pushed into the live
+    /// <see cref="DeviceOutput"/> with the same id, where a 50 ms equal-power
+    /// crossfade makes a change inaudible on a playing device. No other device and
+    /// no bus is touched.
+    /// </summary>
+    public void SetDeviceDelay(string? deviceId, int milliseconds)
+    {
+        if (string.IsNullOrWhiteSpace(deviceId)) return;
+        int clamped = Math.Clamp(milliseconds, 0, DelayBuffer.MaxDelayMs);
+
+        lock (_deviceDelayLock) _deviceDelays[deviceId] = clamped;
+
+        lock (_sinkLock)
+            foreach (var output in _outputs)
+                if (string.Equals(output.DeviceId, deviceId, StringComparison.OrdinalIgnoreCase))
+                    output.SetDelayMs(clamped);
+    }
+
+    /// <summary>
+    /// Replace the whole per-device delay map (settings save). Devices omitted from
+    /// the map are returned to 0; every other device's value is applied unchanged,
+    /// so one edited field cannot move another device.
+    /// </summary>
+    public void SetDeviceDelays(IReadOnlyDictionary<string, int>? delays)
+    {
+        var wanted = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        if (delays != null)
+            foreach (var (id, ms) in delays)
+                if (!string.IsNullOrWhiteSpace(id))
+                    wanted[id] = Math.Clamp(ms, 0, DelayBuffer.MaxDelayMs);
+
+        lock (_deviceDelayLock)
+        {
+            _deviceDelays.Clear();
+            foreach (var (id, ms) in wanted) _deviceDelays[id] = ms;
+        }
+
+        lock (_sinkLock)
+            foreach (var output in _outputs)
+                output.SetDelayMs(
+                    wanted.TryGetValue(output.DeviceId, out var ms) ? ms : 0);
+    }
+
+    /// <summary>
+    /// Test seam: install a route without opening devices, so the offline render
+    /// can assert clocks that depend on where a deck is routed.
+    /// </summary>
+    internal void SetRouteForTest(AudioRoute route) => _route = route;
+
+    /// <summary>
     /// The mix equaliser: low shelf 70 Hz, mid bell 1 kHz (Q 0.6), high shelf
     /// 13 kHz, each -50…+50 dB. Its output is applied to both deck blocks before the
     /// crossfade fan-out, so it equalises every bus fed from the decks.
@@ -558,6 +629,12 @@ public sealed class AudioEngine : IDisposable
         }
         route = check.Route;
 
+        // Snapshot once, before the devices are opened on the pool thread: a delay
+        // edited while the route is being rebuilt must not walk the dictionary.
+        Dictionary<string, int> delays;
+        lock (_deviceDelayLock)
+            delays = new Dictionary<string, int>(_deviceDelays, StringComparer.OrdinalIgnoreCase);
+
         var built = await Task.Run(() =>
         {
             var outputs = new List<DeviceOutput>();
@@ -579,7 +656,8 @@ public sealed class AudioEngine : IDisposable
                     }
                     if (sink == null) continue;
 
-                    output = new DeviceOutput(id!, sink, BlockFrames, Channels);
+                    output = new DeviceOutput(id!, sink, BlockFrames, Channels, Rate,
+                        delays.TryGetValue(id!, out var initialDelay) ? initialDelay : 0);
                     byDevice.Add(id!, output);
                     outputs.Add(output);
                 }
@@ -726,7 +804,13 @@ public sealed class AudioEngine : IDisposable
         // delayed more reports a position further behind: the two decks read their
         // own delay line (frames, not the truncated ms) instead of one shared value.
         var line = isDeckA ? _deckADelay : _deckBDelay;
-        return Math.Max(0, deck.PositionSeconds - bus - line.DelayFrames / (double)Rate);
+        // The device stage is last in the chain, so the audience hears the deck
+        // late by that device's delay as well. Read the deck's own endpoint, never
+        // the other deck's - one deck on wired and one on Bluetooth must report
+        // different audible positions.
+        var deviceKind = isDeckA ? BusKind.DeckA : BusKind.DeckB;
+        double device = DeviceDelayMs(_route.DeviceFor(deviceKind)) / 1000.0;
+        return Math.Max(0, deck.PositionSeconds - bus - line.DelayFrames / (double)Rate - device);
     }
 
     // ------------------------------------------------------------------ render loop
@@ -980,6 +1064,7 @@ public sealed class AudioEngine : IDisposable
         foreach (var output in _outputs)
         {
             var sink = output.Sink;
+            if (sink == null) continue; // sinkless output exists only in tests
             var stats = output.TakeStats();
             sb.Append($"device '{sink.DeviceName}' [sink={output.LastPeak:0.0000} " +
                       $"L={stats.PeakL:0.0000} R={stats.PeakR:0.0000} " +

@@ -855,6 +855,23 @@ public sealed class DualDeckTransport : IDisposable
         Transitions.TempoRangePercent = Math.Clamp(settings.TempoRangePercent, 0.0, 50.0);
     }
 
+    /// <summary>
+    /// Push the per-device output delays from settings into the live engine. Called
+    /// after the Settings dialog saves; device outputs are rescheduled in place, so
+    /// no session is reopened and no other device's delay moves.
+    /// </summary>
+    public void ApplyDeviceDelays(AppSettings settings) =>
+        Engine.SetDeviceDelays(DeviceDelaysFrom(settings));
+
+    private static Dictionary<string, int> DeviceDelaysFrom(AppSettings settings)
+    {
+        var map = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (id, ms) in settings.DeviceOutputDelays)
+            if (!string.IsNullOrWhiteSpace(id))
+                map[id] = (int)Math.Round(ms);
+        return map;
+    }
+
     // ---------------------------------------------------------------- lifecycle
 
     private async Task InitializeAsync(TaskCompletionSource<bool> ready)
@@ -873,6 +890,7 @@ public sealed class DualDeckTransport : IDisposable
 
             Engine.MasterVolume = Math.Clamp(settings.MasterVolume, 0f, 1.2f);
             Engine.OutputDelayMs = Math.Clamp(settings.OutputDelayMs, 0, 2000);
+            Engine.SetDeviceDelays(DeviceDelaysFrom(settings));
             _appliedMasterVolume = Engine.MasterVolume;
             _appliedDelayMs = Engine.OutputDelayMs;
             AdoptTransitions(settings);

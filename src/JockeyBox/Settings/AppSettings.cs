@@ -93,6 +93,15 @@ public class AppSettings
     /// <summary>Per-device delay offsets (device ID → ms delta from master clock).</summary>
     public Dictionary<string, double> DeviceDelays { get; set; } = new();
 
+    /// <summary>
+    /// Per-device output delay in ms, keyed by endpoint id (0…2000). Applied to the
+    /// sum of every bus routed to that device, after the buses and before its ring:
+    /// delay the wired path until the Bluetooth path catches up. Distinct from
+    /// <see cref="DeviceDelays"/>, which is the deck card's per-device sync trim -
+    /// that one shifts what the deck plays, this one shifts what the device emits.
+    /// </summary>
+    public Dictionary<string, double> DeviceOutputDelays { get; set; } = new();
+
     // ------------------------------------------------------------------
     // 2.0 audio routing.
     //
@@ -596,6 +605,7 @@ public class AppSettings
         // same way the EQ does - without dropping the key.
         settings.DeckAOutputDelayMs = ClampDeckOutputDelayMs(settings.DeckAOutputDelayMs);
         settings.DeckBOutputDelayMs = ClampDeckOutputDelayMs(settings.DeckBOutputDelayMs);
+        settings.DeviceOutputDelays = ClampDeviceOutputDelays(settings.DeviceOutputDelays);
         if (string.IsNullOrWhiteSpace(settings.MicDeviceId)) settings.MicDeviceId = null;
 
         // Unprotect OAuth access token
@@ -621,6 +631,15 @@ public class AppSettings
     {
         var copy = new AppSettings();
         copy.CopyFrom(this);
+
+        // The per-device maps are value maps, not view collections: the Settings
+        // dialog edits entries in place. A shallow clone would share them with the
+        // snapshot, so the three-way merge would see an edit as "unchanged" and
+        // keep the disk copy - i.e. silently drop the operator's new delay.
+        copy.DeviceDelays = new Dictionary<string, double>(
+            DeviceDelays ?? new(), StringComparer.OrdinalIgnoreCase);
+        copy.DeviceOutputDelays = new Dictionary<string, double>(
+            DeviceOutputDelays ?? new(), StringComparer.OrdinalIgnoreCase);
         return copy;
     }
 
@@ -727,6 +746,26 @@ public class AppSettings
     /// </summary>
     private static double ClampDeckOutputDelayMs(double ms)
         => double.IsFinite(ms) ? Math.Clamp(ms, 0, JockeyBox.Audio.DeckChannel.MaxOutputDelayMs) : 0.0;
+
+    /// <summary>
+    /// Keep the persisted per-device delays inside the delay line's own window and
+    /// drop keys no device could use. A null dictionary (hand edit, older shape)
+    /// becomes empty rather than crashing the first lookup.
+    /// </summary>
+    private static Dictionary<string, double> ClampDeviceOutputDelays(Dictionary<string, double>? delays)
+    {
+        var clean = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+        if (delays == null) return clean;
+
+        foreach (var (id, ms) in delays)
+        {
+            if (string.IsNullOrWhiteSpace(id)) continue;
+            clean[id] = double.IsFinite(ms)
+                ? Math.Clamp(ms, 0, JockeyBox.Audio.Graph.DelayBuffer.MaxDelayMs)
+                : 0.0;
+        }
+        return clean;
+    }
 
     public void NormalizeKaraokeRoot()
     {

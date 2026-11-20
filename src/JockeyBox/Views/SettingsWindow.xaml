@@ -113,6 +113,7 @@
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="150"/>
                         <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="110"/>
                     </Grid.ColumnDefinitions>
                     <TextBlock Grid.Column="0" Text="Deck A Output"
                                TextWrapping="Wrap" VerticalAlignment="Center"
@@ -121,12 +122,21 @@
                               AutomationProperties.Name="Deck A Output" AutomationProperties.AutomationId="MainOutputBox" Grid.Column="1" Margin="0,4"
                               Width="300" HorizontalAlignment="Left"
                               ToolTip="Deck A only, no microphones, no deck B. Give deck B the same device and the two are summed into one session, never two."/>
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="0,4"
+                                VerticalAlignment="Center">
+                        <TextBox x:Name="MainOutputDelayBox" Width="60"
+                                 AutomationProperties.Name="Deck A output delay in milliseconds"
+                                 AutomationProperties.AutomationId="MainOutputDelayBox"
+                                 ToolTip="0 to 2000 ms. Applied to this device's output as a whole."/>
+                        <TextBlock Text="ms" Margin="4,0,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
                 </Grid>
 
                 <Grid Margin="0,0,0,4">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="150"/>
                         <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="110"/>
                     </Grid.ColumnDefinitions>
                     <TextBlock Grid.Column="0" Text="Deck B Output"
                                TextWrapping="Wrap" VerticalAlignment="Center"
@@ -135,12 +145,21 @@
                               AutomationProperties.Name="Deck B Output" AutomationProperties.AutomationId="KaraokeAidOutputBox" Grid.Column="1" Margin="0,4"
                               Width="300" HorizontalAlignment="Left"
                               ToolTip="Deck B only. Same device as Deck A means one session carrying both decks summed."/>
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="0,4"
+                                VerticalAlignment="Center">
+                        <TextBox x:Name="KaraokeAidOutputDelayBox" Width="60"
+                                 AutomationProperties.Name="Deck B output delay in milliseconds"
+                                 AutomationProperties.AutomationId="KaraokeAidOutputDelayBox"
+                                 ToolTip="0 to 2000 ms. Applied to this device's output as a whole."/>
+                        <TextBlock Text="ms" Margin="4,0,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
                 </Grid>
 
                 <Grid Margin="0,0,0,4">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="150"/>
                         <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="110"/>
                     </Grid.ColumnDefinitions>
                     <TextBlock Grid.Column="0" Text="Recording device output"
                                TextWrapping="Wrap" VerticalAlignment="Center"
@@ -149,12 +168,21 @@
                               AutomationProperties.Name="Recording device output" AutomationProperties.AutomationId="RecordingOutputBox" Grid.Column="1" Margin="0,4"
                               Width="300" HorizontalAlignment="Left"
                               ToolTip="Every unmuted recording device."/>
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="0,4"
+                                VerticalAlignment="Center">
+                        <TextBox x:Name="RecordingOutputDelayBox" Width="60"
+                                 AutomationProperties.Name="Recording output delay in milliseconds"
+                                 AutomationProperties.AutomationId="RecordingOutputDelayBox"
+                                 ToolTip="0 to 2000 ms. Applied to this device's output as a whole."/>
+                        <TextBlock Text="ms" Margin="4,0,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
                 </Grid>
 
                 <Grid Margin="0,0,0,2">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="150"/>
                         <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="110"/>
                     </Grid.ColumnDefinitions>
                     <TextBlock Grid.Column="0" Text="Soundboard output"
                                TextWrapping="Wrap" VerticalAlignment="Center"
@@ -163,6 +191,14 @@
                               AutomationProperties.Name="Soundboard output" AutomationProperties.AutomationId="SoundboardOutputBox" Grid.Column="1" Margin="0,4"
                               Width="300" HorizontalAlignment="Left"
                               ToolTip="The soundboard."/>
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="0,4"
+                                VerticalAlignment="Center">
+                        <TextBox x:Name="SoundboardOutputDelayBox" Width="60"
+                                 AutomationProperties.Name="Soundboard output delay in milliseconds"
+                                 AutomationProperties.AutomationId="SoundboardOutputDelayBox"
+                                 ToolTip="0 to 2000 ms. Applied to this device's output as a whole."/>
+                        <TextBlock Text="ms" Margin="4,0,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
                 </Grid>
 
                 <CheckBox x:Name="SoundboardFollowsMainCheck"
@@ -177,6 +213,7 @@
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="150"/>
                         <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="110"/>
                     </Grid.ColumnDefinitions>
                     <TextBlock Grid.Column="0" Text="Monitoring device output"
                                TextWrapping="Wrap" VerticalAlignment="Center"
@@ -185,11 +222,19 @@
                               AutomationProperties.Name="Monitoring device output" AutomationProperties.AutomationId="MonitorOutputBox" Grid.Column="1" Margin="0,4"
                               Width="300" HorizontalAlignment="Left"
                               ToolTip="Only recording devices with Monitor on. Never heard by the audience."/>
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="0,4"
+                                VerticalAlignment="Center">
+                        <TextBox x:Name="MonitorOutputDelayBox" Width="60"
+                                 AutomationProperties.Name="Monitoring output delay in milliseconds"
+                                 AutomationProperties.AutomationId="MonitorOutputDelayBox"
+                                 ToolTip="0 to 2000 ms. Applied to this device's output as a whole."/>
+                        <TextBlock Text="ms" Margin="4,0,0,0" VerticalAlignment="Center"/>
+                    </StackPanel>
                 </Grid>
 
                 <TextBlock TextWrapping="Wrap" Foreground="{StaticResource TextDimBrush}"
                            Margin="150,0,0,14"
-                           Text="Every output can be set to None. Monitoring is the operator's cue and is not delayed; the deck and soundboard outputs carry the output delay. Two outputs on one device are summed into one session for that device."/>
+                           Text="Device delay shifts that device's whole output (every bus feeding it) by 0–2000 ms. Use it on the early, wired output so the Bluetooth headset lands in sync; the monitoring output can be delayed too. It adds to the global output delay and to a deck's own output delay. Every output can be set to None. Two outputs on one device are summed into one session for that device."/>
 
                 <!-- ========== MICROPHONES / RECORDING DEVICES ========== -->
                 <TextBlock Text="MICROPHONES / RECORDING DEVICES" FontWeight="Bold"

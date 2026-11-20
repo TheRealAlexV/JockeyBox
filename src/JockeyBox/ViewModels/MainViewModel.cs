@@ -665,6 +665,10 @@ public partial class MainViewModel : ObservableObject, IDisposable
         MusicDirectory = _settings.MusicDirectory;
         KaraokeDirectory = _settings.KaraokeDirectory;
 
+        // Per-device output delays apply in place: no route rebuild, no device
+        // reopened, and each edited endpoint crosses over on its own.
+        _transport.ApplyDeviceDelays(_settings);
+
         // The Settings dialog can edit the global lyric offset directly.
         SyncLyricsOffsetEditor();
 

@@ -24,19 +24,51 @@ public sealed class DeviceOutput : IDisposable
 {
     private readonly List<AudioBus> _buses = new();
     private readonly float[] _staging;
+    private readonly float[] _delayed;
+    private readonly DelayBuffer _delay;
+    private readonly Action<float[], int, int> _write;
     private bool _disposed;
 
-    public DeviceOutput(string deviceId, EndpointSink sink, int blockFrames, int channels)
+    public DeviceOutput(string deviceId, EndpointSink sink, int blockFrames, int channels,
+        int sampleRate, int initialDelayMs = 0)
+        : this(deviceId, (buffer, offset, frames) => sink.Write(buffer, offset, frames),
+            blockFrames, channels, sampleRate, initialDelayMs)
+    {
+        Sink = sink;
+    }
+
+    /// <summary>
+    /// The write seam the tests use: the delay sits after the sum, so it is
+    /// asserted on what reaches the device, not on any one bus.
+    /// </summary>
+    public DeviceOutput(string deviceId, Action<float[], int, int> write, int blockFrames,
+        int channels, int sampleRate, int initialDelayMs = 0)
     {
         DeviceId = deviceId;
-        Sink = sink;
+        _write = write;
         _staging = new float[blockFrames * channels];
+        _delayed = new float[blockFrames * channels];
+        _delay = new DelayBuffer(sampleRate, channels, initialDelayMs);
     }
 
     /// <summary>The resolved endpoint id every bus here shares.</summary>
     public string DeviceId { get; }
 
-    public EndpointSink Sink { get; }
+    /// <summary>The session, or null for a sinkless (test) output.</summary>
+    public EndpointSink? Sink { get; }
+
+    /// <summary>
+    /// This device's output delay in ms. Applied to the sum of every bus routed
+    /// here, so all buses on the device share one offset: delay the wired path and
+    /// the Bluetooth path lands with it. 0 is a true bypass.
+    /// </summary>
+    public int DelayMs => _delay.DelayMs;
+
+    /// <summary>True while a delay change is crossfading (50 ms, equal power).</summary>
+    public bool IsDelayCrossfading => _delay.IsCrossfading;
+
+    /// <summary>Change the delay live; the old and new taps crossfade, never step.</summary>
+    public void SetDelayMs(int milliseconds) => _delay.SetDelayMs(milliseconds);
 
     /// <summary>The buses summed into this device. Read-only for diagnostics.</summary>
     public IReadOnlyList<AudioBus> Buses => _buses;
@@ -81,7 +113,7 @@ public sealed class DeviceOutput : IDisposable
         if (!_buses.Contains(bus)) _buses.Add(bus);
     }
 
-    /// <summary>Sum every attached bus into one block and hand it to the device once.</summary>
+    /// <summary>Sum every attached bus into one block, delay the sum, hand it to the device once.</summary>
     public void Write(int frames)
     {
         int count = _staging.Length;
@@ -89,19 +121,32 @@ public sealed class DeviceOutput : IDisposable
         foreach (var bus in _buses)
             Samples.AddScaled(_staging, bus.Output, 0, count, 1f);
 
-        LastPeak = Samples.Peak(_staging, 0, count);
-        Accumulate(count);
-        Sink.Write(_staging, 0, frames);
+        // Stage the sum into the delay line even at 0 ms: the ring must already hold
+        // history when the operator raises the delay, or the far tap would be
+        // silence and the crossfade would fade the device out. The output is still
+        // read straight from the staging buffer at 0, so it stays bit-identical.
+        _delay.Write(_staging, 0, frames);
+
+        var rendered = _staging;
+        if (_delay.DelayMs != 0 || _delay.IsCrossfading)
+        {
+            _delay.ReadDelayed(_delayed, 0, frames);
+            rendered = _delayed;
+        }
+
+        LastPeak = Samples.Peak(rendered, 0, count);
+        Accumulate(rendered, count);
+        _write(rendered, 0, frames);
     }
 
     /// <summary>Fold this block into the window's per-channel levels and L/R cross-product.</summary>
-    private void Accumulate(int count)
+    private void Accumulate(float[] block, int count)
     {
         const int channels = 2;
         for (int i = 0; i + channels - 1 < count; i += channels)
         {
-            float l = _staging[i];
-            float r = _staging[i + 1];
+            float l = block[i];
+            float r = block[i + 1];
             float al = Math.Abs(l), ar = Math.Abs(r);
             if (al > _peakL) _peakL = al;
             if (ar > _peakR) _peakR = ar;
@@ -112,14 +157,14 @@ public sealed class DeviceOutput : IDisposable
         }
     }
 
-    public void Maintain(int blockFrames) => Sink.Maintain(blockFrames);
+    public void Maintain(int blockFrames) => Sink?.Maintain(blockFrames);
 
-    public bool HasFailed => Sink.HasFailed;
+    public bool HasFailed => Sink?.HasFailed ?? false;
 
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
-        try { Sink.Dispose(); } catch { }
+        try { Sink?.Dispose(); } catch { }
     }
 }

@@ -7,6 +7,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using JockeyBox.Audio;
+using JockeyBox.Audio.Graph;
 using JockeyBox.Library;
 using JockeyBox.Lyrics;
 using JockeyBox.Separation;
@@ -102,6 +103,11 @@ public partial class SettingsWindow : Window
         LoadMicDevices(settings);
 
         OutputDelayBox.Text = settings.OutputDelayMs.ToString(CultureInfo.CurrentCulture);
+        MainOutputDelayBox.Text = DeviceDelayText(settings, settings.MainOutputDeviceId);
+        KaraokeAidOutputDelayBox.Text = DeviceDelayText(settings, settings.KaraokeAidOutputDeviceId);
+        RecordingOutputDelayBox.Text = DeviceDelayText(settings, settings.RecordingOutputDeviceId);
+        SoundboardOutputDelayBox.Text = DeviceDelayText(settings, settings.SoundboardOutputDeviceId);
+        MonitorOutputDelayBox.Text = DeviceDelayText(settings, settings.MonitorOutputDeviceId);
         TempoRangeBox.Text = settings.ManualTempoRangePercent.ToString("0.#", CultureInfo.CurrentCulture);
         TransitionFadeBox.Text = settings.TransitionFadeSeconds.ToString("0.#", CultureInfo.CurrentCulture);
 
@@ -172,6 +178,23 @@ public partial class SettingsWindow : Window
     {
         var id = (box.SelectedItem as ComboBoxItem)?.Tag as string;
         return string.IsNullOrWhiteSpace(id) ? null : id;
+    }
+
+    /// <summary>This endpoint's stored delay, or 0 when it has none.</summary>
+    private static string DeviceDelayText(AppSettings settings, string? deviceId)
+        => deviceId != null && settings.DeviceOutputDelays.TryGetValue(deviceId, out var ms)
+            ? Math.Round(ms).ToString("F0", CultureInfo.CurrentCulture)
+            : "0";
+
+    /// <summary>
+    /// Store the typed value for the row's endpoint. Unparseable text leaves the
+    /// stored value alone rather than resetting a working delay to zero.
+    /// </summary>
+    private static void RememberDeviceDelay(AppSettings settings, string? deviceId, TextBox box)
+    {
+        if (string.IsNullOrWhiteSpace(deviceId)) return;
+        if (!int.TryParse(box.Text, NumberStyles.Integer, CultureInfo.CurrentCulture, out var ms)) return;
+        settings.DeviceOutputDelays[deviceId] = Math.Clamp(ms, 0, DelayBuffer.MaxDelayMs);
     }
 
     /// <summary>Human label for a transition style.</summary>
@@ -767,6 +790,11 @@ public partial class SettingsWindow : Window
         _settings.RecordingOutputDeviceId = SelectedDeviceId(RecordingOutputBox);
         _settings.SoundboardOutputDeviceId = SelectedDeviceId(SoundboardOutputBox);
         _settings.MonitorOutputDeviceId = SelectedDeviceId(MonitorOutputBox);
+        RememberDeviceDelay(_settings, _settings.MainOutputDeviceId, MainOutputDelayBox);
+        RememberDeviceDelay(_settings, _settings.KaraokeAidOutputDeviceId, KaraokeAidOutputDelayBox);
+        RememberDeviceDelay(_settings, _settings.RecordingOutputDeviceId, RecordingOutputDelayBox);
+        RememberDeviceDelay(_settings, _settings.SoundboardOutputDeviceId, SoundboardOutputDelayBox);
+        RememberDeviceDelay(_settings, _settings.MonitorOutputDeviceId, MonitorOutputDelayBox);
         _settings.SoundboardFollowsMain = SoundboardFollowsMainCheck.IsChecked == true;
 
         // Recording devices: the rows ARE the list. An enabled row is the whole
