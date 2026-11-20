@@ -194,11 +194,13 @@ public sealed class AudioEngine : IDisposable
         Fader = new FaderEnvelope();
         Mics = new MicMixer();
 
-        DeckA.GainSource = new CrossfaderGain(this, isDeckA: true);
-        DeckB.GainSource = new CrossfaderGain(this, isDeckA: false);
-
-        // Each deck is read once per block, pre-crossfader; the crossfade is applied
-        // at fan-out so the monitor tap can hear a deck the fader has turned down.
+        // Each deck is read once per block, dry of the program fader: deck volume and
+        // duck are applied per frame at fan-out (RenderBlock step 4), next to the
+        // crossfade. That is what lets the cue tap read the same block and hear a deck
+        // the fader has turned down - no deck is rendered twice and nothing divides
+        // the volume back out. PreFader keeps its meaning for the deck's own fader
+        // envelope; the engine supplies no gain source, so the deck block stays at the
+        // level its readers produced.
         DeckA.PreFader = true;
         DeckB.PreFader = true;
 
@@ -316,6 +318,16 @@ public sealed class AudioEngine : IDisposable
         get => _monitorBGain;
         set => _monitorBGain = Math.Clamp(value, 0f, 1.2f);
     }
+
+    /// <summary>
+    /// Per-deck cue gate (settings <c>DeckACueEnabled</c>): when false deck A never
+    /// reaches the Monitor bus, even with MON on and its send above zero. Defaults
+    /// to true so an install that has never written the flag keeps cueing both decks.
+    /// </summary>
+    public bool DeckACueEnabled { get; set; } = true;
+
+    /// <summary>Per-deck cue gate for deck B. See <see cref="DeckACueEnabled"/>.</summary>
+    public bool DeckBCueEnabled { get; set; } = true;
 
     /// <summary>
     /// Global output delay in ms. Applies to Deck A, Deck B, Recording and
@@ -524,6 +536,13 @@ public sealed class AudioEngine : IDisposable
     }
 
     // ------------------------------------------------------------------ lifecycle
+
+    /// <summary>
+    /// Record a route without opening a device: offline renders only, so a test can
+    /// assert the "two buses on one endpoint" rules (the cue/program dedupe) without
+    /// WASAPI. Live routing goes through <see cref="SetRouteAsync"/>.
+    /// </summary>
+    public void SetRouteForOffline(AudioRoute route) => _route = route;
 
     /// <summary>
     /// Open the configured route: <b>one session per distinct device</b>. Devices
@@ -823,8 +842,21 @@ public sealed class AudioEngine : IDisposable
         var deckBBus = _buses[(int)BusKind.DeckB];
         var deckAOut = deckABus.Input;
         var deckBOut = deckBBus.Input;
-        ApplyCrossfade(_deckABuffer, deckAOut, frame, isDeckA: true);
-        ApplyCrossfade(_deckBBuffer, deckBOut, frame, isDeckA: false);
+
+        // The cue gates and the one-device rule are decided once per block: the cue
+        // device is often one of the program devices, and a deck must then reach that
+        // device once, at the louder of program and cue - never summed (+6 dB), never
+        // silent. Gains move slowly, so deciding per frame inside ApplyCrossfade from
+        // these per-block flags does not click.
+        bool cueA = _monitorEnabled && DeckACueEnabled;
+        bool cueB = _monitorEnabled && DeckBCueEnabled;
+        bool shareA = cueA && master > 0f && SameDevice(BusKind.DeckA, BusKind.Monitor);
+        bool shareB = cueB && master > 0f && SameDevice(BusKind.DeckB, BusKind.Monitor);
+
+        ApplyCrossfade(_deckABuffer, deckAOut, frame, isDeckA: true,
+            baseGain: _deckAVolume * _duck, sharedCueGain: shareA ? _monitorAGain : null, master);
+        ApplyCrossfade(_deckBBuffer, deckBOut, frame, isDeckA: false,
+            baseGain: _deckBVolume * _duck, sharedCueGain: shareB ? _monitorBGain : null, master);
 
         // The trace's deck mix is the program sum: both decks post-crossfade.
         for (int i = 0; i < _deckMix.Length; i++) _deckMix[i] = deckAOut[i] + deckBOut[i];
@@ -876,13 +908,19 @@ public sealed class AudioEngine : IDisposable
 
         // 9. Monitor bus: the operator's cue. Deck A × mon A + deck B × mon B while
         //    MON is on, plus monitored recording devices (muted or not - the mute
-        //    silences the audience, not the operator's own cue).
+        //    silences the audience, not the operator's own cue). The deck blocks are
+        //    dry of deck volume and duck, so a deck whose fader is down still cues;
+        //    each deck's cue gate silences just that deck. A deck whose program device
+        //    is this same device was already carried there by the fan-out at
+        //    max(program, cue) and is left out here, or the device would hear it twice.
         var monitor = _buses[(int)BusKind.Monitor].Input;
         if (_monitorEnabled)
         {
+            float monA = cueA && !shareA ? _monitorAGain : 0f;
+            float monB = cueB && !shareB ? _monitorBGain : 0f;
             for (int i = 0; i < monitor.Length; i++)
-                monitor[i] = _deckABuffer[i] * _monitorAGain
-                           + _deckBBuffer[i] * _monitorBGain
+                monitor[i] = _deckABuffer[i] * monA
+                           + _deckBBuffer[i] * monB
                            + _micMonitor[i];
             Samples.SoftLimit(monitor, 0, monitor.Length);
         }
@@ -963,20 +1001,47 @@ public sealed class AudioEngine : IDisposable
     }
 
     /// <summary>
-    /// Copy one deck block to its program bus with the crossfader's per-frame gain
-    /// applied. Deck volume and duck are already in the source block (the deck is
-    /// rendered pre-crossfader), which is what lets the monitor tap read the same
-    /// block without the fader.
+    /// Copy one deck block to its program bus with the whole program gain applied per
+    /// frame: deck volume × duck × crossfade. The source block is dry (the deck was
+    /// rendered once, pre-fader), which is what lets the cue tap read it without the
+    /// fader.
+    ///
+    /// <para>When <paramref name="sharedCueGain"/> is given, this deck's program device
+    /// is also the cue device. The device must hear the deck once, so the louder of
+    /// program and cue is carried here and the cue side leaves this deck out: never
+    /// the sum (+6 dB at unity), never silence with the fader down.</para>
     /// </summary>
-    private void ApplyCrossfade(float[] source, float[] target, long firstFrame, bool isDeckA)
+    private void ApplyCrossfade(float[] source, float[] target, long firstFrame, bool isDeckA,
+                                float baseGain, float? sharedCueGain, float master)
     {
         for (int f = 0; f < BlockFrames; f++)
         {
             double fader = Fader.FaderAt(firstFrame + f);
-            float gain = (float)(isDeckA ? Crossfade.GainA(fader) : Crossfade.GainB(fader));
+            double cross = isDeckA ? Crossfade.GainA(fader) : Crossfade.GainB(fader);
+            float gain = (float)(cross * baseGain);
+            if (sharedCueGain is float cue)
+            {
+                // master is applied to this bus after the limiter; compare the gain the
+                // device would actually hear from the program side.
+                if (cue > gain * master) gain = cue / master;
+            }
+
             int baseIdx = f * Channels;
             for (int c = 0; c < Channels; c++) target[baseIdx + c] = source[baseIdx + c] * gain;
         }
+    }
+
+    /// <summary>
+    /// True when two buses are routed to the same output device, so a rule about what
+    /// that one device hears (the cue/program dedupe) applies to them.
+    /// </summary>
+    private bool SameDevice(BusKind a, BusKind b)
+    {
+        var idA = _route.DeviceFor(a);
+        var idB = _route.DeviceFor(b);
+        return !string.IsNullOrWhiteSpace(idA)
+            && !string.IsNullOrWhiteSpace(idB)
+            && string.Equals(idA, idB, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -1056,29 +1121,4 @@ public sealed class AudioEngine : IDisposable
     }
 
     /// <summary>Per-frame gain for one deck: crossfader envelope × deck volume × duck.</summary>
-    private sealed class CrossfaderGain : IDeckGainSource
-    {
-        private readonly AudioEngine _engine;
-        private readonly bool _isA;
-
-        public CrossfaderGain(AudioEngine engine, bool isDeckA)
-        {
-            _engine = engine;
-            _isA = isDeckA;
-        }
-
-        public float GainAt(long engineFrame)
-        {
-            double fader = _engine.Fader.FaderAt(engineFrame);
-            double cross = _isA ? Crossfade.GainA(fader) : Crossfade.GainB(fader);
-            return (float)(cross * BaseGainAt(engineFrame));
-        }
-
-        /// <summary>Deck volume × duck: everything the program gain has except the crossfader.</summary>
-        public float BaseGainAt(long engineFrame)
-        {
-            double volume = _isA ? _engine._deckAVolume : _engine._deckBVolume;
-            return (float)(volume * _engine._duck);
-        }
-    }
 }
