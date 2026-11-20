@@ -1,4 +1,6 @@
-﻿using System.IO;
+﻿using System;
+using System.Collections.Generic;
+using System.IO;
 using System.Text;
 
 namespace JockeyBox.Tools;
@@ -16,12 +18,107 @@ public static class Log
     private static readonly object Gate = new();
     private const long MaxBytes = 2 * 1024 * 1024;
 
+    /// <summary>
+    /// The held handle, opened by <see cref="Open"/>. Null until the App
+    /// constructor calls it, and null again if opening failed (the per-line
+    /// append path below still works, one open per line).
+    /// </summary>
+    private static StreamWriter? _writer;
+
     public static string DirectoryPath => Path.Combine(AppPaths.Home, "logs");
 
     public static string FilePath => Path.Combine(DirectoryPath, "jockeybox.log");
 
     /// <summary>Raised for every line so the UI can echo the latest activity.</summary>
     public static event Action<string>? LineWritten;
+
+    /// <summary>
+    /// Open the log for the life of the process, with <c>AutoFlush</c>, and say so
+    /// in the file.
+    ///
+    /// <para><b>Why before anything else.</b> Two instances exited during their
+    /// first second leaving no line, no Application event and no WER report: the
+    /// log only started working once a component happened to write to it, so a
+    /// crash earlier than that had nowhere to report. Called from the App
+    /// constructor, this puts the file - and a line that dates the launch - on
+    /// disk before Velopack, home validation, stores or the window exist, so the
+    /// next thing that dies is dated too.</para>
+    ///
+    /// <para>The stream is opened with a 1-byte buffer and <c>AutoFlush</c>, so
+    /// each line reaches the kernel when it is written; a process killed after
+    /// that point still leaves the line. Safe to call twice.</para>
+    /// </summary>
+    public static void Open()
+    {
+        lock (Gate)
+        {
+            if (_writer != null) return;
+            try
+            {
+                Directory.CreateDirectory(DirectoryPath);
+                Rotate();
+                var stream = new FileStream(
+                    FilePath, FileMode.Append, FileAccess.Write, FileShare.ReadWrite, 1, FileOptions.None);
+                _writer = new StreamWriter(stream, new UTF8Encoding(false)) { AutoFlush = true };
+                _writer.WriteLine(
+                    $"{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff} [INFO ] === jockeybox starting pid {Environment.ProcessId} ===");
+            }
+            catch
+            {
+                // An unusable log directory must not stop the launch, and must not
+                // stop the crash handlers either: they fall back to the append path.
+                _writer = null;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Push anything buffered to the OS. The crash handlers call it before dying.
+    /// </summary>
+    public static void Flush()
+    {
+        lock (Gate)
+        {
+            try { _writer?.Flush(); } catch { /* a dying process has no better option */ }
+        }
+    }
+
+    /// <summary>
+    /// Read the log from inside this process. <see cref="Open"/> holds the file for
+    /// the life of the process, so <c>File.ReadAllText</c>/<c>ReadLines</c> (share
+    /// mode <c>Read</c>) fail against it with a sharing violation: readers go
+    /// through here instead of each one remembering the share mode.
+    /// </summary>
+    public static string[] ReadLines()
+    {
+        lock (Gate)
+        {
+            try
+            {
+                if (!File.Exists(FilePath)) return Array.Empty<string>();
+                using var stream = new FileStream(FilePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                using var reader = new StreamReader(stream);
+                var lines = new List<string>();
+                while (reader.ReadLine() is { } line) lines.Add(line);
+                return lines.ToArray();
+            }
+            catch
+            {
+                return Array.Empty<string>();
+            }
+        }
+    }
+
+    /// <summary>
+    /// The line a dying process leaves: which stage it died in, the exception type
+    /// and its message. The App's AppDomain and Dispatcher handlers are the only
+    /// callers, so the wording is fixed and greppable (<c>[FATAL]</c>).
+    /// </summary>
+    public static void Fatal(string stage, Exception exception)
+    {
+        Write("FATAL", $"unhandled exception during {stage}: {exception.GetType().FullName}: {exception.Message}");
+        Flush();
+    }
 
     public static void Info(string message) => Write("INFO ", message);
     public static void Warn(string message) => Write("WARN ", message);
@@ -75,15 +172,19 @@ public static class Log
         {
             lock (Gate)
             {
-                Directory.CreateDirectory(DirectoryPath);
-                var info = new FileInfo(FilePath);
-                if (info.Exists && info.Length > MaxBytes)
+                if (_writer != null)
                 {
-                    var previous = FilePath + ".1";
-                    if (File.Exists(previous)) File.Delete(previous);
-                    File.Move(FilePath, previous);
+                    // AutoFlush: the line is on its way to the OS when this returns.
+                    _writer.WriteLine(line);
                 }
-                File.AppendAllText(FilePath, line + Environment.NewLine, Encoding.UTF8);
+                else
+                {
+                    // No held handle (the constructor never ran, or opening failed):
+                    // one open per line, which also flushes.
+                    Directory.CreateDirectory(DirectoryPath);
+                    Rotate();
+                    File.AppendAllText(FilePath, line + Environment.NewLine, Encoding.UTF8);
+                }
             }
         }
         catch
@@ -92,5 +193,19 @@ public static class Log
         }
 
         try { LineWritten?.Invoke(line); } catch { /* listeners are best-effort */ }
+    }
+
+    /// <summary>
+    /// Rotate at 2 MB. Only called while the gate is held and no writer is open -
+    /// a held handle keeps the old file alive, so rotation happens at open time.
+    /// </summary>
+    private static void Rotate()
+    {
+        var info = new FileInfo(FilePath);
+        if (!info.Exists || info.Length <= MaxBytes) return;
+
+        var previous = FilePath + ".1";
+        if (File.Exists(previous)) File.Delete(previous);
+        File.Move(FilePath, previous);
     }
 }

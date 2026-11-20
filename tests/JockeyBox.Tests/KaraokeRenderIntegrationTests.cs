@@ -218,7 +218,7 @@ public sealed class KaraokeRenderIntegrationTests
         try
         {
             string? line = File.Exists(Log.FilePath)
-                ? File.ReadLines(Log.FilePath).LastOrDefault(l => l.Contains(marker, StringComparison.Ordinal))
+                ? Log.ReadLines().LastOrDefault(l => l.Contains(marker, StringComparison.Ordinal))
                 : null;
             if (line == null) return "unknown (no log line)";
             int at = line.IndexOf(marker, StringComparison.Ordinal);

@@ -19,8 +19,56 @@ namespace JockeyBox;
 /// </summary>
 public partial class App : Application
 {
+    /// <summary>
+    /// Where startup is, for the crash markers. Set before each step that can
+    /// throw, so a handler says "unhandled exception during library boot" instead
+    /// of just naming the exception.
+    /// </summary>
+    private static string _startupStage = "application constructor";
+
+    /// <summary>
+    /// Proof hook, and nothing else: <c>JOCKEYBOX_FAIL_STARTUP=early|late</c>
+    /// throws on purpose at one of two points in startup, so the crash markers
+    /// can be shown to land in the log rather than asserted. Unset in every
+    /// normal launch, which is why the check is an empty-string test and not a
+    /// build constant.
+    /// </summary>
+    private static readonly string? FailStartupAt =
+        Environment.GetEnvironmentVariable("JOCKEYBOX_FAIL_STARTUP");
+
+    /// <summary>
+    /// The log comes up here, before Velopack, home validation, stores or the
+    /// window: a process that dies in its first second must still leave a line.
+    /// The two handlers are installed at the same point, because an exception
+    /// raised before <see cref="OnStartup"/> would otherwise have no handler at
+    /// all - that silence is what hid the two vanished instances.
+    /// </summary>
+    public App()
+    {
+        // The log lives under the home, so a home that failed validation gets no
+        // log (writing into it is the one thing that guard exists to prevent); the
+        // refusal on stderr and in a dialog is all it can honestly offer.
+        if (Tools.AppPaths.HomeProblem == null)
+        {
+            Tools.Log.Open();
+            Tools.Log.Info(
+                $"startup: app constructed (pid {Environment.ProcessId}, home {Tools.AppPaths.Home})");
+        }
+
+        // Any thread, any stage: the last line before the process goes down.
+        AppDomain.CurrentDomain.UnhandledException += OnDomainUnhandledException;
+
+        // The WPF handler has to exist before the dispatcher pumps a startup
+        // exception, and startup runs inside that pump.
+        DispatcherUnhandledException += OnUnhandledException;
+
+        MaybeFailStartup("early");
+    }
+
     protected override void OnStartup(StartupEventArgs e)
     {
+        _startupStage = "Velopack hooks";
+
         // Velopack installer/updater lifecycle hooks (no-op when run portable).
         // They must stay first: the hooks rewrite argv and may exit the process.
         VelopackApp.Build().Run();
@@ -252,7 +300,17 @@ public partial class App : Application
             {
                 Console.Error.WriteLine("uishot failed: " + ex);
             }
-            Shutdown(shotExit);
+            // Exit, don't Shutdown: the capture is written and the PNG is on disk,
+            // so nothing after this line can improve the result - and a capture
+            // that outlives its own picture is what left windowless Session 0
+            // processes holding audio endpoints, twice killed by hand (once nearly
+            // in place of the operator's app). Shutdown() posts to the dispatcher
+            // and then runs the whole teardown; Environment.Exit ends the process
+            // here, with the streams flushed so a caller still sees every line.
+            Console.Out.Flush();
+            Console.Error.Flush();
+            Tools.Log.Flush();
+            Environment.Exit(shotExit);
             return;
         }
 
@@ -294,15 +352,22 @@ public partial class App : Application
         // The safety net: a BelowNormal thread watches OnUiTick. Disabled by
         // JOCKEYBOX_UI_WATCHDOG_MS=0; never started for a headless run (those do not
         // tick the UI heartbeat and would be killed by their own long work).
+        _startupStage = "UI watchdog start";
         Tools.UiWatchdog.Start();
 
-        DispatcherUnhandledException += OnUnhandledException;
+        // The handlers are installed in the constructor, before the first thing
+        // that can throw - not here, where a failure in Velopack, home validation
+        // or the single-instance lease had already gone unrecorded.
 
         // Library database comes up before the window exists: every view model
         // reads its playlists from LibraryDatabase.Current at construction, and
         // the legacy json import must have run by then. A failure here is a
         // warning, never a startup error - the json stores still work.
+        _startupStage = "library boot";
         Data.LibraryBoot.Boot();
+
+        _startupStage = "main window creation";
+        MaybeFailStartup("late");
 
         base.OnStartup(e);
 
@@ -364,8 +429,51 @@ public partial class App : Application
 
     private void OnUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
+        // Marker first: a dialog can be dismissed, dismissed-and-forgotten, or
+        // never seen at all in a headless session; the log line survives either way.
+        _startupStage = _startupStage == "application constructor" ? "the dispatcher (before startup)" : _startupStage;
+        Tools.Log.Fatal(_startupStage, e.Exception);
+
+        // A headless run has nobody to click OK, and a modal box in Session 0
+        // would hang the process instead of ending it. Fail-startup runs are
+        // headless by definition: they exist to produce a line and an exit code.
+        if (Tools.SingleInstance.Headless || FailStartupAt != null)
+        {
+            e.Handled = true;
+            Environment.Exit(1);
+            return;
+        }
+
         MessageBox.Show(e.Exception.ToString(), "JockeyBox - Unexpected Error",
             MessageBoxButton.OK, MessageBoxImage.Error);
         e.Handled = true;
+    }
+
+    /// <summary>
+    /// The last line before the process goes down: any thread, any stage, including
+    /// one raised before the dispatcher ever pumps (a constructor-time failure
+    /// lands here, and that was exactly the case with no evidence at all).
+    /// </summary>
+    private static void OnDomainUnhandledException(object sender, UnhandledExceptionEventArgs e)
+    {
+        if (e.ExceptionObject is Exception ex) Tools.Log.Fatal(_startupStage, ex);
+        else Tools.Log.Warn($"unhandled exception object during {_startupStage}: {e.ExceptionObject}");
+
+        Tools.Log.Flush();
+    }
+
+    /// <summary>
+    /// The proof hook: throws on purpose when <c>JOCKEYBOX_FAIL_STARTUP</c> names
+    /// this stage, so the two markers can be demonstrated end to end. "early" is
+    /// before any startup work; "late" is after the library booted and before the
+    /// window is pumped. Any other value, or no value, does nothing.
+    /// </summary>
+    private static void MaybeFailStartup(string stage)
+    {
+        if (FailStartupAt == null) return;
+        if (!string.Equals(FailStartupAt, stage, StringComparison.OrdinalIgnoreCase)) return;
+
+        throw new InvalidOperationException(
+            $"deliberate startup failure injected at stage '{stage}' (JOCKEYBOX_FAIL_STARTUP)");
     }
 }

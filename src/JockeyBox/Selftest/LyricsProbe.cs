@@ -90,7 +90,9 @@ internal static class LyricsProbe
         try
         {
             if (!File.Exists(Log.FilePath)) return null;
-            return File.ReadLines(Log.FilePath)
+            // Log.ReadLines: the log is held open by this process, so a plain
+            // File.ReadLines would fail with a sharing violation.
+            return Log.ReadLines()
                 .LastOrDefault(l => l.Contains("lyrics miss", StringComparison.Ordinal));
         }
         catch
