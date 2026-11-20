@@ -4552,15 +4552,23 @@ public partial class MainViewModel : ObservableObject, IDisposable
     }
 
     /// <summary>
-    /// Highlight exactly one word of the current line when word-follow is on,
-    /// and none at all in line mode.
+    /// Highlight exactly one word of the current line when word-follow is on.
+    /// In line mode this is a no-op except on an instrumental marker: there the
+    /// row is a sequence of glyph words tiled across the gap, so stepping them
+    /// keeps the stretch visibly advancing (the ball stays off - it is gated on
+    /// <see cref="IsWordFollow"/> in <c>UpdateBallMotion</c> and the panel's
+    /// measurement pass).
     /// </summary>
     private void UpdateWordHighlight(TimeSpan effective)
     {
-        if (!IsWordFollow)
+        if (!IsWordFollow
+            && (_currentLyricIndex < 0
+                || _currentLyricIndex >= LyricLines.Count
+                || !LyricLines[_currentLyricIndex].IsInstrumental))
         {
             // Toggling the mode already cleared every flag; this covers the tick
-            // that follows a switch back to line mode.
+            // that follows a switch back to line mode, and leaving the marker for
+            // a sung line (whose words the line-change branch already cleared).
             if (_currentWordIndex >= 0) ClearAllWordHighlights();
             return;
         }
