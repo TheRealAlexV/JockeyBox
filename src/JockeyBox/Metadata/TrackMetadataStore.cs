@@ -667,8 +667,10 @@ public sealed class TrackMetadataStore : IDisposable
     /// before an existing one displaces it (<see cref="SectionAddResult.ReplacedSections"/>);
     /// a new span that begins inside an existing one is rejected with
     /// <see cref="SectionAddResult.Added"/> false, so a user's carefully placed
-    /// section is never silently merged. Times are clamped to >= 0 and the span
-    /// must be at least one millisecond long.
+    /// section is never silently merged - <i>unless</i> the new span is fully
+    /// contained in that section, in which case the section is split into the two
+    /// remainders around the new span and the stamp is accepted. Times are clamped
+    /// to >= 0 and the span must be at least one millisecond long.
     /// </para>
     /// </summary>
     public SectionAddResult AddSection(
@@ -688,18 +690,45 @@ public sealed class TrackMetadataStore : IDisposable
         lock (_gate)
         {
             var record = EnsureLocked(normalized);
+
+            // A span fully inside an existing section is carved out of it, not
+            // refused: the container becomes its two remainders around the new
+            // span, carrying the container's own offset and label. A span that
+            // starts inside and runs past the end is still refused - accepting
+            // it would silently swallow the container's tail, and relaxing the
+            // reject instead would let NormalizeWithReport drop the nested span
+            // and report "displaced by an earlier section".
+            LyricOffsetSection? container = null;
             foreach (var existing in record.Sections)
             {
-                if (existing.Overlaps(section) && existing.StartMs <= section.StartMs)
+                if (!existing.Overlaps(section) || existing.StartMs > section.StartMs) continue;
+
+                if (section.EndMs > existing.EndMs)
                 {
                     return SectionAddResult.Rejected(
                         $"overlaps the section at {existing.StartMs}-{existing.EndMs} ms; " +
                         "trim or remove that section first");
                 }
+
+                container = existing;
+                break;
             }
 
-            var combined = new List<LyricOffsetSection>(record.Sections.Count + 1);
-            combined.AddRange(record.Sections);
+            var combined = new List<LyricOffsetSection>(record.Sections.Count + 2);
+            foreach (var existing in record.Sections)
+            {
+                if (container is not { } containing || existing != containing)
+                {
+                    combined.Add(existing);
+                    continue;
+                }
+
+                if (section.StartMs > containing.StartMs)
+                    combined.Add(containing with { EndMs = section.StartMs });
+                if (section.EndMs < containing.EndMs)
+                    combined.Add(containing with { StartMs = section.EndMs });
+            }
+
             combined.Add(section);
 
             var (kept, dropped) = LyricOffsetTimeline.NormalizeWithReport(combined);
