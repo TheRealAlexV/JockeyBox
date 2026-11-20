@@ -14,6 +14,9 @@ namespace JockeyBox.Tests;
 /// </summary>
 public sealed class CueApiLifecycleTests
 {
+    /// <summary>Candidates <see cref="LocalApiServer.Start"/> tries before it gives up.</summary>
+    private const int WalkUpCandidates = 12;
+
     [Fact]
     public void Port_in_use_walks_up_and_reports_the_port_it_actually_took()
     {
@@ -25,16 +28,60 @@ public sealed class CueApiLifecycleTests
         try
         {
             using var server = NewServer(new FakeCueTarget());
-            Assert.True(server.Start(port));
+            Assert.True(server.Start(port),
+                $"Start({port}) returned false with only that one port held. {StartEvidence(port, server)}");
 
-            Assert.True(server.IsRunning);
-            Assert.NotEqual(port, server.Port);
-            Assert.InRange(server.Port, port + 1, port + 11);
+            Assert.True(server.IsRunning,
+                $"Start({port}) returned true but IsRunning is false. {StartEvidence(port, server)}");
+            Assert.True(server.Port != port,
+                $"the walk-up stayed on the held port {port}. {StartEvidence(port, server)}");
+            Assert.True(server.Port >= port + 1 && server.Port <= port + WalkUpCandidates - 1,
+                $"the walk-up bound {server.Port}, outside the {WalkUpCandidates} candidates it searches. "
+                + StartEvidence(port, server));
         }
         finally
         {
             blocker.Stop();
             blocker.Close();
+        }
+    }
+
+    /// <summary>
+    /// The walk-up against a range that is deliberately fragmented, instead of whatever
+    /// <see cref="FreePort"/> happened to leave behind: three consecutive loopback ports
+    /// are held by real listeners for the life of the test, so the first free candidate is
+    /// a known number and the server must land exactly on it, not merely somewhere in range.
+    /// </summary>
+    [Fact]
+    public void Walk_up_crosses_a_held_block_and_takes_the_first_port_after_it()
+    {
+        const int held = 3;
+        var (first, listeners) = ReserveConsecutiveFreePorts(held);
+
+        try
+        {
+            int expected = first + held;
+            using var server = NewServer(new FakeCueTarget());
+
+            Assert.True(server.Start(first),
+                $"Start({first}) returned false with {first}..{expected - 1} held by this test. "
+                + $"LastError: {server.LastError ?? "<none>"}");
+
+            Assert.True(server.IsRunning,
+                $"Start({first}) returned true but IsRunning is false; bound port {server.Port}.");
+
+            // The assertion that makes this a walk-up test and not a range test.
+            Assert.True(server.Port == expected,
+                $"expected the first port after the held block ({expected}), got {server.Port}. "
+                + $"held {first}..{expected - 1}; "
+                + $"LastError (last refusal): {server.LastError ?? "<none>"}");
+
+            Console.WriteLine(
+                $"[walk-up] held {first}..{expected - 1}; server bound {server.Port}; expected {expected}");
+        }
+        finally
+        {
+            ReleaseListeners(listeners);
         }
     }
 
@@ -92,6 +139,65 @@ public sealed class CueApiLifecycleTests
             stateSource: () => new ApiState(),
             cueRouter: new CueApiRouter(target));
         return server;
+    }
+
+    /// <summary>
+    /// The facts a failed <see cref="LocalApiServer.Start"/> needs to be diagnosable: the port
+    /// asked for, every candidate it could have tried, the port it actually bound, and the last
+    /// refusal http.sys reported. Without these a bare false return cannot be falsified.
+    /// </summary>
+    private static string StartEvidence(int requested, LocalApiServer server) =>
+        $"requested {requested}; tried {requested}..{requested + WalkUpCandidates - 1} "
+        + $"({WalkUpCandidates} candidates); "
+        + $"bound: {(server.IsRunning ? server.Port.ToString() : "<none>")}; "
+        + $"LastError: {server.LastError ?? "<none>"}";
+
+    /// <summary>
+    /// Hold <paramref name="count"/> consecutive loopback ports with real listeners, so a test
+    /// can know exactly which port is the first free one. Bases are drawn from 20000-38999:
+    /// below the ephemeral range <see cref="FreePort"/> hands out and away from the default port.
+    /// </summary>
+    private static (int First, List<HttpListener> Listeners) ReserveConsecutiveFreePorts(int count)
+    {
+        for (int attempt = 0; attempt < 40; attempt++)
+        {
+            int first = 20000 + Random.Shared.Next(0, 19000);
+            var held = new List<HttpListener>(count);
+            bool complete = true;
+
+            for (int i = 0; i < count; i++)
+            {
+                var listener = new HttpListener();
+                listener.Prefixes.Add($"http://127.0.0.1:{first + i}/");
+                try
+                {
+                    listener.Start();
+                    held.Add(listener);
+                }
+                catch
+                {
+                    try { listener.Close(); } catch { }
+                    complete = false;
+                    break;
+                }
+            }
+
+            if (complete) return (first, held);
+            ReleaseListeners(held);
+        }
+
+        throw new InvalidOperationException(
+            $"could not hold {count} consecutive loopback ports in 20000..38999 after 40 bases");
+    }
+
+    /// <summary>Stop and close every listener; safe to call on a partial block.</summary>
+    private static void ReleaseListeners(IEnumerable<HttpListener> listeners)
+    {
+        foreach (var listener in listeners)
+        {
+            try { listener.Stop(); } catch { }
+            try { listener.Close(); } catch { }
+        }
     }
 
     /// <summary>A port the OS just handed out and we released, so it is almost certainly free.</summary>
