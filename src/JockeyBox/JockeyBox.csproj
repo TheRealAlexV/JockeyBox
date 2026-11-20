@@ -56,9 +56,19 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Ships the offline BPM/beat-grid + key analysers next to the app (run with the app's own venv python). -->
-    <None Include="AnalysisScripts\analysis\bpm_scan.py" CopyToOutputDirectory="PreserveNewest" />
-    <None Include="AnalysisScripts\analysis\key_scan.py" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Ships the offline BPM/beat-grid + key analysers next to the app (run with the app's own venv python).
+         Deliberately a glob over the folder, not one line per script: a hand-listed file that
+         nobody remembers to add is silently absent from 'dotnet publish', and because the
+         payload manifest is generated from that same dist the preflight still matches - the
+         deploy goes green on a build that is missing a script and only fails at runtime.
+         'Update' rather than 'Include': the SDK already picks these files up as None items, so
+         this adds the copy behaviour without listing the same file twice. Any .py in this
+         folder ships.
+         ExcludeFromSingleFile is required: with PublishSingleFile the SDK only copies an item
+         loose when that metadata is true (_ComputeResolvedFilesToPublishTypes), otherwise the
+         script is bundled into the exe and never appears next to it. Same reason as the libVLC
+         target above - BpmAnalysisService reads the script from AppContext.BaseDirectory. -->
+    <None Update="AnalysisScripts\analysis\*.py" CopyToOutputDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
   </ItemGroup>
 
 </Project>
