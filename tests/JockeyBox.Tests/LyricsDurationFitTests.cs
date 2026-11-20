@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -10,6 +11,7 @@ using System.Threading.Tasks;
 using JockeyBox.Library;
 using JockeyBox.Lyrics;
 using JockeyBox.Settings;
+using JockeyBox.ViewModels;
 using Xunit;
 
 namespace JockeyBox.Tests;
@@ -59,6 +61,15 @@ public class LyricsDurationFitTests : IDisposable
         Title = "Headlights",
         Artist = "The Artist",
         Duration = TimeSpan.FromSeconds(TrackSeconds),
+    };
+
+    private static TrackEntry Track(double seconds) => new()
+    {
+        RelativeKey = "track",
+        RelativePath = "Track.mp3",
+        Title = "Track",
+        Artist = "The Artist",
+        Duration = TimeSpan.FromSeconds(seconds),
     };
 
     /// <summary>A synced document owning the given line starts (seconds).</summary>
@@ -196,21 +207,158 @@ public class LyricsDurationFitTests : IDisposable
     }
 
     [Fact]
-    public async Task WhenEveryCandidateOverruns_TheClosestOneIsKeptAndSaysWhy()
+    public async Task An_overrunning_document_alone_is_not_displayed()
     {
         var track = Headlights();
+        // The lrcmux timeline belongs to a longer edit: last line 217.75 s on a
+        // 171.99 s file, 45.76 s past the end. No other source answers.
         Seed(track, Timed("lrcmux", "lrcmux", 51.047, 96.0, 217.750), "lrcmux");
-        Seed(track, Timed("lrclib", "LRCLIB", 27.570, 90.0, 200.0), "lrclib");
 
         var lookup = await Service(
             new SilentProvider("lrcmux", "lrcmux"),
             new SilentProvider("lrclib", "LRCLIB")).GetLyricsAsync(track, CancellationToken.None);
 
-        // Showing nothing would be worse: keep the smallest overrun (200 s, 28 s
-        // past the end) and let the status line admit the timings run past the file.
-        Assert.NotNull(lookup.Document);
-        Assert.Equal("lrclib", lookup.Document!.SourceId);
+        // The operator reads these aloud on stage: a timeline that runs past the
+        // audio is worse than no timeline, so nothing is displayed and the note
+        // names the rejection.
+        Assert.Null(lookup.Document);
         Assert.False(string.IsNullOrWhiteSpace(lookup.MissStatus));
         Assert.Contains("past the end", lookup.MissStatus!, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("45.8", lookup.MissStatus!);   // the overrun, in seconds
+        Assert.Contains("217.8", lookup.MissStatus!);  // last line of the refused document
+    }
+
+    [Fact]
+    public async Task A_fitting_document_is_preferred_over_an_overrunning_one()
+    {
+        var track = Track(240.0);
+        // The Get Lucky shape: the lrcmux timeline runs to 312.7 s, Better Lyrics
+        // stops at 221.4 s and belongs to this edit.
+        Seed(track, Timed("lrcmux", "lrcmux", 30.0, 120.0, 312.7), "lrcmux");
+        Seed(track, Timed("betterlyrics", "Better Lyrics", 27.5, 120.0, 221.4), "betterlyrics");
+
+        var lookup = await Service(
+            new SilentProvider("lrcmux", "lrcmux"),
+            new SilentProvider("betterlyrics", "Better Lyrics")).GetLyricsAsync(track, CancellationToken.None);
+
+        Assert.NotNull(lookup.Document);
+        Assert.Equal("betterlyrics", lookup.Document!.SourceId);
+        Assert.Null(lookup.MissStatus);
+    }
+
+    [Fact]
+    public async Task A_document_inside_the_tolerance_is_still_displayed()
+    {
+        // 200 s file, tolerance max(5 s, 5%) = 10 s. 9.9 s past the end is a
+        // trailing credit on a slightly different master, not another edit.
+        var track = Track(200.0);
+        Seed(track, Timed("lrclib", "LRCLIB", 10.0, 100.0, 209.9), "lrclib");
+
+        var lookup = await Service(
+            new SilentProvider("lrclib", "LRCLIB")).GetLyricsAsync(track, CancellationToken.None);
+
+        Assert.NotNull(lookup.Document);
+        Assert.Equal("lrclib", lookup.Document!.SourceId);
+        Assert.Null(lookup.MissStatus);
+    }
+}
+
+/// <summary>
+/// The refusal has to reach the panel: no lyric rows, and a status line that says
+/// which candidate was rejected and by how much. Drives a real view model on
+/// <see cref="UiThreadCollection"/>, no window shown.
+/// </summary>
+[Collection(nameof(UiThreadCollection))]
+public sealed class LyricsRefusalStatusTests : IDisposable
+{
+    private readonly string? _previousHome;
+    private readonly string _home;
+    private readonly string _cacheDir;
+
+    public LyricsRefusalStatusTests()
+    {
+        _previousHome = Environment.GetEnvironmentVariable("JOCKEYBOX_HOME");
+        string root = OperatingSystem.IsWindows() ? @"C:\Dev" : Path.GetTempPath();
+        _home = Path.Combine(root, "jb-lyrics-refusal", Guid.NewGuid().ToString("n"));
+        _cacheDir = Path.Combine(_home, "lyrics");
+        Directory.CreateDirectory(_cacheDir);
+        Environment.SetEnvironmentVariable("JOCKEYBOX_HOME", _home);
+    }
+
+    public void Dispose()
+    {
+        Environment.SetEnvironmentVariable("JOCKEYBOX_HOME", _previousHome);
+        try { Directory.Delete(_home, recursive: true); } catch { /* a save timer may still hold it */ }
+    }
+
+    private static object? Invoke(MainViewModel vm, string name, params object?[] args) =>
+        typeof(MainViewModel)
+            .GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(vm, args.Length == 0 ? null : args);
+
+    [Fact]
+    public async Task The_refusal_reason_reaches_the_status_line()
+    {
+        var track = new TrackEntry
+        {
+            RelativeKey = "get-lucky",
+            RelativePath = "Get Lucky.mp3",
+            Title = "Get Lucky",
+            Artist = "Daft Punk",
+            Duration = TimeSpan.FromSeconds(240.0),
+        };
+        var refused = new LyricsDocument
+        {
+            Synced = true,
+            Source = "lrcmux",
+            SourceId = "lrcmux",
+            Lines = new List<LyricLine>
+            {
+                new(TimeSpan.FromSeconds(30.0), "line one"),
+                new(TimeSpan.FromSeconds(312.7), "line past the end"),
+            },
+        };
+        var key = LyricsService.CacheKey(track.Artist, track.Title, track.Duration, "lrcmux");
+        var hash = Convert.ToHexString(MD5.HashData(Encoding.UTF8.GetBytes(key)));
+        File.WriteAllText(Path.Combine(_cacheDir, hash + ".json"), JsonSerializer.Serialize(refused));
+
+        var service = new LyricsService(
+            new AppSettings(), _cacheDir,
+            new ILyricsProvider[] { new SilentProvider("lrcmux", "lrcmux") });
+        var lookup = await service.GetLyricsAsync(track, CancellationToken.None);
+        Assert.Null(lookup.Document);
+
+        var vm = UiThread.Run(() => new MainViewModel());
+        try
+        {
+            UiThread.Run(() =>
+            {
+                vm.LoadedTrack = track;
+                Invoke(vm, "ApplyLyricsDocument", lookup.Document, lookup.MissStatus);
+            });
+
+            Assert.Contains("past the end", vm.LyricsStatus, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("72.7", vm.LyricsStatus);
+            Assert.Empty(vm.LyricLines);
+        }
+        finally
+        {
+            UiThread.Run(() => vm.Dispose());
+        }
+    }
+
+    private sealed class SilentProvider : ILyricsProvider
+    {
+        public SilentProvider(string id, string name)
+        {
+            Id = id;
+            Name = name;
+        }
+
+        public string Id { get; }
+        public string Name { get; }
+
+        public Task<LyricsDocument?> GetLyricsAsync(TrackEntry track, CancellationToken ct) =>
+            Task.FromResult<LyricsDocument?>(null);
     }
 }

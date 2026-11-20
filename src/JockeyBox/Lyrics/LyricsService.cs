@@ -147,12 +147,15 @@ public class LyricsService
         if (doc != null) return new LyricsLookup(doc, caveat);
 
         var miss = DescribeMiss(track, query, trace.Notes);
+        // A refusal still carries the reason: the operator has to see which
+        // candidate was rejected and by how much, not just "no lyrics".
+        var note = caveat == null ? miss : $"{caveat}; {miss}";
         ProviderLog.WarnOnce(
             "miss|" + MissKey(track, query),
             $"lyrics miss: title=\"{effective.Title}\" artist=\"{effective.Artist}\" "
             + $"album=\"{track.Album}\" duration={(int)track.Duration.TotalSeconds}s "
             + $"source={preferredSourceId ?? "auto"} -> {DescribeNotes(trace.Notes)}");
-        return new LyricsLookup(null, miss);
+        return new LyricsLookup(null, note);
     }
 
     /// <summary>
@@ -340,8 +343,10 @@ public class LyricsService
             return (fitting, null);
         }
 
-        // Nothing fits. Showing nothing would be worse than showing a timeline that
-        // is a little long, so keep the closest one and admit it in the status text.
+        // Nothing fits. A timeline that runs past the end of the audio is worse
+        // than no timeline at all here: these lyrics are read aloud on stage, so
+        // refuse the document and let the status line say what was rejected and
+        // by how much.
         if (overrunning.Count > 0)
         {
             var (document, overrun) = overrunning.OrderBy(c => c.Overrun).First();
@@ -350,8 +355,8 @@ public class LyricsService
                 + $"({LastLineTime(document).TotalSeconds:0.#}s of lyrics on a "
                 + $"{duration.TotalSeconds:0.#}s track)";
             Log.Warn($"lyrics: no candidate fits the {duration.TotalSeconds:0.#}s file; "
-                + $"keeping the closest ({document.SourceId}, +{overrun.TotalSeconds:0.#}s) - {caveat}");
-            return (document, caveat);
+                + $"refusing the closest ({document.SourceId}, +{overrun.TotalSeconds:0.#}s) - {caveat}");
+            return (null, caveat);
         }
 
         return (null, null);
