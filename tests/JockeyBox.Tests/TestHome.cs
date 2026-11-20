@@ -54,7 +54,7 @@ internal static class TestHome
     /// the one combination <c>BuildRoute</c> honours as None rather than falling
     /// back to the default endpoint.
     /// </summary>
-    private static void WriteSilentSettings(string home)
+    internal static void WriteSilentSettings(string home)
     {
         const string json = """
             {

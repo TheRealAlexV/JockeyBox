@@ -24,7 +24,9 @@ namespace JockeyBox.Tests;
 /// window, driven by an explicit playhead: time is passed to
 /// <c>UpdateLyricHighlight</c>, never slept for. The same
 /// <c>JOCKEYBOX_HOME</c> isolation as <see cref="LyricsEditTests"/> keeps the
-/// operator's real settings and metadata store out of the run.
+/// operator's real settings and metadata store out of the run, and the home is
+/// seeded with <see cref="TestHome"/>'s silent route so no view model opens a
+/// real audio endpoint.
 /// </para>
 /// </summary>
 [Collection(nameof(UiThreadCollection))]
@@ -39,13 +41,24 @@ public sealed class LyricsMarkerFollowTests : IDisposable
         string root = OperatingSystem.IsWindows() ? @"C:\Dev" : Path.GetTempPath();
         _home = Path.Combine(root, "jb-marker-follow", Guid.NewGuid().ToString("n"));
         Directory.CreateDirectory(_home);
+        // A bare home reads as "no routing choice saved yet", which makes
+        // BuildRoute fall back to the system default output: every view model then
+        // opens a real WASAPI endpoint and render thread (8 s per test). The same
+        // silent route the module initializer seeds keeps the devices shut.
+        TestHome.WriteSilentSettings(_home);
         Environment.SetEnvironmentVariable("JOCKEYBOX_HOME", _home);
     }
 
     public void Dispose()
     {
         Environment.SetEnvironmentVariable("JOCKEYBOX_HOME", _previousHome);
-        try { Directory.Delete(_home, recursive: true); } catch { /* a save timer may still hold it */ }
+        try
+        {
+            // The seeded settings file is read-only so a stray save cannot rewrite it.
+            File.SetAttributes(Path.Combine(_home, "settings.json"), FileAttributes.Normal);
+            Directory.Delete(_home, recursive: true);
+        }
+        catch { /* a save timer may still hold it */ }
     }
 
     // ---- 1. line mode steps the glyphs through the gap ---------------------
@@ -61,16 +74,16 @@ public sealed class LyricsMarkerFollowTests : IDisposable
             var marker = Marker(vm);
 
             // First glyph.
-            Tick(vm, marker.Words[0].Start + TimeSpan.FromMilliseconds(100));
-            Assert.Equal(0, LitGlyphIndex(vm));
+            Tick(vm, marker.Words[0].Start + TimeSpan.FromMilliseconds(100),
+                v => Assert.Equal(0, LitGlyphIndex(v)));
 
             // Advance past the second glyph's start: exactly one glyph, and it moved.
-            Tick(vm, marker.Words[1].Start + TimeSpan.FromMilliseconds(100));
-            Assert.Equal(1, LitGlyphIndex(vm));
+            Tick(vm, marker.Words[1].Start + TimeSpan.FromMilliseconds(100),
+                v => Assert.Equal(1, LitGlyphIndex(v)));
 
             // Mid-gap is still exactly one current glyph.
-            Tick(vm, marker.Words[marker.Words.Count / 2].Start + TimeSpan.FromMilliseconds(100));
-            Assert.Equal(marker.Words.Count / 2, LitGlyphIndex(vm));
+            Tick(vm, marker.Words[marker.Words.Count / 2].Start + TimeSpan.FromMilliseconds(100),
+                v => Assert.Equal(marker.Words.Count / 2, LitGlyphIndex(v)));
         }
         finally
         {
@@ -90,12 +103,10 @@ public sealed class LyricsMarkerFollowTests : IDisposable
             var marker = Marker(vm);
 
             // Still inside the sung line before the marker: nothing lit.
-            Tick(vm, TimeSpan.FromMilliseconds(3_000));
-            AssertNoWordsLit(vm);
+            Tick(vm, TimeSpan.FromMilliseconds(3_000), AssertNoWordsLit);
 
             // One tick later the playhead is on the marker's own start.
-            Tick(vm, marker.Time);
-            Assert.Equal(0, LitGlyphIndex(vm));
+            Tick(vm, marker.Time, v => Assert.Equal(0, LitGlyphIndex(v)));
         }
         finally
         {
@@ -116,15 +127,17 @@ public sealed class LyricsMarkerFollowTests : IDisposable
 
             // Light the last glyph of the stretch.
             var last = marker.Words.Count - 1;
-            Tick(vm, marker.Words[last].Start + TimeSpan.FromMilliseconds(100));
-            Assert.Equal(last, LitGlyphIndex(vm));
+            Tick(vm, marker.Words[last].Start + TimeSpan.FromMilliseconds(100),
+                v => Assert.Equal(last, LitGlyphIndex(v)));
 
             // Cross into the sung line that ends the gap.
             var sung = vm.LyricLines.Last(l => !l.IsInstrumental);
-            Tick(vm, sung.Time);
-            Assert.False(vm.CurrentLyricLine!.IsInstrumental);
-            AssertNoWordsLit(vm);
-            Assert.Equal(-1, CurrentWordIndex(vm));
+            Tick(vm, sung.Time, v =>
+            {
+                Assert.False(v.CurrentLyricLine!.IsInstrumental);
+                AssertNoWordsLit(v);
+                Assert.Equal(-1, CurrentWordIndex(v));
+            });
         }
         finally
         {
@@ -149,11 +162,11 @@ public sealed class LyricsMarkerFollowTests : IDisposable
                 marker.Words[marker.Words.Count - 1].Start + TimeSpan.FromMilliseconds(100),
             };
 
-            var wordIndices = instants.Select(t => { Tick(vm, t); return LitGlyphIndex(vm); }).ToArray();
+            var wordIndices = LitAtEach(vm, instants);
 
             // Same view model, flipped to line mode: identical stepping inside the marker.
             UiThread.Run(() => vm.IsWordFollow = false);
-            var lineIndices = instants.Select(t => { Tick(vm, t); return LitGlyphIndex(vm); }).ToArray();
+            var lineIndices = LitAtEach(vm, instants);
 
             Assert.Equal(new[] { 0, 1, marker.Words.Count - 1 }, wordIndices);
             Assert.Equal(wordIndices, lineIndices);
@@ -178,10 +191,12 @@ public sealed class LyricsMarkerFollowTests : IDisposable
             // Guard the guard: the line really does carry synthesized words.
             Assert.NotEmpty(sung.Words);
 
-            Tick(vm, TimeSpan.FromMilliseconds(3_000));
-            Assert.False(vm.CurrentLyricLine!.IsInstrumental);
-            AssertNoWordsLit(vm);
-            Assert.Equal(-1, CurrentWordIndex(vm));
+            Tick(vm, TimeSpan.FromMilliseconds(3_000), v =>
+            {
+                Assert.False(v.CurrentLyricLine!.IsInstrumental);
+                AssertNoWordsLit(v);
+                Assert.Equal(-1, CurrentWordIndex(v));
+            });
         }
         finally
         {
@@ -204,8 +219,29 @@ public sealed class LyricsMarkerFollowTests : IDisposable
         Invoke(vm, "ApplyLyricsDocument", Document(), null);
     });
 
-    private static void Tick(MainViewModel vm, TimeSpan at) =>
-        UiThread.Run(() => Invoke(vm, "UpdateLyricHighlight", at));
+    /// <summary>
+    /// Advance the playhead and read the glyph state, both inside one dispatcher
+    /// operation. Reading after the invoke returns is a race: the view model starts
+    /// a 33 ms UI clock in its constructor, and that clock re-runs
+    /// <c>UpdateLyricHighlight</c> with the transport's real (idle, zero) position,
+    /// which clears the marker. The clock runs on this same dispatcher thread, so a
+    /// write and a read inside one delegate cannot be separated by a tick. The
+    /// required read argument is what keeps callers atomic: there is no overload
+    /// that ticks alone, so a read on the test thread is not expressible.
+    /// </summary>
+    private static void Tick(MainViewModel vm, TimeSpan at, Action<MainViewModel> readAndAssert) =>
+        UiThread.Run(() =>
+        {
+            Invoke(vm, "UpdateLyricHighlight", at);
+            readAndAssert(vm);
+        });
+
+    private static int[] LitAtEach(MainViewModel vm, TimeSpan[] instants)
+    {
+        var lit = new List<int>(instants.Length);
+        foreach (var at in instants) Tick(vm, at, v => lit.Add(LitGlyphIndex(v)));
+        return lit.ToArray();
+    }
 
     private static LyricLineViewModel Marker(MainViewModel vm)
     {

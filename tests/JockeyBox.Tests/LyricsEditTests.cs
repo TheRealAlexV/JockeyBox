@@ -247,15 +247,20 @@ public sealed class LyricsEditTests : IDisposable
         var vm = UiThread.Run(() => new MainViewModel());
         try
         {
-            UiThread.Run(() =>
+            // Write and read in one dispatcher operation: the view model's 33 ms UI
+            // clock re-runs UpdateLyricHighlight with the idle transport position,
+            // and it can run on the UI thread between the write and a read taken
+            // here on the test thread.
+            int lit = UiThread.Run(() =>
             {
                 vm.LoadedTrack = Track();
                 vm.IsWordFollow = true;
                 Invoke(vm, "ApplyLyricsDocument", Synced((1000, "one two three four"), (6000, "next")), null);
                 // A playhead inside the first line's window lights one word.
                 Invoke(vm, "UpdateLyricHighlight", TimeSpan.FromMilliseconds(1500));
+                return CurrentWordIndex(vm);
             });
-            Assert.NotEqual(-1, CurrentWordIndex(vm));
+            Assert.NotEqual(-1, lit);
 
             UiThread.Run(() => vm.SetLyricLineText(new[] { 0 }, "edited one two three"));
 
