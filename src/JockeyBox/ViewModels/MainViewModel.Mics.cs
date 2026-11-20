@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
 using CommunityToolkit.Mvvm.ComponentModel;
@@ -108,8 +109,11 @@ public partial class MainViewModel
     private void RebuildMicDeviceChoices()
     {
         MicDeviceChoices.Clear();
+        // One enumeration for the whole list: the names come from the endpoints
+        // themselves, so a device whose capture is not open still names itself.
+        var live = _deviceService.GetInputDevices();
         foreach (var id in EnabledMicIds())
-            MicDeviceChoices.Add(new AudioDeviceInfo(id, MicDeviceName(id)));
+            MicDeviceChoices.Add(new AudioDeviceInfo(id, MicDeviceName(id, live)));
 
         var selected = SelectedMicDeviceId;
         if (!string.IsNullOrEmpty(selected) &&
@@ -144,12 +148,32 @@ public partial class MainViewModel
             ? null
             : _settings.MicDevices.FirstOrDefault(m => SameId(m.DeviceId, id));
 
-    private string MicDeviceName(string id)
+    private string MicDeviceName(string id, IReadOnlyList<AudioDeviceInfo> live)
     {
+        string? stripName = null;
         var strips = _transport?.Engine?.Mics.Strips;
         if (strips != null)
             foreach (var strip in strips)
-                if (SameId(strip.DeviceId, id)) return strip.DeviceName;
+                if (SameId(strip.DeviceId, id)) stripName = strip.DeviceName;
+
+        return MicChoiceName(id, live, stripName);
+    }
+
+    /// <summary>
+    /// The row's text. The live endpoint is the authority: it names itself whether or
+    /// not this strip's capture is open, and a capture that never opened keeps
+    /// <see cref="Endpoints.MicCapture.DeviceName"/> empty (that is what made every
+    /// row of the headless mic chooser blank). The open strip's name is the second
+    /// source, and the id is the last resort so a saved-but-unplugged mic still reads
+    /// as something rather than as an empty row.
+    /// </summary>
+    internal static string MicChoiceName(string id, IReadOnlyList<AudioDeviceInfo> live, string? stripName)
+    {
+        foreach (var device in live)
+            if (SameId(device.Id, id) && !string.IsNullOrWhiteSpace(device.FriendlyName))
+                return device.FriendlyName;
+
+        if (!string.IsNullOrWhiteSpace(stripName)) return stripName!;
         return id;
     }
 
