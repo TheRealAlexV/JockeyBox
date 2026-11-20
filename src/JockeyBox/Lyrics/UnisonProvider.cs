@@ -98,9 +98,8 @@ public class UnisonProvider : ILyricsProvider
                 return null;
             }
 
-            // Line-level documents get estimated word spans; a plain (unsynced)
-            // payload has no times at all and stays unsynced.
-            if (doc.Synced && !doc.HasWordTimings) WordTimeline.Synthesize(doc, track.Duration);
+            // No tiling here: word spans are built at load time, after the
+            // instrumental marker exists (MainViewModel's lyrics pass).
             return doc;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)

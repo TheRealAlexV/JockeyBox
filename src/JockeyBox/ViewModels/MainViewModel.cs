@@ -3683,11 +3683,15 @@ public partial class MainViewModel : ObservableObject, IDisposable
             // document, so the provider's copy and the cache stay marker-free.
             doc = InstrumentalGap.Fill(doc);
 
-            // Word-follow needs per-word spans. Documents that already carry real
-            // word timings (A2 enhanced LRC, providers with word data) are used as
-            // is; line-only synced documents get an even split bounded by the next
-            // line. Unsynced documents stay line-only.
-            if (doc.Synced && !doc.HasWordTimings)
+            // Word-follow needs per-word spans. A document-wide HasWordTimings
+            // test would be wrong here: the marker Fill just inserted carries its
+            // own glyph words, so it would report true and leave every sung line
+            // word-less. Synthesize is per-line instead: lines that already carry
+            // real timings (A2 enhanced LRC, providers with word data) are left
+            // as they are, markers are skipped, and line-only lines get an even
+            // split bounded by the next line, which is the marker where there is
+            // one. Unsynced documents stay line-only.
+            if (doc.Synced)
                 WordTimeline.Synthesize(doc, LoadedTrack?.Duration);
 
             // Operator edits last, on a copy: line times, offsets and sections stay

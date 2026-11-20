@@ -316,7 +316,10 @@ public class LyricsService
                 return (fittingCached, null);
         }
 
-        // 3. Legacy cache entry (key without a source id) written by older builds.
+        // 3. Source-less cache entry: this build still writes one alongside the
+        //    per-source key, so a document stays reachable when its provider id
+        //    changes. Entries written by builds before the key version bump are
+        //    not addressable at all (see CacheKeyVersion).
         var legacy = ReadCache(track, sourceId: null);
         if (legacy != null && !ShouldBypassCache(legacy) && Accept(legacy, "legacy cache") is { } fittingLegacy)
             return (fittingLegacy, null);
@@ -331,8 +334,8 @@ public class LyricsService
             if (Accept(doc, "live") is not { } fitting) continue;
 
             WriteCache(track, fitting);
-            // Keep the pre-source-id key populated so an older build (or a
-            // downgrade) still finds this document.
+            // Keep the source-less key populated as well: it is the fallback when
+            // the provider id is unknown or empty on a later read.
             WriteCache(track, fitting, legacyKey: true);
             return (fitting, null);
         }
@@ -456,16 +459,35 @@ public class LyricsService
     }
 
     /// <summary>
-    /// Cache file for a track, optionally scoped to one provider. With
-    /// <paramref name="sourceId"/> null the historical key is produced verbatim,
-    /// which is what keeps pre-upgrade cache files readable.
+    /// Version segment of the cache key. Bump it whenever the document contract
+    /// changes in a way that makes entries written by an older build wrong: the
+    /// old files stay on disk, they simply stop being addressable.
+    /// <para>
+    /// v2: providers stopped tiling word spans at fetch time, so every entry
+    /// written before this segment could hold words stretched to the next lyric
+    /// line instead of to the instrumental marker.
+    /// </para>
+    /// </summary>
+    private const string CacheKeyVersion = "v2";
+
+    /// <summary>
+    /// Text that is hashed into a cache file name. Internal so tests seed the
+    /// same entry the service reads instead of reproducing the format.
+    /// </summary>
+    internal static string CacheKey(string? artist, string? title, TimeSpan duration, string? sourceId)
+    {
+        var key = $"{CacheKeyVersion}|{artist}|{title}|{(int)duration.TotalSeconds}".ToLowerInvariant();
+        if (!string.IsNullOrWhiteSpace(sourceId))
+            key += "|" + sourceId.Trim().ToLowerInvariant();
+        return key;
+    }
+
+    /// <summary>
+    /// Cache file for a track, optionally scoped to one provider.
     /// </summary>
     private string CachePath(TrackEntry track, string? sourceId)
     {
-        var key = $"{track.Artist}|{track.Title}|{(int)track.Duration.TotalSeconds}".ToLowerInvariant();
-        if (!string.IsNullOrWhiteSpace(sourceId))
-            key += "|" + sourceId.Trim().ToLowerInvariant();
-
+        var key = CacheKey(track.Artist, track.Title, track.Duration, sourceId);
         var hash = Convert.ToHexString(MD5.HashData(Encoding.UTF8.GetBytes(key)));
         return Path.Combine(_cacheDir, hash + ".json");
     }

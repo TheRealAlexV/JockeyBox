@@ -129,7 +129,8 @@ public class BetterLyricsProvider : ILyricsProvider
                 return null;
             }
 
-            if (!doc.HasWordTimings) WordTimeline.Synthesize(doc, track.Duration);
+            // No tiling here: word spans are built at load time, after the
+            // instrumental marker exists (MainViewModel's lyrics pass).
             return doc;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)

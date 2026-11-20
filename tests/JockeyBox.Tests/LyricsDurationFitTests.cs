@@ -111,15 +111,13 @@ public class LyricsDurationFitTests : IDisposable
     }
 
     /// <summary>
-    /// Write a cache file exactly where the service reads it, reproducing the
-    /// on-disk key (artist|title|seconds[|sourceId], MD5-named) so a test can seed
-    /// a pre-upgrade source-less entry and a per-source one side by side.
+    /// Write a cache file exactly where the service reads it, using the service's
+    /// own key builder, so a test can seed a source-less entry and a per-source
+    /// one side by side.
     /// </summary>
     private void Seed(TrackEntry track, LyricsDocument doc, string? sourceId)
     {
-        var key = $"{track.Artist}|{track.Title}|{(int)track.Duration.TotalSeconds}".ToLowerInvariant();
-        if (!string.IsNullOrWhiteSpace(sourceId))
-            key += "|" + sourceId.Trim().ToLowerInvariant();
+        var key = LyricsService.CacheKey(track.Artist, track.Title, track.Duration, sourceId);
         var hash = Convert.ToHexString(MD5.HashData(Encoding.UTF8.GetBytes(key)));
         File.WriteAllText(Path.Combine(_cacheDir, hash + ".json"), JsonSerializer.Serialize(doc));
     }
