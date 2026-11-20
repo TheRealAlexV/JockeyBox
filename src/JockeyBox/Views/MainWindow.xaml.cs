@@ -94,6 +94,9 @@ public partial class MainWindow : Window
         // take seconds, which used to block start-up long enough for the UI
         // watchdog to kill the process.
         Loaded += async (_, _) => await _vm.RefreshDevicesAsync();
+        // Listen for endpoints arriving/leaving from now on: registration is
+        // explicit so every start has a matching unregister in Dispose.
+        Loaded += (_, _) => _vm.StartDeviceWatch();
         // Start the watchdog clock only now that a frame has rendered: the
         // 8000 ms budget is for a wedged UI thread, not for start-up work.
         ContentRendered += (_, _) => UiWatchdog.Arm();
@@ -407,7 +410,8 @@ public partial class MainWindow : Window
     {
         // Library tools work on the rows the main window already scans; hand the
         // settings dialog a getter rather than a second scan.
-        var dialog = new SettingsWindow(_vm.SettingsRef, () => _vm.Tracks, _vm.PlaylistsRef) { Owner = this };
+        var dialog = new SettingsWindow(_vm.SettingsRef, () => _vm.Tracks, _vm.PlaylistsRef,
+                                        _vm.DeviceWatcher) { Owner = this };
         if (dialog.ShowDialog() == true)
         {
             _vm.OnSettingsSaved();

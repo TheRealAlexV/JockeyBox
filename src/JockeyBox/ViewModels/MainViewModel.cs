@@ -32,6 +32,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
 {
     private readonly AppSettings _settings;
     private readonly DeviceService _deviceService = new();
+    private readonly DeviceWatcher _deviceWatcher;
+    /// <summary>Render-endpoint enumeration; a test hands in a fixed list.</summary>
+    private readonly Func<IReadOnlyList<AudioDeviceInfo>> _outputDevices;
     private readonly DualDeckTransport _transport;
     private readonly DeckPreviewTransport _previewTransport;
     private readonly TagCache _tagCache = new();
@@ -139,9 +142,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
     /// <summary>Section the playhead was inside on the previous tick (change detection only).</summary>
     private int _playheadSectionIndex = -1;
 
-    public MainViewModel()
+    public MainViewModel(DeviceWatcher? deviceWatcher = null,
+                         Func<IReadOnlyList<AudioDeviceInfo>>? outputDevices = null)
     {
         _settings = AppSettings.Load();
+        _outputDevices = outputDevices ?? (() => _deviceService.GetOutputDevices());
         // The browser layout comes from settings; assign the generated backing
         // field so the change hook does not save settings during start-up.
         _layout = _settings.LibraryLayout;
@@ -178,6 +183,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
             _settings.DeckAOutputDelayMs);
         DeckB.RestoreSettings(_settings.KaraokeAidOutputDeviceId, _settings.DeckBDelayMs, _settings.DeckBVolume,
             _settings.DeckBOutputDelayMs);
+        // One watcher for the whole process: Windows holds a reference to the
+        // registered callback, so it is created here on the UI thread (that is
+        // the context its rebuilds marshal to) and unregistered in Dispose.
+        _deviceWatcher = deviceWatcher ?? DeviceWatcher.CreateWasapi();
+        _deviceWatcher.DevicesChanged += OnDevicesChanged;
         SyncDeckActivation();
         // Endpoint enumeration deliberately does not happen here: it blocks on
         // MMDevAPI for seconds and would run on the UI thread during start-up.
@@ -4681,9 +4691,34 @@ public partial class MainViewModel : ObservableObject, IDisposable
     /// </summary>
     public async Task RefreshDevicesAsync()
     {
-        var devices = await Task.Run(_deviceService.GetOutputDevices);
+        var devices = await Task.Run(_outputDevices);
         DeckA.RefreshDevices(devices);
         DeckB.RefreshDevices(devices);
+    }
+
+    /// <summary>The watcher, so a dialog can share it instead of registering its own.</summary>
+    public DeviceWatcher DeviceWatcher => _deviceWatcher;
+
+    /// <summary>Start listening for endpoint changes. Called from the window's Loaded.</summary>
+    public void StartDeviceWatch() => _deviceWatcher.Start();
+
+    /// <summary>
+    /// A device appeared, left or became default: repopulate the lists that name
+    /// devices. Nothing here touches the engine, so the route and playback are
+    /// untouched until the operator picks a row.
+    /// </summary>
+    private void OnDevicesChanged(DeviceChange change) => _ = RefreshDeviceListsAsync(change);
+
+    private async Task RefreshDeviceListsAsync(DeviceChange change)
+    {
+        var devices = await Task.Run(_outputDevices);
+        // Only the observable lists change; the builder keeps a routed-but-gone
+        // device in the list as its "not connected" row, so it stays selected.
+        DeckA.RefreshDevices(devices);
+        DeckB.RefreshDevices(devices);
+        RebuildMicDeviceChoices();
+        Log.Info($"Device change {change.Kind} (flow {change.Flow}) rebuilt pickers: " +
+                 $"{devices.Count} output, {MicDeviceChoices.Count} mic row(s).");
     }
 
     [RelayCommand]
@@ -4767,6 +4802,9 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _trackMeta.Dispose();
         TeardownStep("audio, hotkeys and the local api");
         ShutdownAudio2();
+        // Unregister before the transport/decks go: the callback must not be
+        // pointed at a half-disposed view model.
+        _deviceWatcher.Dispose();
         TeardownStep("soundboard");
         Soundboard?.Save();
 

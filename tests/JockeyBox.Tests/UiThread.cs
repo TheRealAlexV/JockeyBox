@@ -28,7 +28,16 @@ internal static class UiThread
 
         var thread = new Thread(() =>
         {
-            if (System.Windows.Application.Current == null) _ = new System.Windows.Application();
+            if (System.Windows.Application.Current == null)
+            {
+                var app = new System.Windows.Application
+                {
+                    // A test that opens and closes a dialog must not shut the
+                    // shared Application down for every test that follows.
+                    ShutdownMode = System.Windows.ShutdownMode.OnExplicitShutdown,
+                };
+                _ = app;
+            }
             dispatcher = Dispatcher.CurrentDispatcher;
             ready.Set();
             Dispatcher.Run();

@@ -35,16 +35,29 @@ public partial class SettingsWindow : Window
     /// </summary>
     private readonly Func<IReadOnlyList<TrackEntry>>? _tracks;
     private readonly PlaylistStore? _playlists;
+    private readonly DeviceWatcher? _deviceWatcher;
+    /// <summary>Render endpoints for the routing boxes; a test hands in a fixed list.</summary>
+    private readonly Func<IReadOnlyList<AudioDeviceInfo>> _listOutputs;
     private bool _libraryToolsBusy;
 
     public SettingsWindow(AppSettings settings, Func<IReadOnlyList<TrackEntry>>? tracks = null,
-                          PlaylistStore? playlists = null)
+                          PlaylistStore? playlists = null, DeviceWatcher? deviceWatcher = null,
+                          Func<IReadOnlyList<AudioDeviceInfo>>? outputDevices = null)
     {
         InitializeComponent();
         _settings = settings;
         _tracks = tracks;
         _playlists = playlists;
+        _listOutputs = outputDevices ?? ListOutputDevices;
         _oauth = new SpotifyOAuthService(settings);
+        // The main window owns the process's one watcher; a dialog that
+        // registered its own would be a second COM callback nobody unregisters.
+        if (deviceWatcher != null)
+        {
+            _deviceWatcher = deviceWatcher;
+            _deviceWatcher.DevicesChanged += OnDeviceChange;
+            Closed += (_, _) => _deviceWatcher.DevicesChanged -= OnDeviceChange;
+        }
 
         MusicDirBox.Text = settings.MusicDirectory;
 
@@ -76,7 +89,7 @@ public partial class SettingsWindow : Window
     /// </summary>
     private void LoadAudioSettings(AppSettings settings)
     {
-        var devices = ListOutputDevices();
+        var devices = _listOutputs();
 
         FillDeviceBox(MainOutputBox, devices, settings.MainOutputDeviceId);
         FillDeviceBox(KaraokeAidOutputBox, devices, settings.KaraokeAidOutputDeviceId);
@@ -236,6 +249,58 @@ public partial class SettingsWindow : Window
         }
 
         RenderMicRows();
+    }
+
+    /// <summary>
+    /// Repopulate the routing boxes and the mic rows after a device change.
+    /// The operator's unticked rows and sliders are carried over by id; a route
+    /// that is no longer connected keeps its "not connected" row, so an open
+    /// dialog never quietly moves a route.
+    /// </summary>
+    private void OnDeviceChange(DeviceChange change)
+    {
+        var devices = _listOutputs();
+        foreach (var box in new[]
+                 {
+                     MainOutputBox, KaraokeAidOutputBox, RecordingOutputBox,
+                     SoundboardOutputBox, MonitorOutputBox,
+                 })
+            FillDeviceBox(box, devices, SelectedDeviceId(box));
+
+        var liveMics = ListInputDevices();
+        var previous = _micRows.ToDictionary(r => r.DeviceId, r => r, StringComparer.OrdinalIgnoreCase);
+        _micRows.Clear();
+        foreach (var device in liveMics)
+        {
+            var was = previous.GetValueOrDefault(device.Id);
+            _micRows.Add(new MicRow
+            {
+                DeviceId = device.Id,
+                DeviceName = device.FriendlyName,
+                Enabled = was?.Enabled ?? false,
+                Volume = was?.Volume ?? 1f,
+                Muted = was?.Muted ?? false,
+                Monitor = was?.Monitor ?? false,
+            });
+        }
+        foreach (var was in previous.Values)
+        {
+            if (liveMics.Any(d => string.Equals(d.Id, was.DeviceId, StringComparison.OrdinalIgnoreCase)))
+                continue;
+            _micRows.Add(new MicRow
+            {
+                DeviceId = was.DeviceId,
+                DeviceName = "Saved device (not connected)",
+                Enabled = was.Enabled,
+                Volume = was.Volume,
+                Muted = was.Muted,
+                Monitor = was.Monitor,
+            });
+        }
+        RenderMicRows();
+
+        Log.Info($"Device change {change.Kind}: settings pickers rebuilt, " +
+                 $"{devices.Count} output, {liveMics.Count} mic device(s).");
     }
 
     /// <summary>The list as it will be saved: one record per enabled row.</summary>
