@@ -1,5 +1,9 @@
 using System;
+using System.Collections.ObjectModel;
+using System.Linq;
 using CommunityToolkit.Mvvm.ComponentModel;
+using JockeyBox.Audio;
+using JockeyBox.Playback;
 
 namespace JockeyBox.ViewModels;
 
@@ -37,6 +41,28 @@ public partial class MainViewModel
     [ObservableProperty] private bool _monitorSyncEnabled;
 
     /// <summary>
+    /// CUE A: deck A's send to its own endpoint. On by default; the button
+    /// switches this deck's cue <i>off</i>.
+    /// </summary>
+    [ObservableProperty] private bool _deckACueEnabled = true;
+
+    /// <summary>CUE B: deck B's send to its own endpoint. On by default.</summary>
+    [ObservableProperty] private bool _deckBCueEnabled = true;
+
+    /// <summary>Monitor endpoints (None, the live ones, and the saved-but-unconnected one).</summary>
+    public ObservableCollection<AudioDeviceInfo> MonitorDeviceChoices { get; } = new();
+
+    /// <summary>
+    /// The endpoint MON sends to; null = None. Writes
+    /// <see cref="Settings.AppSettings.MonitorOutputDeviceId"/>, the same route
+    /// field the Settings dialog edits, so the two cannot disagree.
+    /// </summary>
+    [ObservableProperty] private string? _selectedMonitorDeviceId;
+
+    /// <summary>Set while the dropdown is being rebuilt, so adopting a row does not re-save.</summary>
+    private bool _adoptingMonitorChoice;
+
+    /// <summary>
     /// Adopt the saved monitor switch and gains. Called from the window next to
     /// <see cref="InitializeMic"/>; the transport owns an engine from construction,
     /// so unlike the mic there is no "not yet" case, but the guard stays for the
@@ -47,13 +73,72 @@ public partial class MainViewModel
         MonitorEnabled = _settings.MonitorEnabled;
         MonitorAGain = _settings.MonitorAGain;
         MonitorBGain = _settings.MonitorBGain;
+        DeckACueEnabled = _settings.DeckACueEnabled;
+        DeckBCueEnabled = _settings.DeckBCueEnabled;
         ApplyMonitor();
+
+        // The deck combos already enumerate the endpoints; the monitor dropdown
+        // follows that same refresh instead of opening MMDevAPI a second time.
+        DeckA.Devices.CollectionChanged += (_, _) => RebuildMonitorDeviceChoices();
+        RebuildMonitorDeviceChoices();
     }
 
     partial void OnMonitorEnabledChanged(bool value)
     {
         _settings.MonitorEnabled = value;
         ApplyMonitor();
+    }
+
+    partial void OnDeckACueEnabledChanged(bool value)
+    {
+        _settings.DeckACueEnabled = value;
+        _settings.Save();
+        if (_transport?.Engine is { } engine) engine.DeckACueEnabled = value;
+    }
+
+    partial void OnDeckBCueEnabledChanged(bool value)
+    {
+        _settings.DeckBCueEnabled = value;
+        _settings.Save();
+        if (_transport?.Engine is { } engine) engine.DeckBCueEnabled = value;
+    }
+
+    partial void OnSelectedMonitorDeviceIdChanged(string? value)
+    {
+        if (_adoptingMonitorChoice) return;
+
+        // None is null, never "" - the engine and BuildRoute read null as None.
+        string? id = string.IsNullOrWhiteSpace(value) ? null : value;
+        if (string.Equals(_settings.MonitorOutputDeviceId, id, StringComparison.Ordinal)) return;
+
+        _settings.MonitorOutputDeviceId = id;
+        _settings.Save();
+
+        // Same single path as the deck combos: the route field is on disk before
+        // the transport re-reads it, and only a changed route is reopened.
+        _transport.ApplyDeckSettingsChange(PlaybackDeck.A);
+    }
+
+    private void RebuildMonitorDeviceChoices()
+    {
+        // Deck A's list is None + live endpoints + its own saved row; the live
+        // endpoints are what the monitor list needs.
+        var live = DeckA.Devices
+            .Where(d => !string.IsNullOrWhiteSpace(d.Id))
+            .Where(d => !string.Equals(d.FriendlyName, OutputDeviceChoices.NotConnectedName,
+                StringComparison.Ordinal));
+
+        var saved = _settings.MonitorOutputDeviceId;
+        var rows = OutputDeviceChoices.Build(live, saved);
+
+        _adoptingMonitorChoice = true;
+        try
+        {
+            MonitorDeviceChoices.Clear();
+            foreach (var row in rows) MonitorDeviceChoices.Add(row);
+            SelectedMonitorDeviceId = OutputDeviceChoices.Select(MonitorDeviceChoices, saved).Id;
+        }
+        finally { _adoptingMonitorChoice = false; }
     }
 
     partial void OnMonitorAGainChanged(double value)

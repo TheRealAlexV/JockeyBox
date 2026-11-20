@@ -152,8 +152,6 @@ public sealed class AudioEngine : IDisposable
 
     private volatile bool _soundboardFollowsMain = true;
 
-    private float _legacyMicVolume = 1f;
-
     // Monitor (operator cue) deck sends. Both decks default to -3 dB, i.e. audible
     // but not the same level as what the audience hears; MON is off by default so
     // an install with no headphones does not send deck audio to the cue device.
@@ -404,46 +402,41 @@ public sealed class AudioEngine : IDisposable
         }
     }
 
-    /// <summary>
-    /// Legacy single-strip gain: applies to every device. The 2.1 UI sets
-    /// <see cref="MicStrip.Volume"/> per device instead.
-    /// </summary>
-    public float MicVolume
+    /// <summary>The strip for <paramref name="deviceId"/>, or null when it is not open.</summary>
+    private MicStrip? MicStripFor(string? deviceId) =>
+        string.IsNullOrWhiteSpace(deviceId)
+            ? null
+            : Mics.Strips.FirstOrDefault(s =>
+                string.Equals(s.DeviceId, deviceId, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>App gain of one device (1.0 when it is not open).</summary>
+    public float MicVolumeFor(string? deviceId) => MicStripFor(deviceId)?.Volume ?? 1f;
+
+    /// <summary>Mute of one device (false when it is not open).</summary>
+    public bool MicMutedFor(string? deviceId) => MicStripFor(deviceId)?.Muted ?? false;
+
+    /// <summary>Monitor send of one device (false when it is not open).</summary>
+    public bool MicMonitorFor(string? deviceId) => MicStripFor(deviceId)?.Monitor ?? false;
+
+    /// <summary>Meter of one device, by its stored index (0 when out of range).</summary>
+    public float MicPeakAtDevice(string? deviceId) => MicStripFor(deviceId)?.Peak ?? 0f;
+
+    /// <summary>App gain of one device only; the Windows recording level is never touched.</summary>
+    public void SetMicVolume(string? deviceId, float volume)
     {
-        get => _legacyMicVolume;
-        set
-        {
-            _legacyMicVolume = Math.Clamp(value, 0f, 2f);
-            foreach (var strip in Mics.Strips) strip.Volume = _legacyMicVolume;
-        }
+        if (MicStripFor(deviceId) is { } strip) strip.Volume = Math.Clamp(volume, 0f, 2f);
     }
 
-    /// <summary>Legacy single-strip mute: applies to every device.</summary>
-    public bool MicMuted
+    /// <summary>Mute one device only.</summary>
+    public void SetMicMuted(string? deviceId, bool muted)
     {
-        get
-        {
-            foreach (var strip in Mics.Strips) if (!strip.Muted) return false;
-            return Mics.Strips.Count > 0;
-        }
-        set
-        {
-            foreach (var strip in Mics.Strips) strip.Muted = value;
-        }
+        if (MicStripFor(deviceId) is { } strip) strip.Muted = muted;
     }
 
-    /// <summary>Legacy single-strip monitor send: applies to every device.</summary>
-    public bool MicMonitor
+    /// <summary>Monitor send for one device only.</summary>
+    public void SetMicMonitor(string? deviceId, bool monitor)
     {
-        get
-        {
-            foreach (var strip in Mics.Strips) if (!strip.Monitor) return false;
-            return Mics.Strips.Count > 0;
-        }
-        set
-        {
-            foreach (var strip in Mics.Strips) strip.Monitor = value;
-        }
+        if (MicStripFor(deviceId) is { } strip) strip.Monitor = monitor;
     }
 
     /// <summary>Run <paramref name="action"/> on the render thread at exactly <paramref name="frame"/>.</summary>

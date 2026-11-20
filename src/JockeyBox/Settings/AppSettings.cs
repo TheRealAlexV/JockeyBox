@@ -164,13 +164,24 @@ public class AppSettings
     /// app-domain volume, mute and monitor. Replaces the single <see cref="MicDeviceId"/>.
     /// </summary>
     public List<MicDeviceSettings> MicDevices { get; set; } = new();
+
+    /// <summary>
+    /// Which of <see cref="MicDevices"/> the main-window mic strip edits. Null =
+    /// the first enabled device. A saved id that is no longer present is kept:
+    /// the strip stays bound to it and reports the device as unavailable.
+    /// </summary>
+    public string? SelectedMicDeviceId { get; set; }
     /// <summary>Optional monitor copy, taken before the global delay; null = None.</summary>
     public string? MonitorOutputDeviceId { get; set; }
 
-    /// <summary>Per-deck send to its own endpoint (deck A). Off by default in 2.0.</summary>
-    public bool DeckACueEnabled { get; set; }
-    /// <summary>Per-deck send to its own endpoint (deck B). Off by default in 2.0.</summary>
-    public bool DeckBCueEnabled { get; set; }
+    /// <summary>
+    /// Per-deck send to its own endpoint (deck A). On by default: the button
+    /// switches a deck's cue <i>off</i>, and an install that has never written
+    /// the flag keeps cueing both decks.
+    /// </summary>
+    public bool DeckACueEnabled { get; set; } = true;
+    /// <summary>Per-deck send to its own endpoint (deck B). See <see cref="DeckACueEnabled"/>.</summary>
+    public bool DeckBCueEnabled { get; set; } = true;
 
     /// <summary>Master fader for every output; 0..1.2.</summary>
     public float MasterVolume { get; set; } = 1.0f;
@@ -635,9 +646,6 @@ public class AppSettings
         if (string.IsNullOrEmpty(ApiToken)) ApiToken = NewApiToken();
 
         if (SettingsSchemaVersion >= 5) return;
-
-        DeckACueEnabled = false;
-        DeckBCueEnabled = false;
 
         if (SettingsSchemaVersion < 4)
         {

@@ -11,13 +11,15 @@ public class SmokeTests
     }
 
     [Fact]
-    public void NewAudioDefaults_AreOffOrNeutral()
+    public void NewAudioDefaults_CueOnAndEverythingElseNeutral()
     {
         var s = new JockeyBox.Settings.AppSettings();
         Assert.Null(s.ProgramOutputDeviceId);
         Assert.Null(s.MonitorOutputDeviceId);
-        Assert.False(s.DeckACueEnabled);
-        Assert.False(s.DeckBCueEnabled);
+        // Cue gates default ON: the button switches a deck's cue off, and a
+        // profile that never wrote the flag must keep cueing.
+        Assert.True(s.DeckACueEnabled);
+        Assert.True(s.DeckBCueEnabled);
         Assert.Equal(1.0f, s.MasterVolume);
         Assert.Equal(0, s.OutputDelayMs);
     }

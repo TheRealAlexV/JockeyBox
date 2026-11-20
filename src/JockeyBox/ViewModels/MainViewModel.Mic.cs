@@ -7,30 +7,32 @@ using JockeyBox.Audio;
 namespace JockeyBox.ViewModels;
 
 /// <summary>
-/// The talk-over microphone strip on the main window: an app-domain level, a
-/// voice-only monitor send and a mute.
+/// The talk-over microphone strip on the main window. It edits <b>one</b> of the
+/// enabled recording devices - the one <see cref="SelectedMicDeviceId"/> names -
+/// so with two microphones a level change moves only that strip.
 ///
-/// <para>Kept additive and in its own file like the 2.0 audio additions: the mic
-/// is a third input to the same graph, not a second player, so the only state it
-/// owns is a gain, a switch and a peak meter.</para>
+/// <para>Per device the strip owns an app-domain level, a mute, a voice-only
+/// monitor send and a peak meter. The engine side is keyed by device id
+/// (<see cref="AudioEngine.SetMicVolume"/> and friends); there is no scalar that
+/// fans out to every strip any more.</para>
 /// </summary>
 public partial class MainViewModel
 {
     // ---------------------------------------------------------------- state
 
-    /// <summary>Mic gain, 0..2 (0..200%). Applied inside our mix; the Windows recording level is untouched.</summary>
+    /// <summary>Mic gain, 0..2 (0..200%) for the selected device. The Windows recording level is untouched.</summary>
     [ObservableProperty] private double _micLevel = 1.0;
 
-    /// <summary>Send the voice to the monitor output too. Off by default (feedback).</summary>
+    /// <summary>Send the selected device to the monitor output too. Off by default (feedback).</summary>
     [ObservableProperty] private bool _micMonitorEnabled;
 
-    /// <summary>Voice mute. The capture device stays open, so unmuting is instant.</summary>
+    /// <summary>Mute the selected device. The capture stays open, so unmuting is instant.</summary>
     [ObservableProperty] private bool _micMuted;
 
-    /// <summary>Meter fill, 0..1, decayed on the UI timer.</summary>
+    /// <summary>Meter fill, 0..1, of the selected device, decayed on the UI timer.</summary>
     [ObservableProperty] private double _micPeak;
 
-    /// <summary>One-line mic state for the strip's tooltip: "off", "muted", "lost: ..." or the device name.</summary>
+    /// <summary>One-line mic state for the strip's tooltip: "off", "muted", "missing: ..." or the device name.</summary>
     [ObservableProperty] private string _micStatusText = "off";
 
     private DispatcherTimer? _micMeter;
@@ -58,11 +60,10 @@ public partial class MainViewModel
             }
         }
 
-        // Assign through the properties so the generated change handlers run.
-        MicLevel = _settings.MicLevel;
-        MicMonitorEnabled = _settings.MicMonitorEnabled;
-
+        // Open the saved device set first, then bind the strip to the selection:
+        // the strip's scalars are read from the selected strip.
         ApplyMicRoute();
+        AdoptMicSelection();
 
         if (_micMeter == null)
         {
@@ -78,9 +79,8 @@ public partial class MainViewModel
     /// <summary>Adopt a mic choice made in the settings dialog (the device may have changed).</summary>
     public void OnSettingsSavedMic()
     {
-        MicLevel = _settings.MicLevel;
-        MicMonitorEnabled = _settings.MicMonitorEnabled;
         ApplyMicRoute();
+        AdoptMicSelection();
         PollMic();
     }
 
@@ -101,23 +101,41 @@ public partial class MainViewModel
             return;
         }
 
-        // App gain only: no IAudioEndpointVolume, no device property writes.
-        _transport.Engine.MicVolume = (float)clamped;
-        _settings.MicLevel = (float)clamped;
+        if (_adoptingMicSelection) return;
+
+        // App gain only, and only for the selected device: no IAudioEndpointVolume,
+        // no device property writes, no fan-out to the other microphones.
+        var id = SelectedMicDeviceId;
+        if (string.IsNullOrEmpty(id)) return;
+
+        _transport?.Engine?.SetMicVolume(id, (float)clamped);
+        if (MicSettingsFor(id) is { } entry) entry.Volume = (float)clamped;
     }
 
     partial void OnMicMonitorEnabledChanged(bool value)
     {
-        if (_transport?.Engine != null) _transport.Engine.MicMonitor = value;
-        _settings.MicMonitorEnabled = value;
+        if (_adoptingMicSelection) return;
+
+        var id = SelectedMicDeviceId;
+        if (string.IsNullOrEmpty(id)) return;
+
+        _transport?.Engine?.SetMicMonitor(id, value);
+        if (MicSettingsFor(id) is { } entry) entry.Monitor = value;
     }
 
     partial void OnMicMutedChanged(bool value)
     {
-        if (_transport?.Engine != null) _transport.Engine.MicMuted = value;
+        if (_adoptingMicSelection) return;
+
+        var id = SelectedMicDeviceId;
+        if (string.IsNullOrEmpty(id)) return;
+
+        _transport?.Engine?.SetMicMuted(id, value);
+        if (MicSettingsFor(id) is { } entry) entry.Muted = value;
+        UpdateMicStatus();
     }
 
-    /// <summary>Open (or close) the capture endpoint for the saved device id.</summary>
+    /// <summary>Open (or close) the capture endpoints for the saved device list.</summary>
     private void ApplyMicRoute()
     {
         if (_transport?.Engine == null) return;
@@ -125,15 +143,18 @@ public partial class MainViewModel
         UpdateMicStatus();
     }
 
-    private void PollMic()
+    /// <summary>Poll one meter: the selected strip's peak, never the loudest device's.</summary>
+    internal void PollMic()
     {
         if (_transport?.Engine == null) return;
 
         // Fast attack, ~250 ms release: a talking head reads as a moving bar
         // instead of a jittering one.
-        double peak = Math.Clamp(_transport.Engine.MicPeak, 0, 1);
+        int index = SelectedMicIndex();
+        double peak = index < 0 ? 0 : Math.Clamp(_transport.Engine.MicPeakAt(index), 0, 1);
         MicPeak = Math.Max(peak, MicPeak * 0.80);
         UpdateMicStatus();
+        RefreshMicDeviceCount();
     }
 
     private void UpdateMicStatus()
@@ -144,25 +165,30 @@ public partial class MainViewModel
             return;
         }
 
+        var id = SelectedMicDeviceId;
+        if (string.IsNullOrEmpty(id))
+        {
+            MicStatusText = "off";
+            return;
+        }
+
+        int index = SelectedMicIndex();
+        if (index < 0)
+        {
+            // "Not enabled" and "unplugged" both land here on purpose: the
+            // selection is kept, the controls stay bound, and the strip says why
+            // the meter reads nothing instead of silently moving to another device.
+            MicStatusText = "missing: " + id;
+            return;
+        }
+
         if (MicMuted)
         {
             MicStatusText = "muted";
             return;
         }
 
-        var capture = _transport.Mic;
-        if (capture == null)
-        {
-            // "None" and "saved-but-unplugged" both land here on purpose: the
-            // engine stays silent for the voice and never re-routes itself.
-            MicStatusText = string.IsNullOrEmpty(_settings.MicDeviceId)
-                ? "off"
-                : "missing: " + _settings.MicDeviceId;
-            return;
-        }
-
-        MicStatusText = capture.IsCapturing
-            ? capture.DeviceName
-            : "lost: " + capture.DeviceName;
+        var strip = _transport.Engine.Mics.Strips[index];
+        MicStatusText = strip.IsOpen ? strip.DeviceName : "lost: " + strip.DeviceName;
     }
 }
