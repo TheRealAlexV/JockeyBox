@@ -62,4 +62,45 @@ public class TenBandEqTests
         eq.SetGainDb(0, -40);
         Assert.Equal(-15, eq.GainDb(0));
     }
+
+    [Fact]
+    public void BandQ_confines_a_boost_to_about_one_octave()
+    {
+        // BandQ is the one-octave Q; a wider band would carry the boost much further out.
+        Assert.Equal(1.41, TenBandEq.BandQ);
+
+        var centre = new TenBandEq(SampleRate);
+        centre.SetGainDb(5, 12); // 1 kHz band, +12 dB
+        double atCentre = TestSignals.SteadyStateGainDb(centre, 1000, SampleRate, SampleRate);
+        Assert.True(Math.Abs(atCentre - 12) <= 0.5,
+            $"a +12 dB band should measure +12 dB at its centre, measured {atCentre:F3} dB");
+
+        var oneOctaveUp = new TenBandEq(SampleRate);
+        oneOctaveUp.SetGainDb(5, 12);
+        double atTwoK = TestSignals.SteadyStateGainDb(oneOctaveUp, 2000, SampleRate, SampleRate);
+        Assert.True(atTwoK > 0.5 && atTwoK < 12.0,
+            $"one octave up the boost must be well below the centre, measured {atTwoK:F3} dB");
+
+        var twoOctavesUp = new TenBandEq(SampleRate);
+        twoOctavesUp.SetGainDb(5, 12);
+        double atFourK = TestSignals.SteadyStateGainDb(twoOctavesUp, 4000, SampleRate, SampleRate);
+        Assert.True(Math.Abs(atFourK) <= 1.0,
+            $"two octaves up a Q 1.41 band must be flat within 1 dB, measured {atFourK:F3} dB");
+    }
+
+    [Fact]
+    public void Higher_Q_narrows_the_affected_band()
+    {
+        // Same +12 dB boost and same off-centre probe: a higher Q must reach less far out.
+        var wide = new PeakingEq(SampleRate, frequencyHz: 1000, q: 0.7, gainDb: 12);
+        var narrow = new PeakingEq(SampleRate, frequencyHz: 1000, q: 2.8, gainDb: 12);
+
+        double wideDb = TestSignals.SteadyStateGainDb(wide, 2000, SampleRate, SampleRate);
+        double narrowDb = TestSignals.SteadyStateGainDb(narrow, 2000, SampleRate, SampleRate);
+
+        Assert.True(narrowDb < wideDb,
+            $"Q 2.8 must boost 2 kHz less than Q 0.7 does, got {narrowDb:F3} dB vs {wideDb:F3} dB");
+        Assert.True(wideDb > 3.0 && narrowDb < 2.0,
+            $"Q 0.7 should still lift 2 kHz while Q 2.8 leaves it near flat, got {wideDb:F3} / {narrowDb:F3} dB");
+    }
 }

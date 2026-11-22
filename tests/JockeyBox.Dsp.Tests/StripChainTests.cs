@@ -48,4 +48,43 @@ public class StripChainTests
         limiter.Bypass = true;
         Assert.Equal(0, chain.TotalLatencyFrames);
     }
+
+    [Fact]
+    public void Processors_exposes_what_was_added_in_order()
+    {
+        var gain = new GainStage();
+        var eq = new TenBandEq(SampleRate);
+        var limiter = new Limiter(SampleRate);
+
+        var chain = new StripChain().Add(gain).Add(eq).Add(limiter);
+
+        Assert.Equal(3, chain.Processors.Count);
+        Assert.Same(gain, chain.Processors[0]);
+        Assert.Same(eq, chain.Processors[1]);
+        Assert.Same(limiter, chain.Processors[2]);
+    }
+
+    [Fact]
+    public void Reset_clears_processor_state_so_a_silent_block_is_exactly_silent()
+    {
+        var chain = new StripChain().Add(new HighPassFilter(SampleRate, frequencyHz: 500));
+
+        chain.Process(TestSignals.WhiteNoise(4096, seed: 41));
+
+        // Without a reset the filter's state keeps ringing into the next, silent block.
+        var tail = new float[64];
+        chain.Process(tail);
+        Assert.Contains(tail, sample => sample != 0f);
+
+        chain.Reset();
+
+        var silence = new float[4096];
+        chain.Process(silence);
+
+        for (int i = 0; i < silence.Length; i++)
+        {
+            Assert.True(silence[i] == 0.0f,
+                $"frame {i} is {silence[i]:R} after Reset; the chain must not carry a decaying tail");
+        }
+    }
 }

@@ -60,6 +60,19 @@ internal static class TestSignals
 
     public static double Db(double ratio) => 20 * Math.Log10(ratio);
 
+    /// <summary>
+    /// Gain in dB a processor applies to a steady sine, measured over the second half of the
+    /// buffer so the ramp and the filter transient are both settled.
+    /// </summary>
+    public static double SteadyStateGainDb(IAudioProcessor processor, double frequencyHz, double sampleRate, int length)
+    {
+        var input = Sine(length, frequencyHz, sampleRate, 0.25);
+        var output = (float[])input.Clone();
+        processor.Process(output);
+        int start = length / 2;
+        return RmsDb(output.AsSpan(start)) - RmsDb(input.AsSpan(start));
+    }
+
     /// <summary>Compares the raw bytes, so a bit-exact claim really is bit-exact.</summary>
     public static void AssertBitExact(ReadOnlySpan<float> expected, ReadOnlySpan<float> actual, string because)
     {

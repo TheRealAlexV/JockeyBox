@@ -52,4 +52,39 @@ public class LatencyLedgerTests
         var ledger = new LatencyLedger();
         Assert.Throws<KeyNotFoundException>(() => ledger.PaddingFor("nope"));
     }
+
+    [Fact]
+    public void Channel_latency_totals_chain_device_and_user_offset()
+    {
+        var ledger = new LatencyLedger();
+        ledger.Set("gtr", chainFrames: 240, deviceFrames: 64, userOffsetFrames: 12);
+
+        Assert.True(ledger.TryGet("gtr", out ChannelLatency? entry), "the registered channel must be found");
+        Assert.NotNull(entry);
+        Assert.Equal(316, entry!.TotalFrames);
+        Assert.Equal(240, entry.ChainFrames);
+        Assert.Equal(64, entry.DeviceFrames);
+        Assert.Equal(12, entry.UserOffsetFrames);
+        Assert.Equal(entry.TotalFrames, ledger.MaxLatencyFrames);
+    }
+
+    [Fact]
+    public void Entries_hold_exactly_what_was_registered_in_order()
+    {
+        var ledger = new LatencyLedger();
+        ledger.Set("drums", 10, 0, 0);
+        ledger.Set("bass", 20, 5, 0);
+        ledger.Set("vox", 0, 0, 7);
+
+        Assert.Equal(new[] { "drums", "bass", "vox" }, ledger.Entries.Select(entry => entry.ChannelId).ToArray());
+        Assert.Equal(3, ledger.Entries.Count);
+        Assert.Equal(10, ledger.Entries[0].TotalFrames);
+        Assert.Equal(25, ledger.Entries[1].TotalFrames);
+        Assert.Equal(7, ledger.Entries[2].TotalFrames);
+
+        // Re-registering a channel replaces its entry in place instead of appending a second one.
+        ledger.Set("drums", 11, 0, 0);
+        Assert.Equal(3, ledger.Entries.Count);
+        Assert.Equal(11, ledger.Entries[0].TotalFrames);
+    }
 }
