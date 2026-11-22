@@ -1124,6 +1124,106 @@
                   HorizontalScrollBarVisibility="Disabled">
     <Grid x:Name="ShellGrid"
           MinHeight="{Binding ViewportHeight, ElementName=ShellScroll}">
+        <Grid.Resources>
+            <!-- One strip button: a radio, because a rack with a hole in the selection
+                 would have nothing to edit. -->
+            <Style x:Key="MicStripChoice" TargetType="RadioButton">
+                <Setter Property="Cursor" Value="Hand"/>
+                <Setter Property="Margin" Value="0,0,6,0"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="RadioButton">
+                            <Border x:Name="bd" Background="{StaticResource PanelAltBrush}"
+                                    BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                                    CornerRadius="3" Padding="7,4">
+                                <ContentPresenter/>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource TextDimBrush}"/>
+                                </Trigger>
+                                <Trigger Property="IsChecked" Value="True">
+                                    <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource AccentABrush}"/>
+                                    <Setter TargetName="bd" Property="Background" Value="{StaticResource PanelBrush}"/>
+                                </Trigger>
+                                <!-- Keyboard focus is a ring, not a tint: 2 px and a lighter
+                                     brush, so it reads without colour. -->
+                                <Trigger Property="IsKeyboardFocused" Value="True">
+                                    <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource TextBrush}"/>
+                                    <Setter TargetName="bd" Property="BorderThickness" Value="2"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <!-- Master gate and the per-group switch: same pill as MON/MUTE, with the word
+                 changing rather than colour alone saying on or off. -->
+            <Style x:Key="RackGate" TargetType="ToggleButton" BasedOn="{StaticResource MicToggle}">
+                <Setter Property="Width" Value="40"/>
+                <Setter Property="Content" Value="OFF"/>
+                <Style.Triggers>
+                    <Trigger Property="IsChecked" Value="True">
+                        <Setter Property="Content" Value="ON"/>
+                    </Trigger>
+                </Style.Triggers>
+            </Style>
+
+            <Style x:Key="RackBandGate" TargetType="ToggleButton" BasedOn="{StaticResource MicToggle}">
+                <Setter Property="Width" Value="26"/>
+                <Setter Property="Content" Value="OFF"/>
+                <Style.Triggers>
+                    <Trigger Property="IsChecked" Value="True">
+                        <Setter Property="Content" Value="ON"/>
+                    </Trigger>
+                </Style.Triggers>
+            </Style>
+
+            <Style x:Key="RackBandToggle" TargetType="ToggleButton" BasedOn="{StaticResource MicToggle}">
+                <Setter Property="Width" Value="44"/>
+                <Setter Property="Content" Value="EDIT"/>
+                <Style.Triggers>
+                    <Trigger Property="IsChecked" Value="True">
+                        <Setter Property="Content" Value="HIDE"/>
+                    </Trigger>
+                </Style.Triggers>
+            </Style>
+
+            <Style x:Key="RackCaption" TargetType="TextBlock">
+                <Setter Property="FontSize" Value="8"/>
+                <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+                <Setter Property="VerticalAlignment" Value="Center"/>
+            </Style>
+
+            <Style x:Key="RackRow" TargetType="DockPanel">
+                <Setter Property="Margin" Value="0,3,0,0"/>
+            </Style>
+
+            <Style x:Key="RackRowLabel" TargetType="TextBlock" BasedOn="{StaticResource RackCaption}">
+                <Setter Property="Width" Value="30"/>
+            </Style>
+
+            <Style x:Key="RackValue" TargetType="TextBlock">
+                <Setter Property="Width" Value="34"/>
+                <Setter Property="TextAlignment" Value="Right"/>
+                <Setter Property="FontFamily" Value="Consolas"/>
+                <Setter Property="FontSize" Value="10"/>
+                <Setter Property="VerticalAlignment" Value="Center"/>
+            </Style>
+
+            <Style x:Key="RackUnit" TargetType="TextBlock" BasedOn="{StaticResource RackCaption}">
+                <Setter Property="Width" Value="14"/>
+                <Setter Property="Margin" Value="2,0,0,0"/>
+            </Style>
+
+            <Style x:Key="RackGroupTitle" TargetType="TextBlock">
+                <Setter Property="FontSize" Value="9"/>
+                <Setter Property="FontWeight" Value="Bold"/>
+                <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+            </Style>
+        </Grid.Resources>
+
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto"/>   <!-- header -->
             <RowDefinition Height="Auto"/>   <!-- deck block: cards, transport, crossfader (never clipped) -->
@@ -1571,105 +1671,6 @@
                  row. Double-click a value or its fader to return it to neutral. -->
             <Border Margin="0,7,0,0" Padding="0,7,0,0"
                     BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0">
-                <Border.Resources>
-                    <!-- One strip button: a radio, because a rack with a hole in the selection
-                         would have nothing to edit. -->
-                    <Style x:Key="MicStripChoice" TargetType="RadioButton">
-                        <Setter Property="Cursor" Value="Hand"/>
-                        <Setter Property="Margin" Value="0,0,6,0"/>
-                        <Setter Property="Template">
-                            <Setter.Value>
-                                <ControlTemplate TargetType="RadioButton">
-                                    <Border x:Name="bd" Background="{StaticResource PanelAltBrush}"
-                                            BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
-                                            CornerRadius="3" Padding="7,4">
-                                        <ContentPresenter/>
-                                    </Border>
-                                    <ControlTemplate.Triggers>
-                                        <Trigger Property="IsMouseOver" Value="True">
-                                            <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource TextDimBrush}"/>
-                                        </Trigger>
-                                        <Trigger Property="IsChecked" Value="True">
-                                            <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource AccentABrush}"/>
-                                            <Setter TargetName="bd" Property="Background" Value="{StaticResource PanelBrush}"/>
-                                        </Trigger>
-                                        <!-- Keyboard focus is a ring, not a tint: 2 px and a lighter
-                                             brush, so it reads without colour. -->
-                                        <Trigger Property="IsKeyboardFocused" Value="True">
-                                            <Setter TargetName="bd" Property="BorderBrush" Value="{StaticResource TextBrush}"/>
-                                            <Setter TargetName="bd" Property="BorderThickness" Value="2"/>
-                                        </Trigger>
-                                    </ControlTemplate.Triggers>
-                                </ControlTemplate>
-                            </Setter.Value>
-                        </Setter>
-                    </Style>
-
-                    <!-- Master gate and the per-group switch: same pill as MON/MUTE, with the word
-                         changing rather than colour alone saying on or off. -->
-                    <Style x:Key="RackGate" TargetType="ToggleButton" BasedOn="{StaticResource MicToggle}">
-                        <Setter Property="Width" Value="40"/>
-                        <Setter Property="Content" Value="OFF"/>
-                        <Style.Triggers>
-                            <Trigger Property="IsChecked" Value="True">
-                                <Setter Property="Content" Value="ON"/>
-                            </Trigger>
-                        </Style.Triggers>
-                    </Style>
-
-                    <Style x:Key="RackBandGate" TargetType="ToggleButton" BasedOn="{StaticResource MicToggle}">
-                        <Setter Property="Width" Value="26"/>
-                        <Setter Property="Content" Value="OFF"/>
-                        <Style.Triggers>
-                            <Trigger Property="IsChecked" Value="True">
-                                <Setter Property="Content" Value="ON"/>
-                            </Trigger>
-                        </Style.Triggers>
-                    </Style>
-
-                    <Style x:Key="RackBandToggle" TargetType="ToggleButton" BasedOn="{StaticResource MicToggle}">
-                        <Setter Property="Width" Value="44"/>
-                        <Setter Property="Content" Value="EDIT"/>
-                        <Style.Triggers>
-                            <Trigger Property="IsChecked" Value="True">
-                                <Setter Property="Content" Value="HIDE"/>
-                            </Trigger>
-                        </Style.Triggers>
-                    </Style>
-
-                    <Style x:Key="RackCaption" TargetType="TextBlock">
-                        <Setter Property="FontSize" Value="8"/>
-                        <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
-                        <Setter Property="VerticalAlignment" Value="Center"/>
-                    </Style>
-
-                    <Style x:Key="RackRow" TargetType="DockPanel">
-                        <Setter Property="Margin" Value="0,3,0,0"/>
-                    </Style>
-
-                    <Style x:Key="RackRowLabel" TargetType="TextBlock" BasedOn="{StaticResource RackCaption}">
-                        <Setter Property="Width" Value="30"/>
-                    </Style>
-
-                    <Style x:Key="RackValue" TargetType="TextBlock">
-                        <Setter Property="Width" Value="34"/>
-                        <Setter Property="TextAlignment" Value="Right"/>
-                        <Setter Property="FontFamily" Value="Consolas"/>
-                        <Setter Property="FontSize" Value="10"/>
-                        <Setter Property="VerticalAlignment" Value="Center"/>
-                    </Style>
-
-                    <Style x:Key="RackUnit" TargetType="TextBlock" BasedOn="{StaticResource RackCaption}">
-                        <Setter Property="Width" Value="14"/>
-                        <Setter Property="Margin" Value="2,0,0,0"/>
-                    </Style>
-
-                    <Style x:Key="RackGroupTitle" TargetType="TextBlock">
-                        <Setter Property="FontSize" Value="9"/>
-                        <Setter Property="FontWeight" Value="Bold"/>
-                        <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
-                    </Style>
-                </Border.Resources>
 
                 <StackPanel>
                     <!-- Header: what this is, whether it is on, what it costs, and the switch that
@@ -1695,6 +1696,7 @@
                             <TextBlock Text="CHAIN" Style="{StaticResource RackCaption}"/>
                             <TextBlock Text="{Binding MixerChainFrames}" FontFamily="Consolas" FontSize="10"
                                        Width="26" TextAlignment="Right" Margin="3,0,0,0"/>
+                            <TextBlock Text="f" Style="{StaticResource RackCaption}" Margin="2,0,0,0"/>
                             <TextBlock Text="PAD" Style="{StaticResource RackCaption}" Margin="10,0,0,0"/>
                             <TextBlock Text="{Binding MixerPadFrames}" FontFamily="Consolas" FontSize="10"
                                        Width="26" TextAlignment="Right" Margin="3,0,0,0"/>
@@ -1797,287 +1799,6 @@
                         </TextBlock.Style>
                     </TextBlock>
 
-                    <!-- Controls band: the selected strip's chain, left to right in signal order.
-                         Empty content renders nothing, so no strip means no band. -->
-                    <ContentControl Content="{Binding SelectedMicStrip}" Margin="0,7,0,0"
-                                    Visibility="{Binding AreStripControlsOpen, Converter={StaticResource BoolToVisibility}}">
-                        <ContentControl.ContentTemplate>
-                            <DataTemplate>
-                                <WrapPanel Orientation="Horizontal">
-
-                                    <!-- EQ: ten ISO octave bands, -15..+15 dB (the DSP's own limit,
-                                         not the -12 a casual read would assume). Two columns of
-                                         five keep the band short enough to sit under the row. -->
-                                    <StackPanel Width="244" Margin="0,0,10,0">
-                                        <TextBlock Text="EQ (dB)" Style="{StaticResource RackGroupTitle}"/>
-                                        <Grid Margin="0,3,0,0">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="Auto"/>
-                                                <ColumnDefinition Width="Auto"/>
-                                            </Grid.ColumnDefinitions>
-
-                                            <StackPanel Grid.Column="0" Margin="0,0,8,0">
-                                                <DockPanel Style="{StaticResource RackRow}" Tag="eq.0" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
-                                                    <TextBlock Text="31" Style="{StaticResource RackRowLabel}"/>
-                                                    <TextBlock Text="{Binding Eq31Db, StringFormat={}{0:+0.0;-0.0;0.0}}" Style="{StaticResource RackValue}"/>
-                                                    <Slider Width="50" Minimum="-15" Maximum="15" SmallChange="0.5" LargeChange="3"
-                                                            Value="{Binding Eq31Db, Mode=TwoWay}" AutomationProperties.Name="31 Hz"/>
-                                                </DockPanel>
-                                                <DockPanel Style="{StaticResource RackRow}" Tag="eq.1" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
-                                                    <TextBlock Text="63" Style="{StaticResource RackRowLabel}"/>
-                                                    <TextBlock Text="{Binding Eq63Db, StringFormat={}{0:+0.0;-0.0;0.0}}" Style="{StaticResource RackValue}"/>
-                                                    <Slider Width="50" Minimum="-15" Maximum="15" SmallChange="0.5" LargeChange="3"
-                                                            Value="{Binding Eq63Db, Mode=TwoWay}" AutomationProperties.Name="63 Hz"/>
-                                                </DockPanel>
-                                                <DockPanel Style="{StaticResource RackRow}" Tag="eq.2" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
-                                                    <TextBlock Text="125" Style="{StaticResource RackRowLabel}"/>
-                                                    <TextBlock Text="{Binding Eq125Db, StringFormat={}{0:+0.0;-0.0;0.0}}" Style="{StaticResource RackValue}"/>
-                                                    <Slider Width="50" Minimum="-15" Maximum="15" SmallChange="0.5" LargeChange="3"
-                                                            Value="{Binding Eq125Db, Mode=TwoWay}" AutomationProperties.Name="125 Hz"/>
-                                                </DockPanel>
-                                                <DockPanel Style="{StaticResource RackRow}" Tag="eq.3" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
-                                                    <TextBlock Text="250" Style="{StaticResource RackRowLabel}"/>
-                                                    <TextBlock Text="{Binding Eq250Db, StringFormat={}{0:+0.0;-0.0;0.0}}" Style="{StaticResource RackValue}"/>
-                                                    <Slider Width="50" Minimum="-15" Maximum="15" SmallChange="0.5" LargeChange="3"
-                                                            Value="{Binding Eq250Db, Mode=TwoWay}" AutomationProperties.Name="250 Hz"/>
-                                                </DockPanel>
-                                                <DockPanel Style="{StaticResource RackRow}" Tag="eq.4" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
-                                                    <TextBlock Text="500" Style="{StaticResource RackRowLabel}"/>
-                                                    <TextBlock Text="{Binding Eq500Db, StringFormat={}{0:+0.0;-0.0;0.0}}" Style="{StaticResource RackValue}"/>
-                                                    <Slider Width="50" Minimum="-15" Maximum="15" SmallChange="0.5" LargeChange="3"
-                                                            Value="{Binding Eq500Db, Mode=TwoWay}" AutomationProperties.Name="500 Hz"/>
-                                                </DockPanel>
-                                            </StackPanel>
-
-                                            <StackPanel Grid.Column="1">
-                                                <DockPanel Style="{StaticResource RackRow}" Tag="eq.5" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
-                                                    <TextBlock Text="1k" Style="{StaticResource RackRowLabel}"/>
-                                                    <TextBlock Text="{Binding Eq1kDb, StringFormat={}{0:+0.0;-0.0;0.0}}" Style="{StaticResource RackValue}"/>
-                                                    <Slider Width="50" Minimum="-15" Maximum="15" SmallChange="0.5" LargeChange="3"
-                                                            Value="{Binding Eq1kDb, Mode=TwoWay}" AutomationProperties.Name="1 kHz"/>
-                                                </DockPanel>
-                                                <DockPanel Style="{StaticResource RackRow}" Tag="eq.6" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
-                                                    <TextBlock Text="2k" Style="{StaticResource RackRowLabel}"/>
-                                                    <TextBlock Text="{Binding Eq2kDb, StringFormat={}{0:+0.0;-0.0;0.0}}" Style="{StaticResource RackValue}"/>
-                                                    <Slider Width="50" Minimum="-15" Maximum="15" SmallChange="0.5" LargeChange="3"
-                                                            Value="{Binding Eq2kDb, Mode=TwoWay}" AutomationProperties.Name="2 kHz"/>
-                                                </DockPanel>
-                                                <DockPanel Style="{StaticResource RackRow}" Tag="eq.7" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
-                                                    <TextBlock Text="4k" Style="{StaticResource RackRowLabel}"/>
-                                                    <TextBlock Text="{Binding Eq4kDb, StringFormat={}{0:+0.0;-0.0;0.0}}" Style="{StaticResource RackValue}"/>
-                                                    <Slider Width="50" Minimum="-15" Maximum="15" SmallChange="0.5" LargeChange="3"
-                                                            Value="{Binding Eq4kDb, Mode=TwoWay}" AutomationProperties.Name="4 kHz"/>
-                                                </DockPanel>
-                                                <DockPanel Style="{StaticResource RackRow}" Tag="eq.8" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
-                                                    <TextBlock Text="8k" Style="{StaticResource RackRowLabel}"/>
-                                                    <TextBlock Text="{Binding Eq8kDb, StringFormat={}{0:+0.0;-0.0;0.0}}" Style="{StaticResource RackValue}"/>
-                                                    <Slider Width="50" Minimum="-15" Maximum="15" SmallChange="0.5" LargeChange="3"
-                                                            Value="{Binding Eq8kDb, Mode=TwoWay}" AutomationProperties.Name="8 kHz"/>
-                                                </DockPanel>
-                                                <DockPanel Style="{StaticResource RackRow}" Tag="eq.9" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
-                                                    <TextBlock Text="16k" Style="{StaticResource RackRowLabel}"/>
-                                                    <TextBlock Text="{Binding Eq16kDb, StringFormat={}{0:+0.0;-0.0;0.0}}" Style="{StaticResource RackValue}"/>
-                                                    <Slider Width="50" Minimum="-15" Maximum="15" SmallChange="0.5" LargeChange="3"
-                                                            Value="{Binding Eq16kDb, Mode=TwoWay}" AutomationProperties.Name="16 kHz"/>
-                                                </DockPanel>
-                                            </StackPanel>
-                                        </Grid>
-                                    </StackPanel>
-
-                                    <!-- Band limits. Neutral is wide open; the fader is log so a voice
-                                         filter's useful band is not two pixels wide. -->
-                                    <StackPanel Width="190" Margin="0,0,10,0">
-                                        <TextBlock Text="FILTERS" Style="{StaticResource RackGroupTitle}"/>
-                                        <DockPanel Style="{StaticResource RackRow}">
-                                            <TextBlock Text="HP" Style="{StaticResource RackRowLabel}"/>
-                                            <ToggleButton Style="{StaticResource RackBandGate}" Margin="0,0,6,0"
-                                                          IsChecked="{Binding HighPassOn, Mode=TwoWay}"
-                                                          AutomationProperties.Name="High-pass on"/>
-                                            <TextBlock Text="{Binding HighPassHz, StringFormat={}{0:0}}" Style="{StaticResource RackValue}" Width="44"/>
-                                            <TextBlock Text="Hz" Style="{StaticResource RackUnit}"/>
-                                        </DockPanel>
-                                        <DockPanel Style="{StaticResource RackRow}" Tag="hp.freq" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
-                                            <Slider Minimum="0" Maximum="1" SmallChange="0.01" LargeChange="0.05"
-                                                    Value="{Binding HighPassSlider, Mode=TwoWay}"
-                                                    AutomationProperties.Name="High-pass corner"/>
-                                        </DockPanel>
-                                        <DockPanel Style="{StaticResource RackRow}" Margin="0,6,0,0">
-                                            <TextBlock Text="LP" Style="{StaticResource RackRowLabel}"/>
-                                            <ToggleButton Style="{StaticResource RackBandGate}" Margin="0,0,6,0"
-                                                          IsChecked="{Binding LowPassOn, Mode=TwoWay}"
-                                                          AutomationProperties.Name="Low-pass on"/>
-                                            <TextBlock Text="{Binding LowPassHz, StringFormat={}{0:0}}" Style="{StaticResource RackValue}" Width="44"/>
-                                            <TextBlock Text="Hz" Style="{StaticResource RackUnit}"/>
-                                        </DockPanel>
-                                        <DockPanel Style="{StaticResource RackRow}" Tag="lp.freq" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
-                                            <Slider Minimum="0" Maximum="1" SmallChange="0.01" LargeChange="0.05"
-                                                    Value="{Binding LowPassSlider, Mode=TwoWay}"
-                                                    AutomationProperties.Name="Low-pass corner"/>
-                                        </DockPanel>
-                                    </StackPanel>
-
-                                    <!-- Gate: off is neutral, so the pill reads OFF on a fresh strip. -->
-                                    <StackPanel Width="290" Margin="0,0,10,0">
-                                        <DockPanel>
-                                            <TextBlock Text="GATE" Style="{StaticResource RackGroupTitle}"/>
-                                            <ToggleButton HorizontalAlignment="Left" Style="{StaticResource RackBandGate}"
-                                                          Margin="6,0,0,0"
-                                                          IsChecked="{Binding GateOn, Mode=TwoWay}"
-                                                          AutomationProperties.Name="Gate on"/>
-                                        </DockPanel>
-                                        <Grid>
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="Auto"/>
-                                                <ColumnDefinition Width="Auto"/>
-                                            </Grid.ColumnDefinitions>
-
-                                            <StackPanel Grid.Column="0" Margin="0,0,8,0">
-                                                <DockPanel Style="{StaticResource RackRow}" Tag="gate.threshold" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
-                                                    <TextBlock Text="THR" Style="{StaticResource RackRowLabel}"/>
-                                                    <TextBlock Text="dB" Style="{StaticResource RackUnit}"/>
-                                                    <TextBlock Text="{Binding GateThresholdDb, StringFormat={}{0:0.0}}" Style="{StaticResource RackValue}"/>
-                                                    <Slider Width="56" Minimum="-80" Maximum="0" SmallChange="1" LargeChange="6"
-                                                            Value="{Binding GateThresholdDb, Mode=TwoWay}" AutomationProperties.Name="Gate threshold"/>
-                                                </DockPanel>
-                                                <DockPanel Style="{StaticResource RackRow}" Tag="gate.hysteresis" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
-                                                    <TextBlock Text="HYST" Style="{StaticResource RackRowLabel}"/>
-                                                    <TextBlock Text="dB" Style="{StaticResource RackUnit}"/>
-                                                    <TextBlock Text="{Binding GateHysteresisDb, StringFormat={}{0:0.0}}" Style="{StaticResource RackValue}"/>
-                                                    <Slider Width="56" Minimum="0" Maximum="24" SmallChange="0.5" LargeChange="3"
-                                                            Value="{Binding GateHysteresisDb, Mode=TwoWay}" AutomationProperties.Name="Gate hysteresis"/>
-                                                </DockPanel>
-                                                <DockPanel Style="{StaticResource RackRow}" Tag="gate.attack" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
-                                                    <TextBlock Text="ATK" Style="{StaticResource RackRowLabel}"/>
-                                                    <TextBlock Text="ms" Style="{StaticResource RackUnit}"/>
-                                                    <TextBlock Text="{Binding GateAttackMs, StringFormat={}{0:0.0}}" Style="{StaticResource RackValue}"/>
-                                                    <Slider Width="56" Minimum="0" Maximum="1" SmallChange="0.005" LargeChange="0.05"
-                                                            Value="{Binding GateAttackSlider, Mode=TwoWay}" AutomationProperties.Name="Gate attack"/>
-                                                </DockPanel>
-                                            </StackPanel>
-
-                                            <StackPanel Grid.Column="1">
-                                                <DockPanel Style="{StaticResource RackRow}" Tag="gate.release" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
-                                                    <TextBlock Text="REL" Style="{StaticResource RackRowLabel}"/>
-                                                    <TextBlock Text="ms" Style="{StaticResource RackUnit}"/>
-                                                    <TextBlock Text="{Binding GateReleaseMs, StringFormat={}{0:0.0}}" Style="{StaticResource RackValue}"/>
-                                                    <Slider Width="56" Minimum="0" Maximum="1" SmallChange="0.005" LargeChange="0.05"
-                                                            Value="{Binding GateReleaseSlider, Mode=TwoWay}" AutomationProperties.Name="Gate release"/>
-                                                </DockPanel>
-                                                <DockPanel Style="{StaticResource RackRow}" Tag="gate.hold" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
-                                                    <TextBlock Text="HOLD" Style="{StaticResource RackRowLabel}"/>
-                                                    <TextBlock Text="ms" Style="{StaticResource RackUnit}"/>
-                                                    <TextBlock Text="{Binding GateHoldMs, StringFormat={}{0:0}}" Style="{StaticResource RackValue}"/>
-                                                    <Slider Width="56" Minimum="0" Maximum="2000" SmallChange="10" LargeChange="100"
-                                                            Value="{Binding GateHoldMs, Mode=TwoWay}" AutomationProperties.Name="Gate hold"/>
-                                                </DockPanel>
-                                                <DockPanel Style="{StaticResource RackRow}" Tag="gate.floor" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
-                                                    <TextBlock Text="FLOOR" Style="{StaticResource RackRowLabel}"/>
-                                                    <TextBlock Text="dB" Style="{StaticResource RackUnit}"/>
-                                                    <TextBlock Text="{Binding GateFloorDb, StringFormat={}{0:0}}" Style="{StaticResource RackValue}"/>
-                                                    <Slider Width="56" Minimum="-120" Maximum="0" SmallChange="1" LargeChange="6"
-                                                            Value="{Binding GateFloorDb, Mode=TwoWay}" AutomationProperties.Name="Gate floor"/>
-                                                </DockPanel>
-                                            </StackPanel>
-                                        </Grid>
-                                    </StackPanel>
-
-                                    <!-- Compressor. -->
-                                    <StackPanel Width="290" Margin="0,0,10,0">
-                                        <DockPanel>
-                                            <TextBlock Text="COMP" Style="{StaticResource RackGroupTitle}"/>
-                                            <ToggleButton HorizontalAlignment="Left" Style="{StaticResource RackBandGate}"
-                                                          Margin="6,0,0,0"
-                                                          IsChecked="{Binding CompressorOn, Mode=TwoWay}"
-                                                          AutomationProperties.Name="Compressor on"/>
-                                        </DockPanel>
-                                        <Grid>
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="Auto"/>
-                                                <ColumnDefinition Width="Auto"/>
-                                            </Grid.ColumnDefinitions>
-
-                                            <StackPanel Grid.Column="0" Margin="0,0,8,0">
-                                                <DockPanel Style="{StaticResource RackRow}" Tag="comp.threshold" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
-                                                    <TextBlock Text="THR" Style="{StaticResource RackRowLabel}"/>
-                                                    <TextBlock Text="dB" Style="{StaticResource RackUnit}"/>
-                                                    <TextBlock Text="{Binding CompThresholdDb, StringFormat={}{0:0.0}}" Style="{StaticResource RackValue}"/>
-                                                    <Slider Width="56" Minimum="-60" Maximum="0" SmallChange="1" LargeChange="6"
-                                                            Value="{Binding CompThresholdDb, Mode=TwoWay}" AutomationProperties.Name="Compressor threshold"/>
-                                                </DockPanel>
-                                                <DockPanel Style="{StaticResource RackRow}" Tag="comp.ratio" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
-                                                    <TextBlock Text="RATIO" Style="{StaticResource RackRowLabel}"/>
-                                                    <TextBlock Text=":1" Style="{StaticResource RackUnit}"/>
-                                                    <TextBlock Text="{Binding CompRatio, StringFormat={}{0:0.0}}" Style="{StaticResource RackValue}"/>
-                                                    <Slider Width="56" Minimum="1" Maximum="20" SmallChange="0.5" LargeChange="2"
-                                                            Value="{Binding CompRatio, Mode=TwoWay}" AutomationProperties.Name="Compressor ratio"/>
-                                                </DockPanel>
-                                                <DockPanel Style="{StaticResource RackRow}" Tag="comp.knee" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
-                                                    <TextBlock Text="KNEE" Style="{StaticResource RackRowLabel}"/>
-                                                    <TextBlock Text="dB" Style="{StaticResource RackUnit}"/>
-                                                    <TextBlock Text="{Binding CompKneeDb, StringFormat={}{0:0.0}}" Style="{StaticResource RackValue}"/>
-                                                    <Slider Width="56" Minimum="0" Maximum="24" SmallChange="0.5" LargeChange="3"
-                                                            Value="{Binding CompKneeDb, Mode=TwoWay}" AutomationProperties.Name="Compressor knee"/>
-                                                </DockPanel>
-                                            </StackPanel>
-
-                                            <StackPanel Grid.Column="1">
-                                                <DockPanel Style="{StaticResource RackRow}" Tag="comp.attack" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
-                                                    <TextBlock Text="ATK" Style="{StaticResource RackRowLabel}"/>
-                                                    <TextBlock Text="ms" Style="{StaticResource RackUnit}"/>
-                                                    <TextBlock Text="{Binding CompAttackMs, StringFormat={}{0:0.0}}" Style="{StaticResource RackValue}"/>
-                                                    <Slider Width="56" Minimum="0" Maximum="1" SmallChange="0.005" LargeChange="0.05"
-                                                            Value="{Binding CompAttackSlider, Mode=TwoWay}" AutomationProperties.Name="Compressor attack"/>
-                                                </DockPanel>
-                                                <DockPanel Style="{StaticResource RackRow}" Tag="comp.release" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
-                                                    <TextBlock Text="REL" Style="{StaticResource RackRowLabel}"/>
-                                                    <TextBlock Text="ms" Style="{StaticResource RackUnit}"/>
-                                                    <TextBlock Text="{Binding CompReleaseMs, StringFormat={}{0:0.0}}" Style="{StaticResource RackValue}"/>
-                                                    <Slider Width="56" Minimum="0" Maximum="1" SmallChange="0.005" LargeChange="0.05"
-                                                            Value="{Binding CompReleaseSlider, Mode=TwoWay}" AutomationProperties.Name="Compressor release"/>
-                                                </DockPanel>
-                                                <DockPanel Style="{StaticResource RackRow}" Tag="comp.makeup" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
-                                                    <TextBlock Text="MAKE" Style="{StaticResource RackRowLabel}"/>
-                                                    <TextBlock Text="dB" Style="{StaticResource RackUnit}"/>
-                                                    <TextBlock Text="{Binding CompMakeupDb, StringFormat={}{0:+0.0;-0.0;0.0}}" Style="{StaticResource RackValue}"/>
-                                                    <Slider Width="56" Minimum="-12" Maximum="24" SmallChange="0.5" LargeChange="3"
-                                                            Value="{Binding CompMakeupDb, Mode=TwoWay}" AutomationProperties.Name="Compressor makeup"/>
-                                                </DockPanel>
-                                            </StackPanel>
-                                        </Grid>
-                                    </StackPanel>
-
-                                    <!-- Limiter: the one stage that costs latency, and the CHAIN column
-                                         says so the moment it is switched on. -->
-                                    <StackPanel Width="180" Margin="0,0,10,0">
-                                        <DockPanel>
-                                            <TextBlock Text="LIMITER" Style="{StaticResource RackGroupTitle}"/>
-                                            <ToggleButton HorizontalAlignment="Left" Style="{StaticResource RackBandGate}"
-                                                          Margin="6,0,0,0"
-                                                          IsChecked="{Binding LimiterOn, Mode=TwoWay}"
-                                                          AutomationProperties.Name="Limiter on"/>
-                                        </DockPanel>
-                                        <DockPanel Style="{StaticResource RackRow}" Tag="limiter.ceiling" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
-                                            <TextBlock Text="CEIL" Style="{StaticResource RackRowLabel}"/>
-                                            <TextBlock Text="dB" Style="{StaticResource RackUnit}"/>
-                                            <TextBlock Text="{Binding LimiterCeilingDb, StringFormat={}{0:0.0}}" Style="{StaticResource RackValue}" Width="40"/>
-                                            <Slider Width="56" Minimum="-12" Maximum="0" SmallChange="0.5" LargeChange="3"
-                                                    Value="{Binding LimiterCeilingDb, Mode=TwoWay}" AutomationProperties.Name="Limiter ceiling"/>
-                                        </DockPanel>
-                                        <DockPanel Style="{StaticResource RackRow}" Tag="limiter.release" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
-                                            <TextBlock Text="REL" Style="{StaticResource RackRowLabel}"/>
-                                            <TextBlock Text="ms" Style="{StaticResource RackUnit}"/>
-                                            <TextBlock Text="{Binding LimiterReleaseMs, StringFormat={}{0:0.0}}" Style="{StaticResource RackValue}" Width="40"/>
-                                            <Slider Width="56" Minimum="0" Maximum="1" SmallChange="0.005" LargeChange="0.05"
-                                                    Value="{Binding LimiterReleaseSlider, Mode=TwoWay}" AutomationProperties.Name="Limiter release"/>
-                                        </DockPanel>
-                                        <TextBlock Text="240 frames of lookahead, only when on"
-                                                   Style="{StaticResource RackCaption}" TextWrapping="Wrap"
-                                                   Margin="0,6,0,0"/>
-                                    </StackPanel>
-                                </WrapPanel>
-                            </DataTemplate>
-                        </ContentControl.ContentTemplate>
-                    </ContentControl>
                 </StackPanel>
             </Border>
         </StackPanel>
@@ -4123,6 +3844,305 @@
                                    Foreground="{StaticResource TextDimBrush}"/>
                     </StackPanel>
                 </Grid>
+        </Border>
+        <!-- ================= Strip band =================
+             The editor for the strip selected above, drawn inside the browser row rather
+             than in the mic card: a band in the card made the shell 61 px taller than a
+             900 px window, which put the console row below the fold. It is also out of
+             the flow here: the row is star-sized, so opening the band costs the window
+             nothing and never grows a scrollbar the operator has to find.
+
+             ItemsSource is BandStrip - zero items or exactly the selected strip. A
+             ContentControl would apply its template against null content; an empty
+             ItemsControl instantiates nothing at all.
+
+             Values are the engine applied parameters (SnapshotStrips, 2 Hz); writes post
+             one render-queue action each. Double-click a row to return it to neutral. -->
+        <Border Grid.Row="4" Panel.ZIndex="10" VerticalAlignment="Top"
+                Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource BorderBrush}"
+                BorderThickness="1" CornerRadius="8" Padding="12,8"
+                Visibility="{Binding ShowStripControls, Converter={StaticResource BoolToVisibility}}">
+            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                          MaxHeight="196">
+                <ItemsControl ItemsSource="{Binding BandStrip}">
+                    <ItemsControl.ItemTemplate>
+                        <DataTemplate>
+                            <WrapPanel Orientation="Horizontal">
+
+                                <!-- EQ: ten ISO octave bands, -15..+15 dB (the DSP's own limit,
+                                     not the -12 a casual read would assume). Two columns of
+                                     five keep the band short enough to sit under the row. -->
+                                <StackPanel Width="244" Margin="0,0,10,0">
+                                    <TextBlock Text="EQ (dB)" Style="{StaticResource RackGroupTitle}"/>
+                                    <Grid Margin="0,3,0,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+
+                                        <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                                            <DockPanel Style="{StaticResource RackRow}" Tag="eq.0" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
+                                                <TextBlock Text="31" Style="{StaticResource RackRowLabel}"/>
+                                                <TextBlock Text="{Binding Eq31Db, StringFormat={}{0:+0.0;-0.0;0.0}}" Style="{StaticResource RackValue}"/>
+                                                <Slider Width="50" Minimum="-15" Maximum="15" SmallChange="0.5" LargeChange="3"
+                                                        Value="{Binding Eq31Db, Mode=TwoWay}" AutomationProperties.Name="31 Hz"/>
+                                            </DockPanel>
+                                            <DockPanel Style="{StaticResource RackRow}" Tag="eq.1" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
+                                                <TextBlock Text="63" Style="{StaticResource RackRowLabel}"/>
+                                                <TextBlock Text="{Binding Eq63Db, StringFormat={}{0:+0.0;-0.0;0.0}}" Style="{StaticResource RackValue}"/>
+                                                <Slider Width="50" Minimum="-15" Maximum="15" SmallChange="0.5" LargeChange="3"
+                                                        Value="{Binding Eq63Db, Mode=TwoWay}" AutomationProperties.Name="63 Hz"/>
+                                            </DockPanel>
+                                            <DockPanel Style="{StaticResource RackRow}" Tag="eq.2" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
+                                                <TextBlock Text="125" Style="{StaticResource RackRowLabel}"/>
+                                                <TextBlock Text="{Binding Eq125Db, StringFormat={}{0:+0.0;-0.0;0.0}}" Style="{StaticResource RackValue}"/>
+                                                <Slider Width="50" Minimum="-15" Maximum="15" SmallChange="0.5" LargeChange="3"
+                                                        Value="{Binding Eq125Db, Mode=TwoWay}" AutomationProperties.Name="125 Hz"/>
+                                            </DockPanel>
+                                            <DockPanel Style="{StaticResource RackRow}" Tag="eq.3" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
+                                                <TextBlock Text="250" Style="{StaticResource RackRowLabel}"/>
+                                                <TextBlock Text="{Binding Eq250Db, StringFormat={}{0:+0.0;-0.0;0.0}}" Style="{StaticResource RackValue}"/>
+                                                <Slider Width="50" Minimum="-15" Maximum="15" SmallChange="0.5" LargeChange="3"
+                                                        Value="{Binding Eq250Db, Mode=TwoWay}" AutomationProperties.Name="250 Hz"/>
+                                            </DockPanel>
+                                            <DockPanel Style="{StaticResource RackRow}" Tag="eq.4" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
+                                                <TextBlock Text="500" Style="{StaticResource RackRowLabel}"/>
+                                                <TextBlock Text="{Binding Eq500Db, StringFormat={}{0:+0.0;-0.0;0.0}}" Style="{StaticResource RackValue}"/>
+                                                <Slider Width="50" Minimum="-15" Maximum="15" SmallChange="0.5" LargeChange="3"
+                                                        Value="{Binding Eq500Db, Mode=TwoWay}" AutomationProperties.Name="500 Hz"/>
+                                            </DockPanel>
+                                        </StackPanel>
+
+                                        <StackPanel Grid.Column="1">
+                                            <DockPanel Style="{StaticResource RackRow}" Tag="eq.5" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
+                                                <TextBlock Text="1k" Style="{StaticResource RackRowLabel}"/>
+                                                <TextBlock Text="{Binding Eq1kDb, StringFormat={}{0:+0.0;-0.0;0.0}}" Style="{StaticResource RackValue}"/>
+                                                <Slider Width="50" Minimum="-15" Maximum="15" SmallChange="0.5" LargeChange="3"
+                                                        Value="{Binding Eq1kDb, Mode=TwoWay}" AutomationProperties.Name="1 kHz"/>
+                                            </DockPanel>
+                                            <DockPanel Style="{StaticResource RackRow}" Tag="eq.6" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
+                                                <TextBlock Text="2k" Style="{StaticResource RackRowLabel}"/>
+                                                <TextBlock Text="{Binding Eq2kDb, StringFormat={}{0:+0.0;-0.0;0.0}}" Style="{StaticResource RackValue}"/>
+                                                <Slider Width="50" Minimum="-15" Maximum="15" SmallChange="0.5" LargeChange="3"
+                                                        Value="{Binding Eq2kDb, Mode=TwoWay}" AutomationProperties.Name="2 kHz"/>
+                                            </DockPanel>
+                                            <DockPanel Style="{StaticResource RackRow}" Tag="eq.7" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
+                                                <TextBlock Text="4k" Style="{StaticResource RackRowLabel}"/>
+                                                <TextBlock Text="{Binding Eq4kDb, StringFormat={}{0:+0.0;-0.0;0.0}}" Style="{StaticResource RackValue}"/>
+                                                <Slider Width="50" Minimum="-15" Maximum="15" SmallChange="0.5" LargeChange="3"
+                                                        Value="{Binding Eq4kDb, Mode=TwoWay}" AutomationProperties.Name="4 kHz"/>
+                                            </DockPanel>
+                                            <DockPanel Style="{StaticResource RackRow}" Tag="eq.8" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
+                                                <TextBlock Text="8k" Style="{StaticResource RackRowLabel}"/>
+                                                <TextBlock Text="{Binding Eq8kDb, StringFormat={}{0:+0.0;-0.0;0.0}}" Style="{StaticResource RackValue}"/>
+                                                <Slider Width="50" Minimum="-15" Maximum="15" SmallChange="0.5" LargeChange="3"
+                                                        Value="{Binding Eq8kDb, Mode=TwoWay}" AutomationProperties.Name="8 kHz"/>
+                                            </DockPanel>
+                                            <DockPanel Style="{StaticResource RackRow}" Tag="eq.9" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
+                                                <TextBlock Text="16k" Style="{StaticResource RackRowLabel}"/>
+                                                <TextBlock Text="{Binding Eq16kDb, StringFormat={}{0:+0.0;-0.0;0.0}}" Style="{StaticResource RackValue}"/>
+                                                <Slider Width="50" Minimum="-15" Maximum="15" SmallChange="0.5" LargeChange="3"
+                                                        Value="{Binding Eq16kDb, Mode=TwoWay}" AutomationProperties.Name="16 kHz"/>
+                                            </DockPanel>
+                                        </StackPanel>
+                                    </Grid>
+                                </StackPanel>
+
+                                <!-- Band limits. Neutral is wide open; the fader is log so a voice
+                                     filter's useful band is not two pixels wide. -->
+                                <StackPanel Width="190" Margin="0,0,10,0">
+                                    <TextBlock Text="FILTERS" Style="{StaticResource RackGroupTitle}"/>
+                                    <DockPanel Style="{StaticResource RackRow}">
+                                        <TextBlock Text="HP" Style="{StaticResource RackRowLabel}"/>
+                                        <ToggleButton Style="{StaticResource RackBandGate}" Margin="0,0,6,0"
+                                                      IsChecked="{Binding HighPassOn, Mode=TwoWay}"
+                                                      AutomationProperties.Name="High-pass on"/>
+                                        <TextBlock Text="{Binding HighPassHz, StringFormat={}{0:0}}" Style="{StaticResource RackValue}" Width="44"/>
+                                        <TextBlock Text="Hz" Style="{StaticResource RackUnit}"/>
+                                    </DockPanel>
+                                    <DockPanel Style="{StaticResource RackRow}" Tag="hp.freq" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
+                                        <Slider Minimum="0" Maximum="1" SmallChange="0.01" LargeChange="0.05"
+                                                Value="{Binding HighPassSlider, Mode=TwoWay}"
+                                                AutomationProperties.Name="High-pass corner"/>
+                                    </DockPanel>
+                                    <DockPanel Style="{StaticResource RackRow}" Margin="0,6,0,0">
+                                        <TextBlock Text="LP" Style="{StaticResource RackRowLabel}"/>
+                                        <ToggleButton Style="{StaticResource RackBandGate}" Margin="0,0,6,0"
+                                                      IsChecked="{Binding LowPassOn, Mode=TwoWay}"
+                                                      AutomationProperties.Name="Low-pass on"/>
+                                        <TextBlock Text="{Binding LowPassHz, StringFormat={}{0:0}}" Style="{StaticResource RackValue}" Width="44"/>
+                                        <TextBlock Text="Hz" Style="{StaticResource RackUnit}"/>
+                                    </DockPanel>
+                                    <DockPanel Style="{StaticResource RackRow}" Tag="lp.freq" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
+                                        <Slider Minimum="0" Maximum="1" SmallChange="0.01" LargeChange="0.05"
+                                                Value="{Binding LowPassSlider, Mode=TwoWay}"
+                                                AutomationProperties.Name="Low-pass corner"/>
+                                    </DockPanel>
+                                </StackPanel>
+
+                                <!-- Gate: off is neutral, so the pill reads OFF on a fresh strip. -->
+                                <StackPanel Width="290" Margin="0,0,10,0">
+                                    <DockPanel>
+                                        <TextBlock Text="GATE" Style="{StaticResource RackGroupTitle}"/>
+                                        <ToggleButton HorizontalAlignment="Left" Style="{StaticResource RackBandGate}"
+                                                      Margin="6,0,0,0"
+                                                      IsChecked="{Binding GateOn, Mode=TwoWay}"
+                                                      AutomationProperties.Name="Gate on"/>
+                                    </DockPanel>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+
+                                        <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                                            <DockPanel Style="{StaticResource RackRow}" Tag="gate.threshold" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
+                                                <TextBlock Text="THR" Style="{StaticResource RackRowLabel}"/>
+                                                <TextBlock Text="dB" Style="{StaticResource RackUnit}"/>
+                                                <TextBlock Text="{Binding GateThresholdDb, StringFormat={}{0:0.0}}" Style="{StaticResource RackValue}"/>
+                                                <Slider Width="56" Minimum="-80" Maximum="0" SmallChange="1" LargeChange="6"
+                                                        Value="{Binding GateThresholdDb, Mode=TwoWay}" AutomationProperties.Name="Gate threshold"/>
+                                            </DockPanel>
+                                            <DockPanel Style="{StaticResource RackRow}" Tag="gate.hysteresis" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
+                                                <TextBlock Text="HYST" Style="{StaticResource RackRowLabel}"/>
+                                                <TextBlock Text="dB" Style="{StaticResource RackUnit}"/>
+                                                <TextBlock Text="{Binding GateHysteresisDb, StringFormat={}{0:0.0}}" Style="{StaticResource RackValue}"/>
+                                                <Slider Width="56" Minimum="0" Maximum="24" SmallChange="0.5" LargeChange="3"
+                                                        Value="{Binding GateHysteresisDb, Mode=TwoWay}" AutomationProperties.Name="Gate hysteresis"/>
+                                            </DockPanel>
+                                            <DockPanel Style="{StaticResource RackRow}" Tag="gate.attack" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
+                                                <TextBlock Text="ATK" Style="{StaticResource RackRowLabel}"/>
+                                                <TextBlock Text="ms" Style="{StaticResource RackUnit}"/>
+                                                <TextBlock Text="{Binding GateAttackMs, StringFormat={}{0:0.0}}" Style="{StaticResource RackValue}"/>
+                                                <Slider Width="56" Minimum="0" Maximum="1" SmallChange="0.005" LargeChange="0.05"
+                                                        Value="{Binding GateAttackSlider, Mode=TwoWay}" AutomationProperties.Name="Gate attack"/>
+                                            </DockPanel>
+                                        </StackPanel>
+
+                                        <StackPanel Grid.Column="1">
+                                            <DockPanel Style="{StaticResource RackRow}" Tag="gate.release" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
+                                                <TextBlock Text="REL" Style="{StaticResource RackRowLabel}"/>
+                                                <TextBlock Text="ms" Style="{StaticResource RackUnit}"/>
+                                                <TextBlock Text="{Binding GateReleaseMs, StringFormat={}{0:0.0}}" Style="{StaticResource RackValue}"/>
+                                                <Slider Width="56" Minimum="0" Maximum="1" SmallChange="0.005" LargeChange="0.05"
+                                                        Value="{Binding GateReleaseSlider, Mode=TwoWay}" AutomationProperties.Name="Gate release"/>
+                                            </DockPanel>
+                                            <DockPanel Style="{StaticResource RackRow}" Tag="gate.hold" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
+                                                <TextBlock Text="HOLD" Style="{StaticResource RackRowLabel}"/>
+                                                <TextBlock Text="ms" Style="{StaticResource RackUnit}"/>
+                                                <TextBlock Text="{Binding GateHoldMs, StringFormat={}{0:0}}" Style="{StaticResource RackValue}"/>
+                                                <Slider Width="56" Minimum="0" Maximum="2000" SmallChange="10" LargeChange="100"
+                                                        Value="{Binding GateHoldMs, Mode=TwoWay}" AutomationProperties.Name="Gate hold"/>
+                                            </DockPanel>
+                                            <DockPanel Style="{StaticResource RackRow}" Tag="gate.floor" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
+                                                <TextBlock Text="FLOOR" Style="{StaticResource RackRowLabel}"/>
+                                                <TextBlock Text="dB" Style="{StaticResource RackUnit}"/>
+                                                <TextBlock Text="{Binding GateFloorDb, StringFormat={}{0:0}}" Style="{StaticResource RackValue}"/>
+                                                <Slider Width="56" Minimum="-120" Maximum="0" SmallChange="1" LargeChange="6"
+                                                        Value="{Binding GateFloorDb, Mode=TwoWay}" AutomationProperties.Name="Gate floor"/>
+                                            </DockPanel>
+                                        </StackPanel>
+                                    </Grid>
+                                </StackPanel>
+
+                                <!-- Compressor. -->
+                                <StackPanel Width="290" Margin="0,0,10,0">
+                                    <DockPanel>
+                                        <TextBlock Text="COMP" Style="{StaticResource RackGroupTitle}"/>
+                                        <ToggleButton HorizontalAlignment="Left" Style="{StaticResource RackBandGate}"
+                                                      Margin="6,0,0,0"
+                                                      IsChecked="{Binding CompressorOn, Mode=TwoWay}"
+                                                      AutomationProperties.Name="Compressor on"/>
+                                    </DockPanel>
+                                    <Grid>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+
+                                        <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                                            <DockPanel Style="{StaticResource RackRow}" Tag="comp.threshold" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
+                                                <TextBlock Text="THR" Style="{StaticResource RackRowLabel}"/>
+                                                <TextBlock Text="dB" Style="{StaticResource RackUnit}"/>
+                                                <TextBlock Text="{Binding CompThresholdDb, StringFormat={}{0:0.0}}" Style="{StaticResource RackValue}"/>
+                                                <Slider Width="56" Minimum="-60" Maximum="0" SmallChange="1" LargeChange="6"
+                                                        Value="{Binding CompThresholdDb, Mode=TwoWay}" AutomationProperties.Name="Compressor threshold"/>
+                                            </DockPanel>
+                                            <DockPanel Style="{StaticResource RackRow}" Tag="comp.ratio" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
+                                                <TextBlock Text="RATIO" Style="{StaticResource RackRowLabel}"/>
+                                                <TextBlock Text=":1" Style="{StaticResource RackUnit}"/>
+                                                <TextBlock Text="{Binding CompRatio, StringFormat={}{0:0.0}}" Style="{StaticResource RackValue}"/>
+                                                <Slider Width="56" Minimum="1" Maximum="20" SmallChange="0.5" LargeChange="2"
+                                                        Value="{Binding CompRatio, Mode=TwoWay}" AutomationProperties.Name="Compressor ratio"/>
+                                            </DockPanel>
+                                            <DockPanel Style="{StaticResource RackRow}" Tag="comp.knee" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
+                                                <TextBlock Text="KNEE" Style="{StaticResource RackRowLabel}"/>
+                                                <TextBlock Text="dB" Style="{StaticResource RackUnit}"/>
+                                                <TextBlock Text="{Binding CompKneeDb, StringFormat={}{0:0.0}}" Style="{StaticResource RackValue}"/>
+                                                <Slider Width="56" Minimum="0" Maximum="24" SmallChange="0.5" LargeChange="3"
+                                                        Value="{Binding CompKneeDb, Mode=TwoWay}" AutomationProperties.Name="Compressor knee"/>
+                                            </DockPanel>
+                                        </StackPanel>
+
+                                        <StackPanel Grid.Column="1">
+                                            <DockPanel Style="{StaticResource RackRow}" Tag="comp.attack" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
+                                                <TextBlock Text="ATK" Style="{StaticResource RackRowLabel}"/>
+                                                <TextBlock Text="ms" Style="{StaticResource RackUnit}"/>
+                                                <TextBlock Text="{Binding CompAttackMs, StringFormat={}{0:0.0}}" Style="{StaticResource RackValue}"/>
+                                                <Slider Width="56" Minimum="0" Maximum="1" SmallChange="0.005" LargeChange="0.05"
+                                                        Value="{Binding CompAttackSlider, Mode=TwoWay}" AutomationProperties.Name="Compressor attack"/>
+                                            </DockPanel>
+                                            <DockPanel Style="{StaticResource RackRow}" Tag="comp.release" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
+                                                <TextBlock Text="REL" Style="{StaticResource RackRowLabel}"/>
+                                                <TextBlock Text="ms" Style="{StaticResource RackUnit}"/>
+                                                <TextBlock Text="{Binding CompReleaseMs, StringFormat={}{0:0.0}}" Style="{StaticResource RackValue}"/>
+                                                <Slider Width="56" Minimum="0" Maximum="1" SmallChange="0.005" LargeChange="0.05"
+                                                        Value="{Binding CompReleaseSlider, Mode=TwoWay}" AutomationProperties.Name="Compressor release"/>
+                                            </DockPanel>
+                                            <DockPanel Style="{StaticResource RackRow}" Tag="comp.makeup" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
+                                                <TextBlock Text="MAKE" Style="{StaticResource RackRowLabel}"/>
+                                                <TextBlock Text="dB" Style="{StaticResource RackUnit}"/>
+                                                <TextBlock Text="{Binding CompMakeupDb, StringFormat={}{0:+0.0;-0.0;0.0}}" Style="{StaticResource RackValue}"/>
+                                                <Slider Width="56" Minimum="-12" Maximum="24" SmallChange="0.5" LargeChange="3"
+                                                        Value="{Binding CompMakeupDb, Mode=TwoWay}" AutomationProperties.Name="Compressor makeup"/>
+                                            </DockPanel>
+                                        </StackPanel>
+                                    </Grid>
+                                </StackPanel>
+
+                                <!-- Limiter: the one stage that costs latency, and the CHAIN column
+                                     says so the moment it is switched on. -->
+                                <StackPanel Width="180" Margin="0,0,10,0">
+                                    <DockPanel>
+                                        <TextBlock Text="LIMITER" Style="{StaticResource RackGroupTitle}"/>
+                                        <ToggleButton HorizontalAlignment="Left" Style="{StaticResource RackBandGate}"
+                                                      Margin="6,0,0,0"
+                                                      IsChecked="{Binding LimiterOn, Mode=TwoWay}"
+                                                      AutomationProperties.Name="Limiter on"/>
+                                    </DockPanel>
+                                    <DockPanel Style="{StaticResource RackRow}" Tag="limiter.ceiling" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
+                                        <TextBlock Text="CEIL" Style="{StaticResource RackRowLabel}"/>
+                                        <TextBlock Text="dB" Style="{StaticResource RackUnit}"/>
+                                        <TextBlock Text="{Binding LimiterCeilingDb, StringFormat={}{0:0.0}}" Style="{StaticResource RackValue}" Width="40"/>
+                                        <Slider Width="56" Minimum="-12" Maximum="0" SmallChange="0.5" LargeChange="3"
+                                                Value="{Binding LimiterCeilingDb, Mode=TwoWay}" AutomationProperties.Name="Limiter ceiling"/>
+                                    </DockPanel>
+                                    <DockPanel Style="{StaticResource RackRow}" Tag="limiter.release" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
+                                        <TextBlock Text="REL" Style="{StaticResource RackRowLabel}"/>
+                                        <TextBlock Text="ms" Style="{StaticResource RackUnit}"/>
+                                        <TextBlock Text="{Binding LimiterReleaseMs, StringFormat={}{0:0.0}}" Style="{StaticResource RackValue}" Width="40"/>
+                                        <Slider Width="56" Minimum="0" Maximum="1" SmallChange="0.005" LargeChange="0.05"
+                                                Value="{Binding LimiterReleaseSlider, Mode=TwoWay}" AutomationProperties.Name="Limiter release"/>
+                                    </DockPanel>
+                                    <TextBlock Text="240 frames of lookahead, only when on"
+                                               Style="{StaticResource RackCaption}" TextWrapping="Wrap"
+                                               Margin="0,6,0,0"/>
+                                </StackPanel>
+                            </WrapPanel>
+                        </DataTemplate>
+                    </ItemsControl.ItemTemplate>
+                </ItemsControl>
+            </ScrollViewer>
         </Border>
     </Grid>
     </ScrollViewer>

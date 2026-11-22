@@ -47,8 +47,26 @@ public partial class MainViewModel
     /// <summary>Master gate, mirrored from the engine so the HTTP API and the UI agree.</summary>
     [ObservableProperty] private bool _isMixerOn;
 
-    /// <summary>Controls band open/closed. The strip row above it is always visible.</summary>
-    [ObservableProperty] private bool _areStripControlsOpen = true;
+    /// <summary>
+    /// Controls band open/closed. Closed by default and out of the layout flow: the rack in the
+    /// mic card is the always-visible part, the band is the editor the operator asks for.
+    /// </summary>
+    [ObservableProperty] private bool _areStripControlsOpen;
+
+    /// <summary>
+    /// The band exists only when there is something to edit and the operator asked for it.
+    /// <para>The control this drives is an <see cref="System.Windows.Controls.ItemsControl"/>
+    /// fed by <see cref="BandStrip"/>, not a ContentControl: a ContentControl applies its
+    /// ContentTemplate even with null content, which drew a band of empty value boxes. An
+    /// ItemsControl with no items instantiates nothing, so with no strip there are no nodes at
+    /// all - not invisible ones, none.</para>
+    /// </summary>
+    public bool ShowStripControls => AreStripControlsOpen && SelectedMicStrip != null;
+
+    /// <summary>The band's only item: the selected strip, or none at all.</summary>
+    public ObservableCollection<MicChannelStripViewModel> BandStrip { get; } = new();
+
+    partial void OnAreStripControlsOpenChanged(bool value) => OnPropertyChanged(nameof(ShowStripControls));
 
     /// <summary>"2 devices" / "1 device" for the rack header.</summary>
     [ObservableProperty] private string _micStripCountText = "0 devices";
@@ -68,6 +86,7 @@ public partial class MainViewModel
     partial void OnSelectedMicStripChanged(MicChannelStripViewModel? value)
     {
         OnPropertyChanged(nameof(HasSelectedMicStrip));
+        OnPropertyChanged(nameof(ShowStripControls));
         if (value == null) return;
 
         // Selection is the mic row's selection: choosing a strip retargets the gain,
@@ -234,5 +253,13 @@ public partial class MainViewModel
         }
 
         if (!ReferenceEquals(SelectedMicStrip, match)) SelectedMicStrip = match;
+
+        // The band's items: exactly the selected strip, or none. Empty is the state that keeps
+        // the whole controls tree out of the visual tree instead of collapsing it.
+        if (BandStrip.Count == 1 && ReferenceEquals(BandStrip[0], match)) return;
+        if (BandStrip.Count == 0 && match == null) return;
+
+        BandStrip.Clear();
+        if (match != null) BandStrip.Add(match);
     }
 }
