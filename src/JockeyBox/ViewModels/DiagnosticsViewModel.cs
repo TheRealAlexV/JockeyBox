@@ -47,9 +47,6 @@ public sealed class DiagnosticsViewModel : NotifyBase
                       ?? asm.GetName().Version?.ToString()
                       ?? "unknown";
 
-        DeckA = new DeckRow("DECK A", () => _engine.DeckAStripChain);
-        DeckB = new DeckRow("DECK B", () => _engine.DeckBStripChain);
-
         foreach (BusKind kind in Enum.GetValues<BusKind>())
         {
             Buses.Add(new BusRow(kind, _engine.Bus(kind)));
@@ -85,9 +82,6 @@ public sealed class DiagnosticsViewModel : NotifyBase
     private string _frameIndex = "";
     public string FrameIndex { get => _frameIndex; private set => Set(ref _frameIndex, value); }
 
-    public DeckRow DeckA { get; }
-    public DeckRow DeckB { get; }
-
     public ObservableCollection<BusRow> Buses { get; } = new();
     public ObservableCollection<CaseRow> Cases { get; } = new();
 
@@ -101,8 +95,6 @@ public sealed class DiagnosticsViewModel : NotifyBase
         FrameIndex = _engine.FrameIndex.ToString("N0", CultureInfo.InvariantCulture);
         MixerEnabled = _settings.MixerEnabled ? "on" : "off";
 
-        DeckA.Update();
-        DeckB.Update();
         foreach (BusRow bus in Buses) bus.Update();
 
         RefreshCount++;
@@ -116,41 +108,6 @@ public sealed class DiagnosticsViewModel : NotifyBase
     public int RefreshCount { get; private set; }
 
     // ---- rows ---------------------------------------------------------------
-
-    /// <summary>One deck's strip chain, as the engine holds it right now.</summary>
-    public sealed class DeckRow : NotifyBase
-    {
-        private readonly Func<AudioEngine.DeckStripChainSnapshot> _snapshot;
-
-        public DeckRow(string name, Func<AudioEngine.DeckStripChainSnapshot> snapshot)
-        {
-            Name = name;
-            _snapshot = snapshot;
-            Update();
-        }
-
-        public string Name { get; }
-
-        private string _passthrough = "";
-        public string Passthrough { get => _passthrough; private set => Set(ref _passthrough, value); }
-
-        private string _processors = "";
-        public string Processors { get => _processors; private set => Set(ref _processors, value); }
-
-        private string _latency = "";
-        public string Latency { get => _latency; private set => Set(ref _latency, value); }
-
-        public void Update()
-        {
-            AudioEngine.DeckStripChainSnapshot chain = _snapshot();
-
-            Passthrough = chain.IsPassthrough ? "passthrough" : "processing";
-            Processors = chain.ProcessorCount.ToString(CultureInfo.InvariantCulture);
-
-            double ms = chain.LatencyFrames * 1000.0 / AudioEngine.Rate;
-            Latency = string.Format(CultureInfo.InvariantCulture, "{0} fr  {1:0.00} ms", chain.LatencyFrames, ms);
-        }
-    }
 
     /// <summary>One render bus: where it goes and how hot it is this block.</summary>
     public sealed class BusRow : NotifyBase

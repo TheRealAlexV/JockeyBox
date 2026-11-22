@@ -209,44 +209,6 @@
                             <TextBlock Grid.Column="1" Text="{Binding MixerEnabled}" Style="{StaticResource Value}"/>
                         </Grid>
 
-                        <!-- Column heads once; rows are fixed-width so nothing moves. -->
-                        <Grid Height="18" Margin="0,6,0,2">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="86"/>
-                                <ColumnDefinition Width="62"/>
-                                <ColumnDefinition Width="150"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="deck" Style="{StaticResource SectionHeader}"/>
-                            <TextBlock Grid.Column="1" Text="strip" Style="{StaticResource SectionHeader}" HorizontalAlignment="Right"/>
-                            <TextBlock Grid.Column="2" Text="procs" Style="{StaticResource SectionHeader}" HorizontalAlignment="Right"/>
-                            <TextBlock Grid.Column="3" Text="latency" Style="{StaticResource SectionHeader}" HorizontalAlignment="Right"/>
-                        </Grid>
-
-                        <Grid Height="21">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="86"/>
-                                <ColumnDefinition Width="62"/>
-                                <ColumnDefinition Width="150"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="{Binding DeckA.Name}" Style="{StaticResource Label}"/>
-                            <TextBlock Grid.Column="1" Text="{Binding DeckA.Passthrough}" Style="{StaticResource Value}"/>
-                            <TextBlock Grid.Column="2" Text="{Binding DeckA.Processors}" Style="{StaticResource Value}"/>
-                            <TextBlock Grid.Column="3" Text="{Binding DeckA.Latency}" Style="{StaticResource Value}"/>
-                        </Grid>
-                        <Grid Height="21">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="86"/>
-                                <ColumnDefinition Width="62"/>
-                                <ColumnDefinition Width="150"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="{Binding DeckB.Name}" Style="{StaticResource Label}"/>
-                            <TextBlock Grid.Column="1" Text="{Binding DeckB.Passthrough}" Style="{StaticResource Value}"/>
-                            <TextBlock Grid.Column="2" Text="{Binding DeckB.Processors}" Style="{StaticResource Value}"/>
-                            <TextBlock Grid.Column="3" Text="{Binding DeckB.Latency}" Style="{StaticResource Value}"/>
-                        </Grid>
                     </StackPanel>
 
                     <!-- M0 RAILS -->
