@@ -421,7 +421,10 @@ public partial class MainViewModel
                 Transition = TransitionText,
             },
             addSound: async (path, url) => await AddSoundFromApiAsync(path, url),
-            cueRouter: CreateCueApiRouter());
+            cueRouter: CreateCueApiRouter(),
+            mixerRouter: CreateMixerApiRouter());
+
+        Log.Info("mixer api: /mixer/devices, /mixer/controls, /mixer/strips/{slug}, /mixer/preset, /mixer/enabled");
 
         // ONE port: the Stream Deck plugin defaults to 17890 (LocalApiServer.DefaultPort).
         // AppSettings.ApiPort predates the plugin; if it disagrees we log it and use
@@ -450,6 +453,21 @@ public partial class MainViewModel
                   "the plugin will not reach this instance");
         }
     }
+
+    /// <summary>
+    /// The mixer half of the loopback API. The engine instance is the one the
+    /// transport renders, and the master gate is written back into settings so a
+    /// restart agrees with the last request instead of the router saving itself.
+    /// </summary>
+    private MixerApiRouter CreateMixerApiRouter() =>
+        new(
+            _transport.Engine.Mics,
+            AppPaths.Home,
+            persistEnabled: enabled =>
+            {
+                _settings.MixerEnabled = enabled;
+                _settings.Save();
+            });
 
     /// <summary>Register every pad hotkey; failures are surfaced in the pad tooltip, not silent.</summary>
     private void StartHotkeys()
