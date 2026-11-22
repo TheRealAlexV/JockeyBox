@@ -42,4 +42,25 @@ public sealed class ControlRegistry
         ArgumentException.ThrowIfNullOrWhiteSpace(id);
         return _byId.TryGetValue(id, out descriptor);
     }
+
+    /// <summary>
+    /// Drops every registration. The mixer calls this when capture devices change: a control
+    /// that belongs to a device that is gone must not survive the rebuild and keep writing to
+    /// a strip that no longer exists.
+    /// </summary>
+    public void Clear()
+    {
+        _byId.Clear();
+        _all.Clear();
+    }
+
+    /// <summary>
+    /// Clears and registers a fresh set of descriptors in one call, for a device rebuild.
+    /// </summary>
+    public void Replace(IEnumerable<ControlDescriptor> descriptors)
+    {
+        ArgumentNullException.ThrowIfNull(descriptors);
+        Clear();
+        RegisterRange(descriptors);
+    }
 }
