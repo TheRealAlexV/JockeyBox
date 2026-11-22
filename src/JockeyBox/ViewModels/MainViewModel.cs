@@ -166,6 +166,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
         var channelA = new DeckChannel("Deck A", _deviceService);
         var channelB = new DeckChannel("Deck B", _deviceService);
         _transport = new DualDeckTransport(channelA, channelB);
+
+        // Startup only: the stored per-device strips and the master gate. Strips are built
+        // later on the mic-settings path, which applies the map by capture endpoint id; a
+        // device with no entry stays neutral. This never writes the file.
+        _transport.Engine.Mics.LoadStoredSettings(AppPaths.Home, _settings.MixerEnabled);
         _transport.StateChanged += (_, _) => OnTransportStateChanged();
         _transport.ActiveDeckChanged += (_, _) => SyncDeckActivation();
 
