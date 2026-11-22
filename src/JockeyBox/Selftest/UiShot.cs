@@ -479,33 +479,9 @@ internal static class UiShot
             Console.Out.Flush();
         }
 
-        // --uishot-cues <count>: fill the loaded deck A's saved pads, spread over
-        // the track. The waveform strip's cue markers are the only evidence this
-        // change has on a still, and the sandbox home's own library rows are not
-        // a dependable source: a lane home rebuilds its library, so the pads can
-        // be empty with a track plainly loaded. Seeding the real pads (not a
-        // parallel list) also exercises the redraw the pads' PropertyChanged
-        // raises, which is what a saved cue does in the running app.
-        if (Harness.Flag(args, "--uishot-cues") is { } cueCountText
-            && int.TryParse(cueCountText, out int cueCount)
-            && cueCount > 0
-            && window.DataContext is MainViewModel cueVm
-            && cueVm.DeckA.DurationSeconds > 0)
-        {
-            var slots = cueVm.DeckA.Cues.Slots;
-            int filled = Math.Min(cueCount, slots.Count);
-            for (int i = 0; i < filled; i++)
-                slots[i].Set((long)Math.Round(
-                    cueVm.DeckA.DurationSeconds * 1000.0 * (i + 1) / (filled + 1),
-                    MidpointRounding.AwayFromZero));
-            UiPump.Pump(Harness.QuietMs);
-            Console.Out.WriteLine(
-                $"uishot: cues {filled} on deck A over {cueVm.DeckA.DurationSeconds:0.0}s " +
-                $"(pads {string.Join(",", slots.Take(filled).Select(s => s.PositionText))})");
-            Console.Out.Flush();
-        }
-
-
+        // window rules - one instance however often it is asked for, and no
+        // survivor once the main window closes. A capture cannot show this: the
+        // pop-out is a second HWND and only one window is ever in the bitmap.
         if (Harness.Flag(args, "--uishot-popout-check") != null && window is MainWindow popoutMain)
         {
             if (popoutMain.LyricsHost.FindName("LyricsPopOutButton") is not Button popoutButton)
