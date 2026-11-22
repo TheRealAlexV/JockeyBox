@@ -45,6 +45,7 @@ public static class SelftestRunner
             ("deck-output-delay", DeckOutputDelay),
             ("chain-bypass-bit-exact", ChainBypassBitExact),
             ("chain-latency-align-null", ChainLatencyAlignNull),
+            ("eq-flat-bit-exact", EqFlatBitExact),
         };
 
         output.WriteLine("JockeyBox selftest - offline audio graph, no sound device");
@@ -518,6 +519,55 @@ public static class SelftestRunner
         Require(bestLag == 0,
             $"best lag is {bestLag} frames, expected 0 (declared latency {shortDelay} vs {longDelay})");
         test.Note($"best lag 0 over +/-{maxLag} frames");
+    }
+
+    /// <summary>
+    /// The mix EQ, at engine level. Two claims, in this order. A band set at its
+    /// centre must leave the deck block byte-for-byte identical on both
+    /// <see cref="EqPath"/>s - the same contract the DSP ten-band EQ holds - and a
+    /// band moved off centre must visibly change the block, otherwise the flat case
+    /// would pass on an EQ that is simply disconnected. Each path keeps its own
+    /// filter state, so both are exercised through one instance.
+    /// </summary>
+    private static void EqFlatBitExact(Case test)
+    {
+        const int frames = AudioEngine.BlockFrames;
+        var input = new float[frames * AudioEngine.Channels];
+        for (int i = 0; i < input.Length; i++)
+            input[i] = (float)(0.5 * Math.Sin(i * 0.017) + (i % 7) * 0.001);
+
+        var eq = new MixEq();
+        eq.SetAll(0, 0, 0);
+        for (int i = 0; i < 64; i++) eq.BeginBlock(); // settle the smoothing at centre
+
+        var paths = new[] { EqPath.DeckA, EqPath.DeckB };
+        foreach (var path in paths)
+        {
+            var output = (float[])input.Clone();
+            eq.Process(output, 0, frames, path);
+            Require(MemoryMarshal.AsBytes(output.AsSpan()).SequenceEqual(
+                    MemoryMarshal.AsBytes(input.AsSpan())),
+                $"{path} at flat changed the block");
+        }
+
+        // Negative half: move the low band 12 dB up and prove both paths react.
+        eq.SetTargetDb(EqBand.Low, 12f);
+        for (int i = 0; i < 64; i++) eq.BeginBlock();
+
+        double maxDeviation = 0;
+        foreach (var path in paths)
+        {
+            var output = (float[])input.Clone();
+            eq.Process(output, 0, frames, path);
+            double pathDeviation = 0;
+            for (int i = 0; i < output.Length; i++)
+                pathDeviation = Math.Max(pathDeviation, Math.Abs(output[i] - (double)input[i]));
+            Require(pathDeviation > 0,
+                $"{path} at +12 dB low is identical to the input: the flat case proves nothing");
+            maxDeviation = Math.Max(maxDeviation, pathDeviation);
+        }
+
+        test.Note($"paths={paths.Length}", "flat-bit-exact", $"max|dev|={maxDeviation:0.000000}");
     }
 
     /// <summary>Test double: a fixed frame delay that declares exactly that latency.</summary>
