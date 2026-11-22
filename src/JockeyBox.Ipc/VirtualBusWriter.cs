@@ -18,7 +18,8 @@ public sealed unsafe class VirtualBusWriter : IDisposable
 {
     private readonly MemoryMappedFile _map;
     private readonly MemoryMappedViewAccessor _view;
-    private readonly FileStream _claim;
+    private readonly FileStream? _claim;
+    private readonly bool _ownsRegion;
     private readonly string _path;
     private readonly byte* _base;
     private readonly int _capacity;
@@ -33,11 +34,13 @@ public sealed unsafe class VirtualBusWriter : IDisposable
         int channels,
         int blockFrames,
         int capacityBlocks,
-        FileStream claim,
+        FileStream? claim,
         MemoryMappedFile map,
-        MemoryMappedViewAccessor view)
+        MemoryMappedViewAccessor view,
+        bool creator)
     {
         _claim = claim;
+        _ownsRegion = creator;
         _map = map;
         _view = view;
         _path = BusLayout.PathFor(name);
@@ -53,6 +56,14 @@ public sealed unsafe class VirtualBusWriter : IDisposable
         byte* ptr = null;
         view.SafeMemoryMappedViewHandle.AcquirePointer(ref ptr);
         _base = ptr + view.PointerOffset;
+
+        if (!creator)
+        {
+            // Attached: the region belongs to someone else. Continue publishing from wherever
+            // the creator left off, without writing a single header byte.
+            _write = Volatile.Read(ref WriteIndexRef());
+            return;
+        }
 
         Unsafe.WriteUnaligned(_base + BusLayout.MagicOffset, unchecked((int)BusLayout.Magic));
         Unsafe.WriteUnaligned(_base + BusLayout.VersionOffset, BusLayout.Version);
@@ -76,6 +87,40 @@ public sealed unsafe class VirtualBusWriter : IDisposable
 
         // Publish the cursor last: a reader that opens now sees a complete header.
         Volatile.Write(ref WriteIndexRef(), 0L);
+    }
+
+    /// <summary>
+    /// Attaches to a ring someone else created: the driver's Global\ section on Windows, or an
+    /// existing region on Linux. Validates the header, then continues publishing from the
+    /// creator's cursor. It never initialises or re-initialises a header field.
+    /// </summary>
+    /// <exception cref="VirtualBusException">No such region, or its header is not a valid ring.</exception>
+    public static VirtualBusWriter Attach(string name, BusScope scope = BusScope.Local)
+    {
+        MemoryMappedFile? map = null;
+        MemoryMappedViewAccessor? view = null;
+        try
+        {
+            map = BusLayout.OpenExisting(name, scope);
+            view = map.CreateViewAccessor(0, 0, MemoryMappedFileAccess.ReadWrite);
+            var geometry = BusLayout.ReadHeader(view, name);
+            return new VirtualBusWriter(
+                name,
+                geometry.SampleRate,
+                geometry.Channels,
+                geometry.BlockFrames,
+                geometry.CapacityBlocks,
+                claim: null,
+                map,
+                view,
+                creator: false);
+        }
+        catch
+        {
+            view?.Dispose();
+            map?.Dispose();
+            throw;
+        }
     }
 
     public string Name { get; }
@@ -107,9 +152,22 @@ public sealed unsafe class VirtualBusWriter : IDisposable
     /// A writer is already open for this name, or an existing region carries a different
     /// protocol version.
     /// </exception>
-    public static VirtualBusWriter Open(string name, int sampleRate, int channels, int blockFrames, int capacityBlocks)
+    public static VirtualBusWriter Open(
+        string name,
+        int sampleRate,
+        int channels,
+        int blockFrames,
+        int capacityBlocks,
+        BusScope scope = BusScope.Local)
     {
         BusLayout.ValidateName(name);
+        if (scope == BusScope.Global && OperatingSystem.IsWindows())
+        {
+            throw new VirtualBusException(
+                $"Cannot create '{BusLayout.MapNameFor(name, scope)}' from this process: UAC strips " +
+                "SeCreateGlobalPrivilege from a non-elevated token, so only the kernel driver may create a Global\\ section. " +
+                "Let the driver create it, then call VirtualBusWriter.Attach(name, BusScope.Global).");
+        }
         if (sampleRate <= 0) throw new ArgumentOutOfRangeException(nameof(sampleRate), sampleRate, "Sample rate must be positive.");
         if (channels <= 0) throw new ArgumentOutOfRangeException(nameof(channels), channels, "Channel count must be positive.");
         if (blockFrames <= 0) throw new ArgumentOutOfRangeException(nameof(blockFrames), blockFrames, "Block size must be positive.");
@@ -137,9 +195,20 @@ public sealed unsafe class VirtualBusWriter : IDisposable
         {
             string path = BusLayout.PathFor(name);
             long regionBytes = BusLayout.RegionSize(sampleRate, channels, blockFrames, capacityBlocks);
-            file = new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite);
-            long capacity = Math.Max(regionBytes, file.Length);
-            map = MemoryMappedFile.CreateFromFile(file, null, capacity, MemoryMappedFileAccess.ReadWrite, HandleInheritability.None, leaveOpen: false);
+            long capacity;
+            if (OperatingSystem.IsWindows())
+            {
+                // A named, pagefile-backed Local\ section: a reader in this session opens it by
+                // name. Global\ never reaches here; the driver creates that one.
+                capacity = regionBytes;
+                map = MemoryMappedFile.CreateNew(BusLayout.MapNameFor(name, scope), capacity);
+            }
+            else
+            {
+                file = new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.ReadWrite);
+                capacity = Math.Max(regionBytes, file.Length);
+                map = MemoryMappedFile.CreateFromFile(file, null, capacity, MemoryMappedFileAccess.ReadWrite, HandleInheritability.None, leaveOpen: false);
+            }
             view = map.CreateViewAccessor(0, capacity, MemoryMappedFileAccess.ReadWrite);
 
             bool foreignVersion = false;
@@ -167,7 +236,7 @@ public sealed unsafe class VirtualBusWriter : IDisposable
                     "Refusing to overwrite a region another version owns.");
             }
 
-            return new VirtualBusWriter(name, sampleRate, channels, blockFrames, capacityBlocks, claim, map, view);
+            return new VirtualBusWriter(name, sampleRate, channels, blockFrames, capacityBlocks, claim, map, view, creator: true);
         }
         catch
         {
@@ -261,7 +330,10 @@ public sealed unsafe class VirtualBusWriter : IDisposable
         _view.SafeMemoryMappedViewHandle.ReleasePointer();
         _view.Dispose();
         _map.Dispose();
-        _claim.Dispose();
+        _claim?.Dispose();
+
+        if (!_ownsRegion)
+            return; // the creator still owns these bytes; leave them as they are
 
         try
         {

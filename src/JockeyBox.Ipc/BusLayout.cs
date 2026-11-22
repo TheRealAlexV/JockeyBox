@@ -1,4 +1,20 @@
+using System.IO.MemoryMappedFiles;
+using System.Runtime.CompilerServices;
+
 namespace JockeyBox.Ipc;
+
+/// <summary>
+/// Who names the section, and therefore who may create it.
+/// <see cref="Local"/> lives in the calling session, so the app can create it and a reader in
+/// the same session can open it. <see cref="Global"/> is visible to a session-0 driver, but only
+/// a process holding <c>SeCreateGlobalPrivilege</c> may create one — so for Global the driver
+/// creates and the app attaches.
+/// </summary>
+public enum BusScope
+{
+    Local,
+    Global,
+}
 
 /// <summary>
 /// Byte layout of the shared region, at offset 0 of the mapped area.
@@ -77,8 +93,11 @@ public static class BusLayout
         return PayloadOffset + ((long)capacityBlocks * blockFrames * channels * sizeof(float));
     }
 
-    /// <summary>Name the mapping is published under, as the brief specifies.</summary>
-    public static string MapNameFor(string name) => @"Local\JockeyBox.Bus." + name;
+    /// <summary>Name of the section for <paramref name="name"/> in the given scope.</summary>
+    public static string MapNameFor(string name, BusScope scope) =>
+        scope == BusScope.Global
+            ? @"Global\JockeyBox.Bus." + name
+            : @"Local\JockeyBox.Bus." + name;
 
     /// <summary>Directory holding the backing regions (one file per bus name).</summary>
     public static string DirectoryFor() => Path.Combine(Path.GetTempPath(), "JockeyBox.Bus");
@@ -112,5 +131,111 @@ public static class BusLayout
             if (!ok)
                 throw new ArgumentException($"Bus name '{name}' may only contain letters, digits, '_', '-' and '.'.", nameof(name));
         }
+    }
+
+    /// <summary>
+    /// Opens an existing region by name. Nothing is created here: on Windows the section is
+    /// opened by name (the driver owns Global, the app owns Local); on Linux the backing file
+    /// is opened.
+    /// </summary>
+    internal static MemoryMappedFile OpenExisting(string name, BusScope scope)
+    {
+        ValidateName(name);
+        string mapName = MapNameFor(name, scope);
+
+        if (OperatingSystem.IsWindows())
+        {
+            try
+            {
+                return MemoryMappedFile.OpenExisting(mapName, MemoryMappedFileRights.ReadWrite);
+            }
+            catch (FileNotFoundException ex)
+            {
+                throw new VirtualBusException(
+                    $"No section named '{mapName}' exists. A Global\\ bus is created by the driver before the app attaches; " +
+                    "a Local\\ bus is created by the app before a reader attaches.", ex);
+            }
+        }
+
+        string path = PathFor(name);
+        if (!File.Exists(path))
+            throw new VirtualBusException($"No bus named '{name}' exists; expected region file {path}.");
+
+        return MemoryMappedFile.CreateFromFile(path, FileMode.Open, null, 0, MemoryMappedFileAccess.ReadWrite);
+    }
+
+    /// <summary>
+    /// Validates the header of an already-created region and returns its geometry.
+    /// Never writes a byte: the creator owns the header.
+    /// </summary>
+    internal static unsafe (int SampleRate, int Channels, int BlockFrames, int CapacityBlocks) ReadHeader(
+        MemoryMappedViewAccessor view, string name)
+    {
+        byte* ptr = null;
+        view.SafeMemoryMappedViewHandle.AcquirePointer(ref ptr);
+        try
+        {
+            return ReadHeader(ptr + view.PointerOffset, view.Capacity, name);
+        }
+        finally
+        {
+            view.SafeMemoryMappedViewHandle.ReleasePointer();
+        }
+    }
+
+    private static unsafe (int SampleRate, int Channels, int BlockFrames, int CapacityBlocks) ReadHeader(
+        byte* region, long regionBytes, string name)
+    {
+        if (regionBytes < HeaderSize)
+        {
+            throw new VirtualBusException(
+                $"Bus '{name}' region is {regionBytes} bytes; expected at least the {HeaderSize}-byte header.");
+        }
+
+        int magic = Unsafe.ReadUnaligned<int>(region + MagicOffset);
+        if (magic != unchecked((int)Magic))
+        {
+            throw new VirtualBusException(
+                $"Bus '{name}' has magic 0x{unchecked((uint)magic):X8}; expected 0x{Magic:X8} (bytes 'J','B','U','S'). " +
+                "The region is not a JockeyBox transport ring.");
+        }
+
+        int version = Unsafe.ReadUnaligned<int>(region + VersionOffset);
+        if (version != Version)
+        {
+            throw new VirtualBusException(
+                $"Bus '{name}' speaks protocol version {version}; expected version {Version}.");
+        }
+
+        int headerSize = Unsafe.ReadUnaligned<int>(region + HeaderSizeOffset);
+        int payloadOffset = Unsafe.ReadUnaligned<int>(region + PayloadOffsetFieldOffset);
+        int slotCount = Unsafe.ReadUnaligned<int>(region + ReaderSlotCountFieldOffset);
+        if (headerSize != HeaderSize || payloadOffset != PayloadOffset || slotCount != ReaderSlotCount)
+        {
+            throw new VirtualBusException(
+                $"Bus '{name}' has headerSize={headerSize}, payloadOffset={payloadOffset}, readerSlotCount={slotCount}; " +
+                $"expected {HeaderSize}, {PayloadOffset}, {ReaderSlotCount}.");
+        }
+
+        int sampleRate = Unsafe.ReadUnaligned<int>(region + SampleRateOffset);
+        int channels = Unsafe.ReadUnaligned<int>(region + ChannelsOffset);
+        int blockFrames = Unsafe.ReadUnaligned<int>(region + BlockFramesOffset);
+        int capacityBlocks = Unsafe.ReadUnaligned<int>(region + CapacityBlocksOffset);
+        if (sampleRate <= 0 || channels <= 0 || blockFrames <= 0 || capacityBlocks <= 0)
+        {
+            throw new VirtualBusException(
+                $"Bus '{name}' has invalid geometry: sampleRate={sampleRate}, channels={channels}, " +
+                $"blockFrames={blockFrames}, capacityBlocks={capacityBlocks}.");
+        }
+
+        long needed = RegionSize(sampleRate, channels, blockFrames, capacityBlocks);
+        if (regionBytes < needed)
+        {
+            throw new VirtualBusException(
+                $"Bus '{name}' region is {regionBytes} bytes; its header describes {needed} bytes " +
+                $"({capacityBlocks} blocks x {blockFrames} frames x {channels} channels from offset {PayloadOffset}).");
+        }
+
+        return (sampleRate, channels, blockFrames, capacityBlocks);
     }
 }

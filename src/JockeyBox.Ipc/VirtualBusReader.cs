@@ -100,11 +100,26 @@ public sealed unsafe class VirtualBusReader : IDisposable
     /// How far behind the writer this reader tolerates before jumping. Defaults to the ring
     /// capacity, so only a real overrun forces a correction.
     /// </param>
-    public static VirtualBusReader Open(string name, int maxLagBlocks = 0)
-        => Open(name, slot: -1, maxLagBlocks);
+    public static VirtualBusReader Open(string name, int maxLagBlocks = 0, BusScope scope = BusScope.Local)
+        => Join(name, slot: -1, maxLagBlocks, scope);
 
     /// <summary>Joins a specific reader slot (0..7) instead of the first free one.</summary>
-    public static VirtualBusReader Open(string name, int slot, int maxLagBlocks)
+    public static VirtualBusReader Open(string name, int slot, int maxLagBlocks, BusScope scope = BusScope.Local)
+        => Join(name, slot, maxLagBlocks, scope);
+
+    /// <summary>
+    /// Attaches to a ring someone else created: the driver's Global\ section on Windows, or an
+    /// existing region on Linux. Validates the header and never initialises it, so a live
+    /// writer's cursor stays exactly where it is.
+    /// </summary>
+    public static VirtualBusReader Attach(string name, int maxLagBlocks = 0, BusScope scope = BusScope.Local)
+        => Join(name, slot: -1, maxLagBlocks, scope);
+
+    /// <summary>Attaches to a specific reader slot (0..7).</summary>
+    public static VirtualBusReader Attach(string name, int slot, int maxLagBlocks, BusScope scope = BusScope.Local)
+        => Join(name, slot, maxLagBlocks, scope);
+
+    private static VirtualBusReader Join(string name, int slot, int maxLagBlocks, BusScope scope)
     {
         BusLayout.ValidateName(name);
         if (maxLagBlocks < 0)
@@ -112,65 +127,20 @@ public sealed unsafe class VirtualBusReader : IDisposable
         if (slot >= BusLayout.ReaderSlotCount)
             throw new ArgumentOutOfRangeException(nameof(slot), slot, $"Reader slots are 0..{BusLayout.ReaderSlotCount - 1}.");
 
-        string path = BusLayout.PathFor(name);
-        if (!File.Exists(path))
-            throw new VirtualBusException($"No bus named '{name}' exists; open a VirtualBusWriter first. Expected region: {path}");
-
-        long length = new FileInfo(path).Length;
-        if (length < BusLayout.HeaderSize)
-        {
-            throw new VirtualBusException(
-                $"Bus '{name}' region is {length} bytes; expected at least the {BusLayout.HeaderSize}-byte header. " +
-                "A writer may still be initialising it.");
-        }
-
         MemoryMappedFile? map = null;
         MemoryMappedViewAccessor? view = null;
         bool claimed = false;
         int chosenSlot = -1;
         try
         {
-            map = MemoryMappedFile.CreateFromFile(path, FileMode.Open, null, 0, MemoryMappedFileAccess.ReadWrite);
-            view = map.CreateViewAccessor(0, length, MemoryMappedFileAccess.ReadWrite);
+            map = BusLayout.OpenExisting(name, scope);
+            view = map.CreateViewAccessor(0, 0, MemoryMappedFileAccess.ReadWrite);
 
-            int magic, version, sampleRate, channels, blockFrames, capacityBlocks;
-            byte* probe = null;
-            view.SafeMemoryMappedViewHandle.AcquirePointer(ref probe);
-            try
-            {
-                byte* b = probe + view.PointerOffset;
-                magic = Unsafe.ReadUnaligned<int>(b + BusLayout.MagicOffset);
-                version = Unsafe.ReadUnaligned<int>(b + BusLayout.VersionOffset);
-                sampleRate = Unsafe.ReadUnaligned<int>(b + BusLayout.SampleRateOffset);
-                channels = Unsafe.ReadUnaligned<int>(b + BusLayout.ChannelsOffset);
-                blockFrames = Unsafe.ReadUnaligned<int>(b + BusLayout.BlockFramesOffset);
-                capacityBlocks = Unsafe.ReadUnaligned<int>(b + BusLayout.CapacityBlocksOffset);
-            }
-            finally
-            {
-                view.SafeMemoryMappedViewHandle.ReleasePointer();
-            }
-
-            if (magic != unchecked((int)BusLayout.Magic))
-            {
-                throw new VirtualBusException(
-                    $"Bus '{name}' has magic 0x{unchecked((uint)magic):X8}; expected 0x{BusLayout.Magic:X8} (bytes 'J','B','U','S'). " +
-                    "The region is not a JockeyBox transport ring.");
-            }
-
-            if (version != BusLayout.Version)
-            {
-                throw new VirtualBusException(
-                    $"Bus '{name}' speaks protocol version {version}; expected version {BusLayout.Version}.");
-            }
-
-            long needed = BusLayout.RegionSize(sampleRate, channels, blockFrames, capacityBlocks);
-            if (length < needed)
-            {
-                throw new VirtualBusException(
-                    $"Bus '{name}' region is {length} bytes; its header describes {needed} bytes " +
-                    $"({capacityBlocks} blocks x {blockFrames} frames x {channels} channels from offset {BusLayout.PayloadOffset}).");
-            }
+            var geometry = BusLayout.ReadHeader(view, name);
+            int sampleRate = geometry.SampleRate;
+            int channels = geometry.Channels;
+            int blockFrames = geometry.BlockFrames;
+            int capacityBlocks = geometry.CapacityBlocks;
 
             int chosen;
             if (slot >= 0)
