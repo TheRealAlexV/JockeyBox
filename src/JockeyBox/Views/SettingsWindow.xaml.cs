@@ -419,8 +419,17 @@ public partial class SettingsWindow : Window
             Dispatcher.BeginInvoke(UpdateMicListFade, DispatcherPriority.Loaded);
     }
 
+    /// <summary>
+    /// True once the post-layout pass has run at least once. That pass is queued at
+    /// <see cref="DispatcherPriority.Loaded"/> by <c>RenderMicRows</c>, so it cannot run
+    /// before the window is shown and the dispatcher pumps. A capture waits on this
+    /// instead of sleeping for a fixed time and calling it settled.
+    /// </summary>
+    internal bool MicListFadeResolved { get; private set; }
+
     private void UpdateMicListFade()
     {
+        MicListFadeResolved = true;
         if (MicListFade is null || MicListScroll is null) return;
 
         // Half a pixel of slack: scrolling to the very end can leave a fraction.

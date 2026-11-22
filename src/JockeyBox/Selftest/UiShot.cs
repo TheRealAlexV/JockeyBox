@@ -272,12 +272,15 @@ internal static class UiShot
         }
 
         var settleWatch = Stopwatch.StartNew();
-        bool settled = true;
+        // Never true by construction: every branch below has to earn it, so a window
+        // that is not ready fails the capture instead of passing on a sleep.
+        bool settled = false;
 
         // Named in the settle line so a future reader can tell "settled in 50 ms
         // because nothing was ever busy" from "settled because the scan finished".
-        string waitedOn = "fixed pump (no view model)";
-        string busyState = "no view model to watch";
+        // Both are overwritten on every path below; "unset" means a branch forgot.
+        string waitedOn = "unset";
+        string busyState = "unset";
         // Both reported in the settle line: the quiet window that was required, and
         // whether it was ever interrupted by a flag rising inside it.
         string quietNote = "";
@@ -402,9 +405,66 @@ internal static class UiShot
         }
         else
         {
-            // No view model to watch (the settings window): the old fixed pump is
-            // all there is, and hanging on nothing would be worse.
-            UiPump.Pump(waitMs);
+            // These windows have no MainViewModel, so there is no IsPlaylistLoading
+            // to frame them. A fixed pump is a sleep wearing a settle's name - the
+            // last captures reported "3015ms of 3000ms" from exactly that. Each
+            // window names the state that is false until its data lands, and the
+            // capture waits on it inside the same budget, then requires the signal
+            // to hold for a quiet window as the main path does.
+            (Func<bool> Ready, Func<string> State)? signal = null;
+            if (window is SettingsWindow settingsWindow)
+            {
+                // The dialog stamps its controls in the constructor, so there is
+                // nothing pending there by the time Show() returns. What is pending
+                // is the post-layout pass: RenderMicRows queues UpdateMicListFade at
+                // DispatcherPriority.Loaded, which cannot have run before the
+                // dispatcher does. False at start, true once the window finished
+                // its own deferred work.
+                signal = (() => settingsWindow.MicListFadeResolved,
+                          () => $"MicListFade resolved={settingsWindow.MicListFadeResolved}");
+                waitedOn = "settings post-layout pass (MicListFade)";
+            }
+            else if (window.DataContext is DiagnosticsViewModel diagVm)
+            {
+                // Refresh() runs once in the constructor; the window's 120 ms ticker
+                // makes it two only after Loaded and a live dispatcher. One read is
+                // construction, two is the running panel.
+                signal = (() => diagVm.RefreshCount >= 2,
+                          () => $"diagnostics reads={diagVm.RefreshCount}");
+                waitedOn = "diagnostics snapshot read (2 of 2)";
+            }
+
+            if (signal is not { } watch)
+            {
+                // Nothing to wait on: no signal this window can offer. Do not invent
+                // one that is true by construction - fail and say so.
+                settled = false;
+                waitedOn = $"none: window '{target}' offers no ready signal";
+                busyState = "unknown";
+            }
+            else
+            {
+                bool readyReached = UiPump.PumpUntil(watch.Ready, waitMs);
+                bool quiet = readyReached;
+                if (readyReached)
+                {
+                    var quietWatch = Stopwatch.StartNew();
+                    while (quietWatch.ElapsedMilliseconds < Harness.QuietMs)
+                    {
+                        UiPump.Pump(25);
+                        if (!watch.Ready())
+                        {
+                            quiet = false;
+                            break;
+                        }
+                    }
+                }
+
+                quietNote = $" ({Harness.QuietMs}ms quiet)";
+                settled = readyReached && quiet;
+                if (!readyReached) waitedOn += " (still waiting)";
+                busyState = watch.State() + (quiet ? "" : ", signal fell inside the quiet window");
+            }
         }
 
         settleWatch.Stop();
