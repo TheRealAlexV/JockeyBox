@@ -460,6 +460,13 @@ public partial class SettingsWindow : Window
     /// </summary>
     internal bool MicListRendered { get; private set; }
 
+    /// <summary>
+    /// Marks the Border that <see cref="BuildMicRow"/> makes for one device. The panel
+    /// also holds captions and an ASIO section gap, and that gap is a Border too, so
+    /// "every Border child" is not the same set as "every device row".
+    /// </summary>
+    internal const string MicRowTag = "MicRow";
+
 
     private TextBlock GroupCaption(string text) => new()
     {
@@ -758,6 +765,7 @@ public partial class SettingsWindow : Window
     {
         var border = new Border
         {
+            Tag = MicRowTag,
             Background = row.Enabled ? LookupBrush("PanelBrush", Brushes.Black) : Brushes.Transparent,
             BorderBrush = row.Enabled ? LookupBrush("AccentABrush", Brushes.Cyan) : LookupBrush("BorderBrush", Brushes.DimGray),
             BorderThickness = new Thickness(row.Enabled ? 1 : 0, 0, 0, 0),

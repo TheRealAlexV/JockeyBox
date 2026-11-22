@@ -52,7 +52,11 @@ public sealed class MicListTests
                 window.UpdateLayout();
 
                 var panel = (StackPanel)window.FindName("MicListPanel")!;
-                var rows = panel.Children.OfType<Border>().ToList();
+                // Device rows are tagged by BuildMicRow. The panel's other children are
+                // captions and the ASIO section's gap, and that gap is a Border as well,
+                // so "every Border child" would count 6 px of padding as a device row.
+                var rows = panel.Children.OfType<Border>()
+                    .Where(b => Equals(b.Tag, SettingsWindow.MicRowTag)).ToList();
 
                 Assert.True(rows.Count >= 12, $"expected at least 12 device rows, got {rows.Count}");
                 Assert.All(rows, row => Assert.True(row.ActualHeight > 18,
