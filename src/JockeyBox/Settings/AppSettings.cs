@@ -212,6 +212,41 @@ public class AppSettings
     // migration, so do not bump SettingsSchemaVersion for it.
 
     // ------------------------------------------------------------------
+    // Virtual ASIO driver feed (2.3).
+    //
+    // The native driver reads Local\JockeyBox.Bus.<name> and serves it as ASIO
+    // inputs. These flags choose which bus publishes into that ring. Additive on
+    // schema 5, same precedent as MixerEnabled: a settings.json without the keys
+    // deserialises to false, so no install starts writing the ring by accident.
+    // A bus can be both a physical output and the ring; the flag never replaces
+    // a routing choice.
+    // ------------------------------------------------------------------
+
+    /// <summary>Deck A's bus also publishes to the virtual ASIO ring.</summary>
+    public bool VirtualAsioDeckA { get; set; }
+
+    /// <summary>Deck B's bus also publishes to the virtual ASIO ring.</summary>
+    public bool VirtualAsioDeckB { get; set; }
+
+    /// <summary>The recording-device bus also publishes to the virtual ASIO ring.</summary>
+    public bool VirtualAsioRecording { get; set; }
+
+    /// <summary>The soundboard bus also publishes to the virtual ASIO ring.</summary>
+    public bool VirtualAsioSoundboard { get; set; }
+
+    /// <summary>The monitor (operator cue) bus also publishes to the virtual ASIO ring.</summary>
+    public bool VirtualAsioMonitor { get; set; }
+
+    /// <summary>
+    /// Section name of the ring, without the <c>Local\JockeyBox.Bus.</c> prefix. Must
+    /// match the driver's <c>JOCKEYBOX_ASIO_BUS</c>, whose default is "main".
+    /// </summary>
+    public string VirtualAsioBusName { get; set; } = "main";
+
+    // One ring, so one bus publishes: with several flags set the engine uses the
+    // first in routing order and names the ignored buses in the log.
+
+    // ------------------------------------------------------------------
     // Talk-over microphone (2.0).
     //
     // The voice is mixed into the program bus inside the engine, so it reaches

@@ -781,7 +781,29 @@ public sealed class DualDeckTransport : IDisposable
                 Log.Info("no audio routing configured yet: routing Deck A to the default output");
         }
 
-        return new AudioRoute(deckA, deckB, recording, soundboard, monitor);
+        return new AudioRoute(deckA, deckB, recording, soundboard, monitor)
+        {
+            VirtualBuses = VirtualBusesFromSettings(settings),
+            VirtualBusName = string.IsNullOrWhiteSpace(settings.VirtualAsioBusName)
+                ? "main"
+                : settings.VirtualAsioBusName.Trim(),
+        };
+    }
+
+    /// <summary>
+    /// The buses that also publish to the virtual ASIO ring, in routing order. The
+    /// flags are independent of device routing: a bus can feed a physical device and
+    /// the ring at once, and a bus with no device still works as the ring's source.
+    /// </summary>
+    internal static IReadOnlyList<BusKind> VirtualBusesFromSettings(AppSettings settings)
+    {
+        var buses = new List<BusKind>(5);
+        if (settings.VirtualAsioDeckA) buses.Add(BusKind.DeckA);
+        if (settings.VirtualAsioDeckB) buses.Add(BusKind.DeckB);
+        if (settings.VirtualAsioRecording) buses.Add(BusKind.Recording);
+        if (settings.VirtualAsioSoundboard) buses.Add(BusKind.Soundboard);
+        if (settings.VirtualAsioMonitor) buses.Add(BusKind.Monitor);
+        return buses;
     }
 
     /// <summary>The current default render endpoint, or null when the machine has no audio output.</summary>
@@ -971,7 +993,10 @@ public sealed class DualDeckTransport : IDisposable
                  $"deckB={Describe(route.DeckBDeviceId)} " +
                  $"recording={Describe(route.RecordingDeviceId)} " +
                  $"soundboard={Describe(route.SoundboardDeviceId)} " +
-                 $"monitor={Describe(route.MonitorDeviceId)} mics={Engine.Mics.Count}");
+                 $"monitor={Describe(route.MonitorDeviceId)} mics={Engine.Mics.Count}" +
+                 (route.VirtualBuses.Count > 0
+                     ? $" virtualAsio={route.VirtualBusName}<-{route.VirtualBuses[0]}"
+                     : ""));
     }
 
     /// <summary>Friendly name for a route id ("none" for None).</summary>

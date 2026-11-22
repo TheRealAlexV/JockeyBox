@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -22,6 +23,19 @@ public sealed record AudioRoute(
     string? SoundboardDeviceId = null,
     string? MonitorDeviceId = null)
 {
+    /// <summary>
+    /// Buses that <b>also</b> publish to the virtual ASIO ring, so the native driver
+    /// has audio to serve. Empty means nobody writes the ring. This is not a device:
+    /// a bus can be both a physical output and the ring.
+    /// </summary>
+    public IReadOnlyList<BusKind> VirtualBuses { get; init; } = Array.Empty<BusKind>();
+
+    /// <summary>
+    /// Section name of the ring, without the <c>Local\JockeyBox.Bus.</c> prefix.
+    /// The driver reads the same name (its <c>JOCKEYBOX_ASIO_BUS</c> default is "main").
+    /// </summary>
+    public string VirtualBusName { get; init; } = "main";
+
     /// <summary>The device id for a bus, or null for None.</summary>
     public string? DeviceFor(BusKind kind) => kind switch
     {
@@ -145,10 +159,23 @@ public sealed class AudioEngine : IDisposable
     private readonly object _deviceDelayLock = new();
 
     /// <summary>
-    /// The first open device sink. Only used as the "is there any device at all?"
-    /// sentinel for Start()/failure detection - it is no longer a program sink.
+    /// The first open sink. Only used as the "is there any output at all?" sentinel
+    /// for Start()/failure detection - it is no longer a program sink. A device is
+    /// not required: a bus routed only to the virtual ASIO ring keeps the engine up.
     /// </summary>
-    private EndpointSink? _firstSink;
+    private IAudioSink? _firstSink;
+
+    /// <summary>The virtual ASIO ring producer, or null when no bus is flagged for it.</summary>
+    private VirtualBusSink? _virtualSink;
+
+    /// <summary>Which bus feeds the virtual ring (only meaningful while <see cref="_virtualSink"/> is set).</summary>
+    private BusKind _virtualBus = BusKind.Monitor;
+
+    /// <summary>
+    /// When the render thread started, in <see cref="Stopwatch"/> ticks. A route with
+    /// no device has no device clock, so the block cadence is measured against this.
+    /// </summary>
+    private long _clockStart;
     private AudioRoute _route = new();
 
     private readonly ScheduledActions _scheduled = new();
@@ -669,10 +696,17 @@ public sealed class AudioEngine : IDisposable
         }).ConfigureAwait(false);
 
         List<DeviceOutput> old;
+        IDisposable? oldVirtual;
         lock (_sinkLock)
         {
             old = new List<DeviceOutput>(_outputs);
             _outputs.Clear();
+
+            // The ring is not a device: one producer per route, attached to the one
+            // bus flagged for it. Created here, never per block.
+            oldVirtual = _virtualSink;
+            _virtualSink = OpenVirtualBus(route, out _virtualBus);
+
             foreach (var output in built.Outputs)
             {
                 _outputs.Add(output);
@@ -695,6 +729,7 @@ public sealed class AudioEngine : IDisposable
         }
 
         foreach (var output in old) DisposeQuietly(output);
+        DisposeQuietly(oldVirtual);
 
         // A reopened device starts with an empty history; keeping the old tail
         // would replay up to OutputDelayMs of audio into the new device.
@@ -726,6 +761,7 @@ public sealed class AudioEngine : IDisposable
         }
 
         _running = true;
+        _clockStart = Stopwatch.GetTimestamp();
         _thread = new Thread(RenderLoop)
         {
             IsBackground = true,
@@ -749,18 +785,43 @@ public sealed class AudioEngine : IDisposable
             old = new List<DeviceOutput>(_outputs);
             _outputs.Clear();
             foreach (var bus in _buses) bus.Sink = null;
+            DisposeQuietly(_virtualSink);
+            _virtualSink = null;
             _firstSink = null;
         }
 
         foreach (var output in old) DisposeQuietly(output);
     }
 
-    private EndpointSink? FirstOpenLocked()
+    private IAudioSink? FirstOpenLocked()
     {
         // Deck A first: when it is present it should set the pace, so a paused deck
         // still gets pulled in time with the device the audience hears.
         foreach (var output in _outputs) return output.Sink;
-        return null;
+
+        // No device is only "no output" when nothing else can take a block. A bus
+        // routed only to the virtual ASIO ring is a real output: demanding a WASAPI
+        // session here is the silence bug (engine never starts, no error anywhere).
+        return _virtualSink;
+    }
+
+    /// <summary>
+    /// Open the virtual ring producer for a route, or null when no bus is flagged.
+    /// Device sessions are plural; the ring is one section, so with several buses
+    /// flagged the first in routing order publishes and the rest are named in the log.
+    /// </summary>
+    private VirtualBusSink? OpenVirtualBus(AudioRoute route, out BusKind bus)
+    {
+        bus = BusKind.Monitor;
+        if (route.VirtualBuses == null || route.VirtualBuses.Count == 0) return null;
+
+        bus = route.VirtualBuses[0];
+        if (route.VirtualBuses.Count > 1)
+            Log.Warn($"virtual ASIO ring: {route.VirtualBuses.Count} buses are flagged for " +
+                     $"'{route.VirtualBusName}'; publishing {bus} only " +
+                     $"({string.Join(", ", route.VirtualBuses.Skip(1))} ignored)");
+
+        return VirtualBusSink.TryOpen(route.VirtualBusName, Rate, Channels, BlockFrames);
     }
 
     // ------------------------------------------------------------------ fader / tempo helpers
@@ -852,9 +913,20 @@ public sealed class AudioEngine : IDisposable
 
                 // Only render when the first device's clock wants data. Every other
                 // bus is corrected for drift against this one clock, never the other way.
-                if (firstSink.Ring.DepthFrames >= firstSink.Ring.TargetFrames)
+                if (firstSink is EndpointSink deviceSink)
                 {
-                    Thread.Sleep(2);
+                    if (deviceSink.Ring.DepthFrames >= deviceSink.Ring.TargetFrames)
+                    {
+                        Thread.Sleep(2);
+                        continue;
+                    }
+                }
+                // A virtual-only route has no device clock: the wall clock is the
+                // cadence, and the ring's 8-block depth rides out a late wake-up.
+                else if (_virtualSink is { } virtualSink &&
+                         virtualSink.IsAheadOfClock(_clockStart, BlockFrames, Rate))
+                {
+                    Thread.Sleep(1);
                     continue;
                 }
 
@@ -1029,6 +1101,11 @@ public sealed class AudioEngine : IDisposable
         //     so a device never receives two sessions carrying overlapping signal.
         foreach (var output in _outputs) output.Write(BlockFrames);
 
+        // 11b. The virtual ASIO ring gets the same post-delay block the flagged bus
+        //      gave its device, so the driver serves what the operator routed to it.
+        if (_virtualSink is { } virtualRing)
+            virtualRing.Write(_buses[(int)_virtualBus].Output, 0, BlockFrames);
+
         TraceIfDue(frame);
 
         Interlocked.Exchange(ref _frameIndex, frame + BlockFrames);
@@ -1179,7 +1256,7 @@ public sealed class AudioEngine : IDisposable
         Mics.Maintain(BlockFrames);
     }
 
-    private static void DisposeQuietly(EndpointSink? sink)
+    private static void DisposeQuietly(IDisposable? sink)
     {
         try { sink?.Dispose(); } catch { }
     }

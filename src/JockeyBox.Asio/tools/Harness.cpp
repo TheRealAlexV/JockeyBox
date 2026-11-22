@@ -48,6 +48,31 @@ struct Captures {
 Captures* g_capture = nullptr;
 const float* g_inBuf[kBusChannels][2] = {};
 
+// Read-only attach mode: what the driver handed the host during a live run.
+constexpr int kLiveMaxFrames = 512;      // the app's block is 480; leave room
+constexpr long kLiveMaxCaptures = 600;   // ~6 s at 100 blocks/s
+constexpr int kLiveMaxRefBlocks = 8;     // the ring's capacity: any block it can still hold
+
+struct LiveCaptures {
+    std::atomic<long> count{0};
+    int64_t writeIndex[kLiveMaxCaptures];
+    float left[kLiveMaxCaptures][kLiveMaxFrames];
+    float right[kLiveMaxCaptures][kLiveMaxFrames];
+    // The blocks the ring still held at this callback. Snapshotting here is what
+    // makes the comparison honest: the ring is a moving target, so reading the
+    // payload after the run would compare against blocks already overwritten.
+    // Every block the driver can still serve this callback is in this set.
+    int refCount[kLiveMaxCaptures];
+    float ref[kLiveMaxCaptures][kLiveMaxRefBlocks][kLiveMaxFrames * 2];
+};
+
+LiveCaptures* g_live = nullptr;
+std::atomic<int64_t>* g_liveWrite = nullptr;
+const uint8_t* g_livePayload = nullptr;
+int64_t g_liveBlockBytes = 0;
+int g_liveCapacity = 0;
+int g_liveFrames = 0;
+
 // Every published block carries its own index in every sample, so a wrong
 // block, a stale block or a byte-level layout error is visible in the numbers.
 float sampleFor(int64_t block, int frame, int channel) {
@@ -58,6 +83,38 @@ void onBufferSwitch(long doubleBufferIndex, jb::asio::AsioBool directProcess) {
     (void)directProcess;
     g_lastIndex = doubleBufferIndex;
     g_callbacks.fetch_add(1, std::memory_order_relaxed);
+
+    LiveCaptures* live = g_live;
+    if (live) {
+        const long seq = live->count.load(std::memory_order_relaxed);
+        if (seq < kLiveMaxCaptures) {
+            const int frames = g_liveFrames;
+            for (int ch = 0; ch < 2; ++ch) {
+                const float* src = g_inBuf[ch][doubleBufferIndex & 1];
+                float* dst = ch == 0 ? live->left[seq] : live->right[seq];
+                if (src)
+                    memcpy(dst, src, sizeof(float) * frames);
+                else
+                    memset(dst, 0, sizeof(float) * frames);
+            }
+            const int64_t w = g_liveWrite->load(std::memory_order_acquire);
+            live->writeIndex[seq] = w;
+            const int span = g_liveCapacity < kLiveMaxRefBlocks ? g_liveCapacity
+                                                               : kLiveMaxRefBlocks;
+            int kept = 0;
+            for (int k = 0; k < span; ++k) {
+                const int64_t idx = w - 1 - k;
+                if (idx < 0) break;
+                memcpy(live->ref[seq][k],
+                       g_livePayload + (idx % g_liveCapacity) * g_liveBlockBytes,
+                       size_t(g_liveBlockBytes));
+                kept++;
+            }
+            live->refCount[seq] = kept;
+            live->count.store(seq + 1, std::memory_order_release);
+        }
+        return;
+    }
 
     Captures* cap = g_capture;
     if (!cap) return;
@@ -233,6 +290,266 @@ double qpcSeconds(long long ticks) {
     QueryPerformanceFrequency(&f);
     return double(ticks) / double(f.QuadPart);
 }
+
+// ---- read-only attach: watch a live app feed the ring ----------------------
+//
+// The audio-path tests above create the section themselves and publish their own
+// index-coded blocks, which proves the ring contract but not that the *app* is
+// the producer. This mode never creates or writes anything: it opens the section
+// the running app publishes, sizes the ASIO buffers to the ring's block, and
+// checks that every buffer the driver handed the host is bit-identical to a block
+// the app published.
+
+struct LiveBus {
+    HANDLE map = nullptr;
+    uint8_t* base = nullptr;
+    uint8_t* payload = nullptr;
+    std::atomic<int64_t>* write = nullptr;
+    int sampleRate = 0;
+    int channels = 0;
+    int blockFrames = 0;
+    int capacity = 0;
+
+    bool attach(const wchar_t* busName) {
+        wchar_t mapName[192];
+        if (swprintf_s(mapName, L"Local\\JockeyBox.Bus.%s", busName) <= 0) return false;
+        map = OpenFileMappingW(FILE_MAP_READ, FALSE, mapName);
+        if (!map) return false;
+        base = static_cast<uint8_t*>(MapViewOfFile(map, FILE_MAP_READ, 0, 0, 0));
+        if (!base) return false;
+
+        uint32_t magic = 0;
+        int32_t version = 0, headerSize = 0, payloadOffset = 0;
+        memcpy(&magic, base + jb::asio::bus::kMagicOffset, 4);
+        memcpy(&version, base + jb::asio::bus::kVersionOffset, 4);
+        memcpy(&headerSize, base + jb::asio::bus::kHeaderSizeOffset, 4);
+        memcpy(&payloadOffset, base + jb::asio::bus::kPayloadOffsetFieldOffset, 4);
+        if (magic != jb::asio::bus::kMagic || version != jb::asio::bus::kVersion ||
+            headerSize != jb::asio::bus::kHeaderSize || payloadOffset < headerSize) {
+            wprintf(L"FATAL: section exists but its header is not a JockeyBox ring\n");
+            return false;
+        }
+
+        memcpy(&sampleRate, base + jb::asio::bus::kSampleRateOffset, 4);
+        memcpy(&channels, base + jb::asio::bus::kChannelsOffset, 4);
+        memcpy(&blockFrames, base + jb::asio::bus::kBlockFramesOffset, 4);
+        memcpy(&capacity, base + jb::asio::bus::kCapacityBlocksOffset, 4);
+        if (sampleRate <= 0 || channels <= 0 || blockFrames <= 0 || capacity < 2) {
+            wprintf(L"FATAL: section geometry is unusable\n");
+            return false;
+        }
+        payload = base + payloadOffset;
+        write = reinterpret_cast<std::atomic<int64_t>*>(
+            base + jb::asio::bus::kWriteBlockIndexOffset);
+        return true;
+    }
+
+    int64_t writeIndex() const {
+        return write->load(std::memory_order_acquire);
+    }
+
+    const float* block(int64_t index) const {
+        const int64_t bytes = int64_t(blockFrames) * channels * 4;
+        return reinterpret_cast<const float*>(payload + (index % capacity) * bytes);
+    }
+
+    void close() {
+        if (base) UnmapViewOfFile(base);
+        if (map) CloseHandle(map);
+        base = nullptr;
+        map = nullptr;
+        payload = nullptr;
+    }
+};
+
+bool liveBlockEquals(const float* payloadBlock, const float* left, const float* right,
+                     int frames, int channels) {
+    for (int c = 0; c < 2; ++c) {
+        const float* captured = c == 0 ? left : right;
+        for (int f = 0; f < frames; ++f) {
+            const float expected = payloadBlock[f * channels + c];
+            if (memcmp(&captured[f], &expected, sizeof(float)) != 0) return false;
+        }
+    }
+    return true;
+}
+
+bool liveBlockSilent(const float* left, const float* right, int frames) {
+    for (int f = 0; f < frames; ++f)
+        if (left[f] != 0.0f || right[f] != 0.0f) return false;
+    return true;
+}
+
+/// Read-only: drive the driver against the section the app is publishing and
+/// report bit-exactness and cadence. Never publishes a block of its own.
+int runAttachMode(const wchar_t* busNameW) {
+    char busName[128] = {};
+    if (WideCharToMultiByte(CP_UTF8, 0, busNameW, -1, busName, sizeof(busName),
+                            nullptr, nullptr) <= 0)
+        return 1;
+
+    LiveBus live;
+    if (!live.attach(busNameW)) {
+        wprintf(L"FATAL: no live section Local\\JockeyBox.Bus.%s; start the app with the "
+                L"virtual ASIO flag on first\n", busNameW);
+        live.close();
+        return 1;
+    }
+
+    wprintf(L"\n== live ring watch (read-only) ==\n");
+    wprintf(L"section           : Local\\JockeyBox.Bus.%s\n", busNameW);
+    wprintf(L"geometry          : %d Hz, %d ch, block %d frames, %d blocks (%.0f ms)\n",
+            live.sampleRate, live.channels, live.blockFrames, live.capacity,
+            1000.0 * live.capacity * live.blockFrames / live.sampleRate);
+    if (live.channels != 2 || live.blockFrames > kLiveMaxFrames) {
+        wprintf(L"FATAL: the driver cannot serve this geometry (%d ch, block %d)\n",
+                live.channels, live.blockFrames);
+        live.close();
+        return 1;
+    }
+
+    auto captures = std::make_unique<LiveCaptures>();
+    g_live = captures.get();
+    g_liveWrite = live.write;
+    g_livePayload = live.payload;
+    g_liveBlockBytes = int64_t(live.blockFrames) * live.channels * 4;
+    g_liveCapacity = live.capacity;
+
+    SetEnvironmentVariableA("JOCKEYBOX_ASIO_BUS", busName);
+    jb::asio::IASIO* driver = nullptr;
+    {
+        void* raw = nullptr;
+        const HRESULT hr = CoCreateInstance(jb::asio::kDriverClsid, nullptr,
+                                            CLSCTX_INPROC_SERVER,
+                                            jb::asio::kDriverClsid, &raw);
+        if (FAILED(hr) || !raw) {
+            wprintf(L"FATAL: CoCreateInstance 0x%08lX\n", static_cast<unsigned long>(hr));
+            g_live = nullptr;
+            live.close();
+            return 1;
+        }
+        driver = static_cast<jb::asio::IASIO*>(raw);
+        if (!driver->init(nullptr)) {
+            wprintf(L"FATAL: driver init failed\n");
+            driver->Release();
+            g_live = nullptr;
+            live.close();
+            return 1;
+        }
+    }
+
+    // ASIO only accepts power-of-two buffer sizes, so the host buffer is the next
+    // power of two at or above the ring block (512 for the app's 480). The driver
+    // copies only what fits: the first ring.blockFrames samples are exactly one
+    // block, the tail is untouched. Compare that prefix, never the padding.
+    long bufferSize = 1;
+    while (bufferSize < live.blockFrames) bufferSize <<= 1;
+    g_liveFrames = live.blockFrames;
+
+    jb::asio::AsioCallbacks callbacks = {onBufferSwitch, onSampleRateChanged,
+                                         onAsioMessage, onBufferSwitchTimeInfo};
+    jb::asio::AsioBufferInfo infos[4] = {};
+    for (long i = 0; i < 2; ++i) {
+        infos[i].isInput = jb::asio::kAsioTrue;
+        infos[i].channelNum = i;
+        infos[2 + i].isInput = jb::asio::kAsioFalse;
+        infos[2 + i].channelNum = i;
+    }
+
+    if (driver->createBuffers(infos, 4, bufferSize, &callbacks) != jb::asio::kAseOk) {
+        wprintf(L"FATAL: createBuffers(%ld) failed\n", bufferSize);
+        driver->Release();
+        g_live = nullptr;
+        live.close();
+        return 1;
+    }
+    for (int ch = 0; ch < 2; ++ch) {
+        g_inBuf[ch][0] = static_cast<const float*>(infos[ch].buffers[0]);
+        g_inBuf[ch][1] = static_cast<const float*>(infos[ch].buffers[1]);
+    }
+
+    const int64_t writeBefore = live.writeIndex();
+    const auto t0 = std::chrono::steady_clock::now();
+    if (driver->start() != jb::asio::kAseOk) {
+        wprintf(L"FATAL: start failed\n");
+        driver->Release();
+        g_live = nullptr;
+        live.close();
+        return 1;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(3000));
+    const double seconds =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    const int64_t writeAfter = live.writeIndex();
+    driver->stop();
+    const long captured = captures->count.load(std::memory_order_acquire);
+    driver->Release();
+    g_live = nullptr;
+
+    const int frames = live.blockFrames;
+    long matched = 0, mismatched = 0, silent = 0;
+    int lag[9] = {};
+    for (long i = 0; i < captured; ++i) {
+        const float* left = captures->left[i];
+        const float* right = captures->right[i];
+
+        if (liveBlockSilent(left, right, frames)) {
+            // A ring lap is served as silence by the driver, and is counted as
+            // such rather than as a differing block.
+            silent++;
+            continue;
+        }
+        bool found = false;
+        for (int k = 0; k < captures->refCount[i]; ++k) {
+            if (liveBlockEquals(captures->ref[i][k], left, right, frames, live.channels)) {
+                lag[k + 1]++;
+                matched++;
+                found = true;
+                break;
+            }
+        }
+        if (!found) mismatched++;
+    }
+
+    const int64_t published = writeAfter - writeBefore;
+    const double blockRate = live.sampleRate / double(live.blockFrames);
+    const double callbacksPerSecond = captured / seconds;
+    const double publishedPerSecond = published / seconds;
+
+    wprintf(L"\n-- %.2f s watched while the app rendered --\n", seconds);
+    wprintf(L"buffer size       : %ld frames (first %d = one ring block; the rest is padding)\n",
+            bufferSize, frames);
+    wprintf(L"blocks published  : %lld by the app (%.1f/s; block rate is %.0f/s)\n",
+            static_cast<long long>(published), publishedPerSecond, blockRate);
+    wprintf(L"bufferSwitch      : %ld calls (%.1f/s)\n", captured, callbacksPerSecond);
+    wprintf(L"bit-exact blocks  : %ld/%ld matched, %ld mismatched\n", matched, captured,
+            mismatched);
+    wprintf(L"lag of matched    : 1=%d 2=%d 3=%d 4=%d 5=%d\n", lag[1], lag[2], lag[3],
+            lag[4], lag[5]);
+    wprintf(L"non-silent blocks : %ld/%ld\n", captured - silent, captured);
+
+    const bool cadenceOk = callbacksPerSecond > blockRate * 0.9 &&
+                           callbacksPerSecond < blockRate * 1.1;
+    const bool ringFed = publishedPerSecond > blockRate * 0.9;
+    // Silence is not a pass: an all-zero run would compare equal to an empty ring.
+    const bool signal = silent < captured;
+    // Every block the driver actually served must match; a lap it could not serve
+    // (the host buffer's cadence differs from the ring's) is counted as skipped.
+    const long served = captured - silent;
+    const bool exact = mismatched == 0 && served > 0 && matched == served;
+    const bool passed = exact && cadenceOk && ringFed && signal;
+
+    wprintf(L"\nlive feed         : %s\n",
+            passed ? L"PASS (every served block bit-exact, paced, non-silent)"
+                   : (exact ? L"FAIL (bit-exact but the run is not a live feed)"
+                            : L"FAIL (served blocks differ)"));
+    if (silent > 0)
+        wprintf(L"note              : %ld callback(s) were ring laps (host buffer %.0f/s vs "
+                L"ring %.0f/s)\n", silent, callbacksPerSecond, blockRate);
+    live.close();
+    return passed ? 0 : 1;
+}
+
 
 // Creates the CLSID registration's driver object for one bus test.
 jb::asio::IASIO* openDriver(const char* busName) {
@@ -539,6 +856,17 @@ int wmain(int argc, wchar_t** argv) {
     if (FAILED(hr)) {
         wprintf(L"FATAL: CoInitializeEx 0x%08lX\n", static_cast<unsigned long>(hr));
         return 1;
+    }
+
+    // --attach [busName]: read-only watch of the section a running app publishes.
+    // Never creates the section and never writes a block, so the numbers are the
+    // app's own output and not the harness's.
+    if (argc > 2 && wcscmp(argv[2], L"--attach") == 0) {
+        const wchar_t* busName = argc > 3 ? argv[3] : L"main";
+        const int rc = runAttachMode(busName);
+        CoUninitialize();
+        unregisterInHkcu();
+        return rc;
     }
 
     void* raw = nullptr;

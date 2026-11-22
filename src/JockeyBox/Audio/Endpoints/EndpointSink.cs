@@ -20,7 +20,7 @@ namespace JockeyBox.Audio.Endpoints;
 /// or failed sink as "this output is off" (settings value "None"), never as a
 /// reason to stop playback.</para>
 /// </summary>
-public sealed class EndpointSink : IDisposable
+public sealed class EndpointSink : IAudioSink
 {
     private readonly MMDevice _device;
     private readonly WasapiOut _out;

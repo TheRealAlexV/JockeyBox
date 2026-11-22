@@ -113,6 +113,13 @@ public partial class SettingsWindow : Window
 
         SoundboardFollowsMainCheck.IsChecked = settings.SoundboardFollowsMain;
 
+        VirtualAsioDeckACheck.IsChecked = settings.VirtualAsioDeckA;
+        VirtualAsioDeckBCheck.IsChecked = settings.VirtualAsioDeckB;
+        VirtualAsioRecordingCheck.IsChecked = settings.VirtualAsioRecording;
+        VirtualAsioSoundboardCheck.IsChecked = settings.VirtualAsioSoundboard;
+        VirtualAsioMonitorCheck.IsChecked = settings.VirtualAsioMonitor;
+        VirtualAsioBusNameBox.Text = settings.VirtualAsioBusName;
+
         LoadMicDevices(settings);
 
         OutputDelayBox.Text = settings.OutputDelayMs.ToString(CultureInfo.CurrentCulture);
@@ -193,8 +200,23 @@ public partial class SettingsWindow : Window
         return string.IsNullOrWhiteSpace(id) ? null : id;
     }
 
+    /// <summary>
+    /// Same character set the transport ring accepts (<c>BusLayout.ValidateName</c>):
+    /// letters, digits, '_', '-' and '.'. Checked on save so a typo is refused here
+    /// instead of failing the ring at route time, where it would only sound silent.
+    /// </summary>
+    private static bool IsValidBusName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return false;
+        foreach (char c in name)
+            if (!char.IsAsciiLetterOrDigit(c) && c is not ('_' or '-' or '.'))
+                return false;
+        return true;
+    }
+
     /// <summary>This endpoint's stored delay, or 0 when it has none.</summary>
     private static string DeviceDelayText(AppSettings settings, string? deviceId)
+
         => deviceId != null && settings.DeviceOutputDelays.TryGetValue(deviceId, out var ms)
             ? Math.Round(ms).ToString("F0", CultureInfo.CurrentCulture)
             : "0";
@@ -1043,6 +1065,25 @@ public partial class SettingsWindow : Window
         RememberDeviceDelay(_settings, _settings.SoundboardOutputDeviceId, SoundboardOutputDelayBox);
         RememberDeviceDelay(_settings, _settings.MonitorOutputDeviceId, MonitorOutputDelayBox);
         _settings.SoundboardFollowsMain = SoundboardFollowsMainCheck.IsChecked == true;
+
+        // Virtual ASIO ring: additive keys, default off. The name is validated
+        // against the bus-name rules here so a typo cannot make the writer fail at
+        // route time (where the operator would only see silence).
+        _settings.VirtualAsioDeckA = VirtualAsioDeckACheck.IsChecked == true;
+        _settings.VirtualAsioDeckB = VirtualAsioDeckBCheck.IsChecked == true;
+        _settings.VirtualAsioRecording = VirtualAsioRecordingCheck.IsChecked == true;
+        _settings.VirtualAsioSoundboard = VirtualAsioSoundboardCheck.IsChecked == true;
+        _settings.VirtualAsioMonitor = VirtualAsioMonitorCheck.IsChecked == true;
+        var ringName = VirtualAsioBusNameBox.Text.Trim();
+        if (ringName.Length == 0) ringName = "main";
+        if (!IsValidBusName(ringName))
+        {
+            MessageBox.Show(this,
+                "The virtual ASIO ring name may only contain letters, digits, '_', '-' and '.'.",
+                "Invalid ring name", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+        _settings.VirtualAsioBusName = ringName;
 
         // Recording devices: the rows ARE the list. An enabled row is the whole
         // MicDeviceSettings record, so a save can never resurrect a device the

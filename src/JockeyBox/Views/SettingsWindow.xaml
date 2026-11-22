@@ -279,6 +279,43 @@
                            Margin="150,0,0,14"
                            Text="Device delay shifts that device's whole output (every bus feeding it) by 0–2000 ms. Use it on the early, wired output so the Bluetooth headset lands in sync; the monitoring output can be delayed too. It adds to the global output delay and to a deck's own output delay. Every output can be set to None. Two outputs on one device are summed into one session for that device."/>
 
+                <!-- ============= VIRTUAL ASIO DRIVER ============= -->
+                <!-- Additive on the settings schema: the flags default to off, so an
+                     install that never opens this box keeps playing exactly as today. -->
+                <TextBlock Text="VIRTUAL ASIO DRIVER" FontWeight="Bold"
+                           Foreground="{StaticResource AccentABrush}" Margin="0,0,0,6"/>
+
+                <StackPanel Margin="0,0,0,2">
+                    <WrapPanel>
+                        <CheckBox x:Name="VirtualAsioDeckACheck" Content="Deck A"
+                                  AutomationProperties.Name="Send Deck A to the virtual ASIO ring"
+                                  Margin="0,0,18,4" VerticalAlignment="Center"/>
+                        <CheckBox x:Name="VirtualAsioDeckBCheck" Content="Deck B"
+                                  AutomationProperties.Name="Send Deck B to the virtual ASIO ring"
+                                  Margin="0,0,18,4" VerticalAlignment="Center"/>
+                        <CheckBox x:Name="VirtualAsioRecordingCheck" Content="Recording"
+                                  AutomationProperties.Name="Send the recording bus to the virtual ASIO ring"
+                                  Margin="0,0,18,4" VerticalAlignment="Center"/>
+                        <CheckBox x:Name="VirtualAsioSoundboardCheck" Content="Soundboard"
+                                  AutomationProperties.Name="Send the soundboard bus to the virtual ASIO ring"
+                                  Margin="0,0,18,4" VerticalAlignment="Center"/>
+                        <CheckBox x:Name="VirtualAsioMonitorCheck" Content="Monitoring"
+                                  AutomationProperties.Name="Send the monitoring bus to the virtual ASIO ring"
+                                  Margin="0,0,18,4" VerticalAlignment="Center"/>
+                    </WrapPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
+                        <TextBlock Text="Ring name" VerticalAlignment="Center" Width="150"/>
+                        <TextBox x:Name="VirtualAsioBusNameBox" Width="120"
+                                 AutomationProperties.Name="Virtual ASIO ring name"
+                                 AutomationProperties.AutomationId="VirtualAsioBusNameBox"
+                                 ToolTip="Must match the driver's JOCKEYBOX_ASIO_BUS (default: main)."/>
+                    </StackPanel>
+                </StackPanel>
+
+                <TextBlock TextWrapping="Wrap" Foreground="{StaticResource TextDimBrush}"
+                           Margin="0,2,0,14"
+                           Text="The flagged bus is also published to the native ASIO driver, which serves it as its inputs. This does not replace the device above: a bus can feed both. One ring exists per name, so with several buses flagged the first in routing order publishes and the log names the rest."/>
+
                 <!-- ========== MICROPHONES / RECORDING DEVICES ========== -->
                 <TextBlock Text="MICROPHONES / RECORDING DEVICES" FontWeight="Bold"
                            Foreground="{StaticResource AccentABrush}" Margin="0,0,0,2"/>

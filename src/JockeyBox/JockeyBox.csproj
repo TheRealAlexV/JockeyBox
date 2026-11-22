@@ -76,6 +76,8 @@
   <ItemGroup>
     <!-- The WPF-free DSP library: processors, strip chain, latency ledger. -->
     <ProjectReference Include="..\JockeyBox.Dsp\JockeyBox.Dsp.csproj" />
+    <!-- The transport ring the native ASIO driver reads: the app is its producer. -->
+    <ProjectReference Include="..\JockeyBox.Ipc\JockeyBox.Ipc.csproj" />
   </ItemGroup>
 
 </Project>
