@@ -416,13 +416,13 @@ internal static class UiShot
             {
                 // The dialog stamps its controls in the constructor, so there is
                 // nothing pending there by the time Show() returns. What is pending
-                // is the post-layout pass: RenderMicRows queues UpdateMicListFade at
+                // is the post-layout pass: RenderMicRows queues its rendered flag at
                 // DispatcherPriority.Loaded, which cannot have run before the
                 // dispatcher does. False at start, true once the window finished
                 // its own deferred work.
-                signal = (() => settingsWindow.MicListFadeResolved,
-                          () => $"MicListFade resolved={settingsWindow.MicListFadeResolved}");
-                waitedOn = "settings post-layout pass (MicListFade)";
+                signal = (() => settingsWindow.MicListRendered,
+                          () => $"MicList rendered={settingsWindow.MicListRendered}");
+                waitedOn = "settings post-layout pass (MicList)";
             }
             else if (window.DataContext is DiagnosticsViewModel diagVm)
             {

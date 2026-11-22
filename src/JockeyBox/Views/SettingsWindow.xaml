@@ -240,57 +240,16 @@
                 <TextBlock Text="MICROPHONES / RECORDING DEVICES" FontWeight="Bold"
                            Foreground="{StaticResource AccentABrush}" Margin="0,0,0,2"/>
 
+                <!-- No cap and no bar of its own: every capture device is a row here and
+                     the page's scrollbar is the only overflow signal. This box used to be
+                     capped at 201 px with its own bar hidden, which cut the last row in
+                     half and needed a "more" hint to admit what was below; the hint took
+                     no click, so it looked like a button that did nothing. -->
                 <Border x:Name="MicListPanelBorder"
                         Background="{StaticResource PanelBrush}"
                         BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
-                        CornerRadius="4" Padding="2" Margin="0,0,0,3"
-                        MaxHeight="201">
-                    <!-- The list scrolls inside this panel, and only here: the bar is
-                         hidden and the wheel steps whole rows, so the page keeps the
-                         single visible scrollbar it had. FitMicList caps this box at the
-                         height of a whole number of rows, so the panel's bottom edge
-                         falls between rows and can never cut one; a shorter device list
-                         still sizes to its content.
-                         With no bar, the fade below is the only sign that rows continue
-                         past the edge. Code turns it on, and only while there is more to
-                         reach, so a complete list shows no affordance at all. -->
-                    <Grid>
-                        <ScrollViewer x:Name="MicListScroll" Focusable="False"
-                                      HorizontalScrollBarVisibility="Disabled"
-                                      VerticalScrollBarVisibility="Hidden"
-                                      PreviewMouseWheel="MicListScroll_PreviewMouseWheel"
-                                      ScrollChanged="MicListScroll_ScrollChanged">
-                            <StackPanel x:Name="MicListPanel" Margin="6,2,6,2"/>
-                        </ScrollViewer>
-
-                        <!-- Over the slack band at the panel's foot, so it never covers a
-                             row: the panel is capped to whole rows, so that band is the
-                             same height at every scroll offset. A soft scrim plus a
-                             chevron that appears only while rows remain below — the list
-                             is otherwise silent about them, because its own bar is hidden
-                             to keep the page's the only scrollbar in the frame. Never
-                             takes a click or a wheel notch. -->
-                        <Border x:Name="MicListFade" Height="22" VerticalAlignment="Bottom"
-                                IsHitTestVisible="False" Visibility="Collapsed"
-                                CornerRadius="0,0,3,3">
-                            <Border.Background>
-                                <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
-                                    <GradientStop Color="#00171A1F" Offset="0"/>
-                                    <GradientStop Color="#B3171A1F" Offset="0.55"/>
-                                    <GradientStop Color="#FF171A1F" Offset="1"/>
-                                </LinearGradientBrush>
-                            </Border.Background>
-                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Center"
-                                        VerticalAlignment="Center">
-                                <TextBlock Text="&#x25BE;" FontSize="8"
-                                           Foreground="{StaticResource TextDimBrush}"
-                                           VerticalAlignment="Center" Margin="0,0,4,0"/>
-                                <TextBlock Text="more" FontSize="9"
-                                           Foreground="{StaticResource TextDimBrush}"
-                                           VerticalAlignment="Center"/>
-                            </StackPanel>
-                        </Border>
-                    </Grid>
+                        CornerRadius="4" Padding="2" Margin="0,0,0,3">
+                    <StackPanel x:Name="MicListPanel" Margin="6,2,6,2"/>
                 </Border>
 
                 <TextBlock TextWrapping="Wrap" Foreground="{StaticResource TextDimBrush}"

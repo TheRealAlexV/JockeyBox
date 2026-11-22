@@ -382,41 +382,9 @@ public partial class SettingsWindow : Window
                 MicListPanel.Children.Add(BuildMicRow(row));
         }
 
-        // Row set changed: start the list from its top again.
-        MicListScroll?.ScrollToTop();
-
-        // The fade follows the row set, and layout has not run yet at this point.
-        Dispatcher.BeginInvoke(UpdateMicListFade, DispatcherPriority.Loaded);
-    }
-
-    /// <summary>
-    /// The list is capped to whole rows by its MaxHeight in XAML. This decides where
-    /// one wheel notch lands, and it only ever picks an offset that leaves whole rows
-    /// at both edges of the panel, so no row is ever cut across the panel's edge.
-    /// </summary>
-    private void MicListScroll_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
-    {
-        // Nothing hidden: leave the wheel to the page.
-        if (MicListScroll is null || MicListScroll.ScrollableHeight <= 0) return;
-
-        e.Handled = true;
-        int direction = e.Delta < 0 ? 1 : -1;
-        double view = MicListScroll.ActualHeight;
-        MicListScroll.ScrollToVerticalOffset(MicListStep(MicListScroll.VerticalOffset, view, direction));
-    }
-
-    /// <summary>
-    /// Show the bottom fade only while rows continue past the panel's edge, so a
-    /// list that fits shows nothing and a list that scrolls admits it. Also runs on
-    /// every scroll, so the fade goes away at the end of the list.
-    /// </summary>
-    private void MicListScroll_ScrollChanged(object sender, ScrollChangedEventArgs e)
-    {
-        UpdateMicListFade();
-
-        // Content height changes as rows are added; those arrive without a scroll.
-        if (e.ExtentHeightChange != 0)
-            Dispatcher.BeginInvoke(UpdateMicListFade, DispatcherPriority.Loaded);
+        // The rows are in the tree but unmeasured. Queue the flag the capture waits
+        // on, so a screenshot of this dialog is taken after one layout pass.
+        Dispatcher.BeginInvoke(() => MicListRendered = true, DispatcherPriority.Loaded);
     }
 
     /// <summary>
@@ -425,63 +393,8 @@ public partial class SettingsWindow : Window
     /// before the window is shown and the dispatcher pumps. A capture waits on this
     /// instead of sleeping for a fixed time and calling it settled.
     /// </summary>
-    internal bool MicListFadeResolved { get; private set; }
+    internal bool MicListRendered { get; private set; }
 
-    private void UpdateMicListFade()
-    {
-        MicListFadeResolved = true;
-        if (MicListFade is null || MicListScroll is null) return;
-
-        // Half a pixel of slack: scrolling to the very end can leave a fraction.
-        bool moreBelow = MicListScroll.ScrollableHeight > 0.5
-                         && MicListScroll.VerticalOffset
-                            < MicListScroll.ScrollableHeight - 0.5;
-        MicListFade.Visibility = moreBelow ? Visibility.Visible : Visibility.Collapsed;
-    }
-
-    /// <summary>Child start offsets inside the list, plus the total height.</summary>
-    private List<double> MicListOffsets()
-    {
-        var offsets = new List<double> { 0 };
-        double sum = 0;
-        foreach (UIElement child in MicListPanel.Children)
-        {
-            double h = (child as FrameworkElement)?.DesiredSize.Height ?? 0;
-            if (h <= 0) continue;
-            sum += h;
-            offsets.Add(sum);
-        }
-        return offsets;
-    }
-
-    /// <summary>
-    /// The offset one row above/below <paramref name="from"/>, chosen so the list's
-    /// top and bottom edges both land on a row boundary. Falls back to 0.
-    /// </summary>
-    private double MicListStep(double from, double viewHeight, int direction)
-    {
-        var offsets = MicListOffsets();
-        double total = offsets[^1];
-        double max = Math.Max(0, MicListScroll?.ScrollableHeight ?? 0.0);
-
-        // A candidate keeps whole rows at the top AND at the bottom edge.
-        bool Clean(double o) =>
-            o + viewHeight >= total - 0.5
-            || offsets.Exists(b => Math.Abs(b - (o + viewHeight)) < 0.5);
-
-        var candidates = offsets.Where(o => o <= max + 0.5 && Clean(o)).ToList();
-        if (candidates.Count == 0) return 0;
-
-        if (direction > 0)
-        {
-            foreach (double o in candidates)
-                if (o > from + 0.5) return o;
-            return candidates[^1];
-        }
-        for (int i = candidates.Count - 1; i >= 0; i--)
-            if (candidates[i] < from - 0.5) return candidates[i];
-        return candidates[0];
-    }
 
     private TextBlock GroupCaption(string text) => new()
     {
