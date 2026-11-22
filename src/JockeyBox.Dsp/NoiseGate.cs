@@ -121,9 +121,15 @@ public sealed class NoiseGate : IAudioProcessor
     /// <summary>True while the gate is passing signal.</summary>
     public bool IsOpen => _open;
 
+    /// <summary>
+    /// True when the gate cannot attenuate anything: a floor of 0 dB means closed still passes
+    /// unity gain. <see cref="Process"/> then leaves the buffer untouched and skips the detector.
+    /// </summary>
+    public bool IsNeutral => _floorDb >= 0;
+
     public void Process(Span<float> samples)
     {
-        if (Bypass) return;
+        if (Bypass || IsNeutral) return;
 
         for (int i = 0; i < samples.Length; i++)
         {
