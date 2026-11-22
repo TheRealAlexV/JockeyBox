@@ -147,6 +147,9 @@ public sealed unsafe class VirtualBusWriter : IDisposable
 
     /// <summary>
     /// Takes the single-writer role and maps the region, creating or re-initialising it.
+    /// On both platforms an existing region is reattached, so a writer that died without
+    /// disposing is replaced by a creator restart that resets the header cursor. The claim file
+    /// is the ownership gate: holding it is the licence to re-initialise.
     /// </summary>
     /// <exception cref="VirtualBusException">
     /// A writer is already open for this name, or an existing region carries a different
@@ -200,8 +203,18 @@ public sealed unsafe class VirtualBusWriter : IDisposable
             {
                 // A named, pagefile-backed Local\ section: a reader in this session opens it by
                 // name. Global\ never reaches here; the driver creates that one.
+                //
+                // CreateOrOpen, not CreateNew: a section outlives the writer that made it while
+                // any handle is still open (a reader, or our own crash survivor), and CreateNew
+                // fails with ERROR_ALREADY_EXISTS on one. Reattaching is what lets the version
+                // probe below run at all, so a foreign version is named instead of surfacing as
+                // a raw IOException. Re-initialising the header afterwards is safe because the
+                // claim file above is already held: a live same-version writer would have
+                // refused it, so these bytes belong to a dead creator, and this is a creator
+                // restart rather than a hijack. Attach never takes the claim and never writes a
+                // header byte, so it can never be the side re-initialising here.
                 capacity = regionBytes;
-                map = MemoryMappedFile.CreateNew(BusLayout.MapNameFor(name, scope), capacity);
+                map = MemoryMappedFile.CreateOrOpen(BusLayout.MapNameFor(name, scope), capacity);
             }
             else
             {

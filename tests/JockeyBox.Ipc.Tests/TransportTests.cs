@@ -214,6 +214,46 @@ public sealed class TransportTests
     }
 
     [Fact]
+    public void Same_Version_Region_Is_Reopened_And_Reinitialised()
+    {
+        const int BlockFrames = 32;
+        const int Channels = 1;
+        const int Capacity = 8;
+        string name = NewBus("reopen");
+
+        var block = new float[BlockFrames * Channels];
+        var crashed = VirtualBusWriter.Open(name, 48000, Channels, BlockFrames, Capacity);
+        for (long index = 1; index <= 3; index++)
+        {
+            TestSignal.Fill(block, index);
+            crashed.Write(block);
+        }
+        Assert.Equal(3, crashed.BlocksWritten);
+
+        // The crash drops the claim and the writer's own map handle without touching the header.
+        // On Windows the section dies with its last handle, so hold one to keep the dead writer's
+        // bytes around for the re-open to find; on Linux the backing file survives the unlink.
+        using var survivor = OperatingSystem.IsWindows() ? RawRegion.OpenRead(name) : null;
+        crashed.Dispose();
+
+        using var reopened = VirtualBusWriter.Open(name, 48000, Channels, BlockFrames, Capacity);
+        Assert.Equal(0, reopened.BlocksWritten); // creator restart, not a resume at 3
+
+        using var reader = VirtualBusReader.Open(name, maxLagBlocks: 0);
+        TestSignal.Fill(block, 4);
+        reopened.Write(block);
+
+        var rx = new float[BlockFrames * Channels];
+        Assert.Equal(VirtualBusStatus.Data, reader.Read(rx));
+        var expected = new float[BlockFrames * Channels];
+        TestSignal.Fill(expected, 4);
+        Assert.True(TestSignal.BitEqual(expected, rx));
+
+        // The cursor restarted, so the dead writer's third block must not be replayable.
+        Assert.Equal(VirtualBusStatus.Silence, reader.Read(rx));
+    }
+
+    [Fact]
     public void Second_Writer_On_The_Same_Name_Is_Refused()
     {
         string name = NewBus("one-writer");
