@@ -516,11 +516,9 @@ public static class SelftestRunner
 
         Require(recOff.Length == recOn.Length, "the two renders produced different buffer lengths");
         Require(recDiff < 0,
-            $"recording bus differs at sample {recDiff} with every strip neutral "
-            + $"({recOn[recDiff]:0.000000} vs {recOff[recDiff]:0.000000})");
+            DifferenceDetail("recording bus", recOff, recOn, recDiff) + " with every strip neutral");
         Require(monDiff < 0,
-            $"monitor bus differs at sample {monDiff} with every strip neutral "
-            + $"({monOn[monDiff]:0.000000} vs {monOff[monDiff]:0.000000})");
+            DifferenceDetail("monitor bus", monOff, monOn, monDiff) + " with every strip neutral");
     }
 
     /// <summary>
@@ -693,8 +691,7 @@ public static class SelftestRunner
 
         Require(MonitorIsSilent(monitor), "the monitor bus is not silent for a strip with Monitor off");
         Require(recDiff < 0,
-            $"the disabled mixer altered the device at sample {recDiff} "
-            + $"({recording[recDiff]:0.000000} vs raw {raw[recDiff]:0.000000})");
+            "the disabled mixer altered the device: " + DifferenceDetail("device", raw, recording, recDiff));
     }
 
     /// <summary>
@@ -820,11 +817,29 @@ public static class SelftestRunner
 
         public MicMixer Mixer { get; }
 
+        /// <summary>
+        /// Renders <paramref name="frames"/> frames the way the audio thread does: one
+        /// <see cref="AudioEngine.BlockFrames"/> block per call, accumulated. A strip's
+        /// scratch is one block, so a single multi-block call is a shape the engine never
+        /// produces and would fail on the strip's own guard.
+        /// </summary>
         public (float[] Recording, float[] Monitor) Render(int frames)
         {
-            var recording = new float[frames * AudioEngine.Channels];
-            var monitor = new float[frames * AudioEngine.Channels];
-            Mixer.Render(frames, recording, monitor, AudioEngine.Channels);
+            int block = AudioEngine.BlockFrames;
+            int channels = AudioEngine.Channels;
+            var recording = new float[frames * channels];
+            var monitor = new float[frames * channels];
+            var recBlock = new float[block * channels];
+            var monBlock = new float[block * channels];
+
+            for (int start = 0; start < frames; start += block)
+            {
+                int count = Math.Min(block, frames - start);
+                Mixer.Render(count, recBlock, monBlock, channels);
+                Array.Copy(recBlock, 0, recording, start * channels, count * channels);
+                Array.Copy(monBlock, 0, monitor, start * channels, count * channels);
+            }
+
             return (recording, monitor);
         }
 
@@ -851,6 +866,15 @@ public static class SelftestRunner
 
         return block;
     }
+
+    /// <summary>
+    /// Failure detail for a sample mismatch. Never indexes when the two matched: the
+    /// message argument is built eagerly, so a <c>-1</c> here once threw out of a passing case.
+    /// </summary>
+    private static string DifferenceDetail(string what, float[] expected, float[] actual, int index) =>
+        index < 0
+            ? $"{what} is identical"
+            : $"{what} differs at sample {index} ({actual[index]:0.000000} vs {expected[index]:0.000000})";
 
     /// <summary>Index of the first sample whose bits differ, or -1 when the two are identical.</summary>
     private static int FirstDifference(float[] a, float[] b)
