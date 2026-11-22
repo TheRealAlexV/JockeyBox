@@ -8,9 +8,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>JockeyBox</RootNamespace>
     <AssemblyName>JockeyBox</AssemblyName>
-    <!-- 2.2.0-m0: milestone 0 of the mixer work. The field binary used to report
+    <!-- 2.2.0-m1: milestone 1 of the mixer work. The field binary used to report
          1.5.0, identical to the live build, so a deploy was unattributable. -->
-    <Version>2.2.0-m0</Version>
+    <Version>2.2.0-m1</Version>
     <!-- Allows building this Windows-targeted WPF app from Linux/WSL -->
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
