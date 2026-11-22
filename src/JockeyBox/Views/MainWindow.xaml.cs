@@ -371,6 +371,15 @@ public partial class MainWindow : Window
     private void OnSettingsClick(object sender, RoutedEventArgs e) => OpenSettings();
 
     /// <summary>
+    /// Opens the diagnostics panel against the engine this window is already running.
+    /// Modeless on purpose: the operator compares the readout with what they hear, and a
+    /// modal window would mute nothing but would stop them touching the transport.
+    /// </summary>
+    private void OnDiagnosticsClick(object sender, RoutedEventArgs e)
+        => new DiagnosticsWindow(_vm.Transport.Engine, _vm.SettingsRef) { Owner = this }.Show();
+
+
+    /// <summary>
     /// The toolbar's Downloads button (raised by MainViewModel.ShowDownloads)
     /// opens the console on its Downloads tab. Nothing here builds a window any
     /// more: the queue is docked in the main window.

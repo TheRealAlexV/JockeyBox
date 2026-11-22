@@ -30,30 +30,43 @@ namespace JockeyBox.Selftest;
 /// </summary>
 public static class SelftestRunner
 {
+    /// <summary>
+    /// Every case this build runs, in output order. One list, because the diagnostics
+    /// window shows the same ids; a second copy would drift the moment a case is added.
+    /// </summary>
+    private static readonly (string Name, Action<Case> Body)[] Cases =
+    {
+        ("silence-at-rest", SilenceAtRest),
+        ("peak-headroom", PeakHeadroom),
+        ("tempo-ratio", TempoRatio),
+        ("output-delay", OutputDelay),
+        ("crossfade-law", CrossfadeLaw),
+        ("no-zero-reads", NoZeroReads),
+        ("end-of-track-handoff", EndOfTrackHandoff),
+        ("deck-output-delay", DeckOutputDelay),
+        ("chain-bypass-bit-exact", ChainBypassBitExact),
+        ("chain-latency-align-null", ChainLatencyAlignNull),
+        ("eq-flat-bit-exact", EqFlatBitExact),
+    };
+
+    /// <summary>
+    /// The case ids, for surfaces that describe a run without performing one. Results are
+    /// not stored anywhere: each <c>--selftest</c> is a separate process that prints and
+    /// exits, so a running app cannot report anyone's last result.
+    /// </summary>
+    public static IReadOnlyList<string> CaseNames { get; } =
+        Cases.Select(c => c.Name).ToArray();
+
     /// <summary>Run every case. Returns the process exit code (0 pass, 1 fail).</summary>
     public static int Run(TextWriter output, bool verbose = false)
     {
-        var cases = new (string Name, Action<Case> Body)[]
-        {
-            ("silence-at-rest", SilenceAtRest),
-            ("peak-headroom", PeakHeadroom),
-            ("tempo-ratio", TempoRatio),
-            ("output-delay", OutputDelay),
-            ("crossfade-law", CrossfadeLaw),
-            ("no-zero-reads", NoZeroReads),
-            ("end-of-track-handoff", EndOfTrackHandoff),
-            ("deck-output-delay", DeckOutputDelay),
-            ("chain-bypass-bit-exact", ChainBypassBitExact),
-            ("chain-latency-align-null", ChainLatencyAlignNull),
-            ("eq-flat-bit-exact", EqFlatBitExact),
-        };
 
         output.WriteLine("JockeyBox selftest - offline audio graph, no sound device");
         output.WriteLine($"engine {AudioEngine.Rate} Hz, {AudioEngine.Channels} ch, " +
                          $"{AudioEngine.BlockFrames} frames/block");
 
         int passed = 0;
-        foreach (var (name, body) in cases)
+        foreach (var (name, body) in Cases)
         {
             var record = new Case(name);
             try
@@ -77,13 +90,13 @@ public static class SelftestRunner
             }
         }
 
-        if (passed == cases.Length)
+        if (passed == Cases.Length)
         {
-            output.WriteLine($"SELFTEST OK {passed}/{cases.Length}");
+            output.WriteLine($"SELFTEST OK {passed}/{Cases.Length}");
             return 0;
         }
 
-        output.WriteLine($"SELFTEST FAILED {passed}/{cases.Length}");
+        output.WriteLine($"SELFTEST FAILED {passed}/{Cases.Length}");
         return 1;
     }
 

@@ -1177,6 +1177,13 @@
             <Button DockPanel.Dock="Right" Content="&#x2699; Settings" HorizontalAlignment="Right"
                     Click="OnSettingsClick"/>
 
+            <!-- Diagnostics: the only place the running build's identity, strip chains and
+                 bus peaks can be read without a log file. Placed beside Settings because
+                 that is where an operator looks for "the app's own state". -->
+            <Button DockPanel.Dock="Right" Content="Diagnostics" Margin="0,0,8,0"
+                    HorizontalAlignment="Right" Click="OnDiagnosticsClick"
+                    ToolTip="Build identity, engine facts, strip chains and live bus peaks. Read-only."/>
+
             <!-- Monitor cluster: the MON switch, the output it plays on, and
                  MVSYNC. It lives on this line because it has nowhere else to go
                  that costs nothing: the deck block, the browser row and the

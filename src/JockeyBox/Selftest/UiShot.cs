@@ -12,6 +12,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using JockeyBox.Activity;
+using JockeyBox.Audio.Graph;
 using JockeyBox.Downloads;
 using JockeyBox.Library;
 using JockeyBox.Playback;
@@ -91,6 +92,10 @@ internal static class UiShot
         Window window = target switch
         {
             "settings" => new SettingsWindow(Settings.AppSettings.Load()),
+            // Diagnostics against a fresh engine: an idle engine is the honest state of a
+            // process that has not been asked to play anything, and it still exercises
+            // every read on the panel.
+            "diag" => new DiagnosticsWindow(new AudioEngine(), Settings.AppSettings.Load()),
             "youtubesearch" => new YouTubeSearchWindow(StubYouTubeSearch(Harness.Flag(args, "--uishot-audition"))),
             "youtubetab" => new MainWindow(),
             // The pop-out lyrics window with its own view model: the main window
