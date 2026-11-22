@@ -33,6 +33,16 @@ internal static class Harness
     public const int PrePumpMs = 50;
 
     /// <summary>
+    /// Bound on the first presented frame, kept separate from
+    /// <see cref="DefaultWaitMs"/> because it is render cost, not settle cost.
+    /// Measured on this host: a cold main window in SoftwareOnly mode takes ~7.6 s
+    /// to its first frame. That time used to be charged to the settle budget, so a
+    /// default capture reached the settle loop with nothing left and exited
+    /// UNSETTLED while neither settle flag had ever been true.
+    /// </summary>
+    public const int FirstFrameMs = 30000;
+
+    /// <summary>
     /// Default <c>--uishot-wait</c> for a capture. A capture spends the pre-pump
     /// plus up to three quiet windows: the first proves nothing when the re-raise
     /// lands inside it, the second proves nothing if the reload re-raises once

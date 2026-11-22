@@ -229,7 +229,26 @@ internal static class UiShot
             feed.SelectedRow = created;
         }
 
+        // First frame is its own step with its own bound, and it is the signal the
+        // settle was waiting on without naming it: the only thing that waited for
+        // the first render was the pre-pump, and its cost landed inside the settle
+        // budget. A cold SoftwareOnly main window measures ~7.6 s here, so the
+        // default 3000 ms budget was already gone when the settle loop took its
+        // first reading: it broke at "nothing outstanding" and exited UNSETTLED
+        // with both flags false the whole time. Render cost is not settle cost.
+        bool firstFrameRendered = false;
+        var firstFrameWatch = Stopwatch.StartNew();
+        window.ContentRendered += (_, _) => firstFrameRendered = true;
         window.Show();
+        if (!UiPump.PumpUntil(() => firstFrameRendered, Harness.FirstFrameMs))
+        {
+            Console.Error.WriteLine(
+                $"uishot: UNPRESENTED - {target} window rendered no first frame within {Harness.FirstFrameMs}ms");
+            Console.Error.Flush();
+            window.Close();
+            return 4;
+        }
+        long firstFrameMs = firstFrameWatch.ElapsedMilliseconds;
 
         // Settle, do not sleep. The library body sits under a "Loading playlist…"
         // border while MainViewModel.IsPlaylistLoading is true, and a fixed pump
@@ -302,6 +321,12 @@ internal static class UiShot
             string? delayText = Harness.Flag(args, "--uishot-delay");
             if (delayText != null && int.TryParse(delayText, out int delayMs) && delayMs > 0)
                 UiPump.Pump(Math.Clamp(delayMs, 0, 30000));
+
+            // The budget starts here, not before the window was shown or the
+            // pre-pump ran: --uishot-wait is time allowed to become idle and stay
+            // idle, and lap-time spent presenting frames or honouring an explicit
+            // --uishot-delay is neither.
+            settleWatch.Restart();
 
             // Two independent surfaces, composed: a playlist's membership resolving,
             // and the library rescan that fills the tree. Neither covers the other -
@@ -999,7 +1024,7 @@ internal static class UiShot
         Console.Out.WriteLine(
             $"uishot: canvas {width}x{height}, arranged {arrangedWidth}x{arrangedHeight} -> {path}");
         Console.Out.WriteLine(
-            $"uishot: settle {settleMs}ms of {waitMs}ms budget{quietNote}, waited on {waitedOn}" +
+            $"uishot: settle {settleMs}ms of {waitMs}ms budget{quietNote}, first frame {firstFrameMs}ms, waited on {waitedOn}" +
             $"{(playlistName == null ? "" : $", playlist '{playlistName}'")}" +
             $"{(roseInQuietWindow ? ", a flag rose inside the quiet window (window restarted)" : "")}" +
             $"{(settled ? "" : " (budget exhausted)")}");
