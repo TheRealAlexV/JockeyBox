@@ -47,6 +47,19 @@ public sealed class MicStrip : IDisposable
     public MicStrip(string deviceId)
     {
         DeviceId = deviceId ?? "";
+
+        // A composite key names one channel of a multi-channel source. Every strip of an ASIO
+        // interface shares one client (ASIO is single-client) and reads its own channel from it.
+        if (DeviceSourceKey.TryParse(DeviceId, out string kind, out string endpoint, out int channel) &&
+            channel >= 0 && string.Equals(kind, AsioDriverRegistry.Kind, StringComparison.Ordinal))
+        {
+            var asio = new AsioInput(endpoint, channel, AsioChannelMode.Mono);
+            _source = asio;
+            DeviceLatencyFrames = asio.DeviceLatencyFrames;
+            _strip = new InterleavedMixerStrip(AudioEngine.Rate, AudioEngine.Channels, AudioEngine.BlockFrames);
+            return;
+        }
+
         _capture = new MicCapture(DeviceId);
         _source = _capture;
         _strip = new InterleavedMixerStrip(AudioEngine.Rate, AudioEngine.Channels, AudioEngine.BlockFrames);
@@ -209,6 +222,12 @@ public sealed class MicStrip : IDisposable
     public void Dispose()
     {
         try { (_capture as IDisposable)?.Dispose(); } catch { }
+
+        // An ASIO source is not a MicCapture; releasing it gives the shared driver back.
+        if (!ReferenceEquals(_source, _capture))
+        {
+            try { (_source as IDisposable)?.Dispose(); } catch { }
+        }
     }
 }
 
