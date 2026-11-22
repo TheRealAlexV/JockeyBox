@@ -245,6 +245,29 @@ public sealed class AudioEngine : IDisposable
     /// <summary>Deck B as a slot.</summary>
     public DeckSlot SlotB => new(DeckB, false);
 
+    /// <summary>
+    /// What a reader outside the engine may know about one deck's strip chain.
+    ///
+    /// <para><b>Why a copy.</b> <see cref="InterleavedStripChain"/> hands out its live
+    /// per-channel chains through a settable indexer, so handing the object to a
+    /// diagnostics reader would give it a way into the render path. These four values
+    /// are read once and cannot be written back.</para>
+    /// </summary>
+    /// <param name="IsPassthrough">No processor on any channel, so the block is not touched.</param>
+    /// <param name="ProcessorCount">Processors on channel 0; the engine adds the same set to every channel.</param>
+    /// <param name="LatencyFrames">Declared latency of channel 0's chain, in frames.</param>
+    public readonly record struct DeckStripChainSnapshot(
+        bool IsPassthrough, int ProcessorCount, int LatencyFrames);
+
+    /// <summary>Deck A's strip chain as it stands right now.</summary>
+    public DeckStripChainSnapshot DeckAStripChain => SnapshotOf(_deckAChain);
+
+    /// <summary>Deck B's strip chain as it stands right now.</summary>
+    public DeckStripChainSnapshot DeckBStripChain => SnapshotOf(_deckBChain);
+
+    private static DeckStripChainSnapshot SnapshotOf(InterleavedStripChain chain) =>
+        new(chain.IsPassthrough, chain[0].Processors.Count, chain.LatencyFrames);
+
     /// <summary>Frame-scheduled actions owned by the render thread.</summary>
     public ScheduledActions ScheduledActions => _scheduled;
 

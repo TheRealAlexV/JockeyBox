@@ -20,26 +20,18 @@ namespace JockeyBox.ViewModels;
 /// opens a device and never runs a selftest. <see cref="Refresh"/> re-reads values that
 /// already exist and is safe to call while audio is rendering.</para>
 ///
-/// <para><b>What it cannot say.</b> The deck strip chains are private fields on
-/// <see cref="AudioEngine"/> and that file is out of bounds for this change, so they are
-/// read reflectively and reported as "not exposed" if the field is ever renamed. The
-/// latency ledger and the control registry have no instance anywhere in this build, so
-/// they are reported as such rather than as zeros.</para>
+/// <para><b>What it cannot say.</b> The latency ledger and the control registry have no
+/// instance anywhere in this build, so they are reported as such rather than as zeros.</para>
 /// </summary>
 public sealed class DiagnosticsViewModel : NotifyBase
 {
     private readonly AudioEngine _engine;
     private readonly AppSettings _settings;
-    private readonly InterleavedStripChain? _deckAChain;
-    private readonly InterleavedStripChain? _deckBChain;
 
     public DiagnosticsViewModel(AudioEngine engine, AppSettings settings)
     {
         _engine = engine ?? throw new ArgumentNullException(nameof(engine));
         _settings = settings ?? throw new ArgumentNullException(nameof(settings));
-
-        _deckAChain = StripChainOf(engine, "_deckAChain");
-        _deckBChain = StripChainOf(engine, "_deckBChain");
 
         Assembly asm = Assembly.GetEntryAssembly() ?? typeof(DiagnosticsViewModel).Assembly;
         string informational = asm.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
@@ -55,8 +47,8 @@ public sealed class DiagnosticsViewModel : NotifyBase
                       ?? asm.GetName().Version?.ToString()
                       ?? "unknown";
 
-        DeckA = new DeckRow("DECK A", _deckAChain);
-        DeckB = new DeckRow("DECK B", _deckBChain);
+        DeckA = new DeckRow("DECK A", () => _engine.DeckAStripChain);
+        DeckB = new DeckRow("DECK B", () => _engine.DeckBStripChain);
 
         foreach (BusKind kind in Enum.GetValues<BusKind>())
         {
@@ -112,38 +104,28 @@ public sealed class DiagnosticsViewModel : NotifyBase
         DeckA.Update();
         DeckB.Update();
         foreach (BusRow bus in Buses) bus.Update();
+
+        RefreshCount++;
     }
 
     /// <summary>
-    /// The engine's chain for a deck. Private field, no public accessor, and
-    /// AudioEngine.cs is not ours to change in this milestone: read it reflectively and
-    /// return null, so the panel can say "not exposed" instead of inventing a state.
+    /// How many times <see cref="Refresh"/> has run. One after construction; the
+    /// diagnostics window's ticker makes it two on its first tick, so a capture can
+    /// wait for the window's own live read rather than for construction.
     /// </summary>
-    private static InterleavedStripChain? StripChainOf(AudioEngine engine, string field)
-    {
-        try
-        {
-            FieldInfo? info = typeof(AudioEngine).GetField(field,
-                BindingFlags.Instance | BindingFlags.NonPublic);
-            return info?.GetValue(engine) as InterleavedStripChain;
-        }
-        catch (Exception)
-        {
-            return null;
-        }
-    }
+    public int RefreshCount { get; private set; }
 
     // ---- rows ---------------------------------------------------------------
 
     /// <summary>One deck's strip chain, as the engine holds it right now.</summary>
     public sealed class DeckRow : NotifyBase
     {
-        private readonly InterleavedStripChain? _chain;
+        private readonly Func<AudioEngine.DeckStripChainSnapshot> _snapshot;
 
-        public DeckRow(string name, InterleavedStripChain? chain)
+        public DeckRow(string name, Func<AudioEngine.DeckStripChainSnapshot> snapshot)
         {
             Name = name;
-            _chain = chain;
+            _snapshot = snapshot;
             Update();
         }
 
@@ -160,24 +142,13 @@ public sealed class DiagnosticsViewModel : NotifyBase
 
         public void Update()
         {
-            if (_chain == null)
-            {
-                Passthrough = "not exposed";
-                Processors = "not exposed";
-                Latency = "not exposed";
-                return;
-            }
+            AudioEngine.DeckStripChainSnapshot chain = _snapshot();
 
-            Passthrough = _chain.IsPassthrough ? "passthrough" : "processing";
+            Passthrough = chain.IsPassthrough ? "passthrough" : "processing";
+            Processors = chain.ProcessorCount.ToString(CultureInfo.InvariantCulture);
 
-            // One processor list per channel; the engine adds the same processors to
-            // every channel, so channel 0 speaks for the block.
-            int processors = _chain[0].Processors.Count;
-            Processors = processors.ToString(CultureInfo.InvariantCulture);
-
-            int frames = _chain.LatencyFrames;
-            double ms = frames * 1000.0 / AudioEngine.Rate;
-            Latency = string.Format(CultureInfo.InvariantCulture, "{0} fr  {1:0.00} ms", frames, ms);
+            double ms = chain.LatencyFrames * 1000.0 / AudioEngine.Rate;
+            Latency = string.Format(CultureInfo.InvariantCulture, "{0} fr  {1:0.00} ms", chain.LatencyFrames, ms);
         }
     }
 
