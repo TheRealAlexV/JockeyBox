@@ -7,7 +7,9 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
 using JockeyBox.Audio;
+using JockeyBox.Audio.Endpoints;
 using JockeyBox.Audio.Graph;
+using JockeyBox.Dsp;
 using JockeyBox.Library;
 using JockeyBox.Lyrics;
 using JockeyBox.Separation;
@@ -39,17 +41,28 @@ public partial class SettingsWindow : Window
     private readonly DeviceWatcher? _deviceWatcher;
     /// <summary>Render endpoints for the routing boxes; a test hands in a fixed list.</summary>
     private readonly Func<IReadOnlyList<AudioDeviceInfo>> _listOutputs;
+    /// <summary>
+    /// The installed ASIO drivers. Reading a driver's channel count opens it, and ASIO is
+    /// single-client, so the probe runs once and the answer is kept for the life of the
+    /// dialog; a test hands in a fixed list instead.
+    /// </summary>
+    private readonly Func<IReadOnlyList<AsioDriverInfo>> _asioDrivers;
+    private IReadOnlyList<AsioDriverInfo>? _asioDriversLoaded;
+    /// <summary>The per-driver picker selection (mode + offset) not yet added as a source.</summary>
+    private readonly Dictionary<string, AsioDraft> _asioDrafts = new(StringComparer.Ordinal);
     private bool _libraryToolsBusy;
 
     public SettingsWindow(AppSettings settings, Func<IReadOnlyList<TrackEntry>>? tracks = null,
                           PlaylistStore? playlists = null, DeviceWatcher? deviceWatcher = null,
-                          Func<IReadOnlyList<AudioDeviceInfo>>? outputDevices = null)
+                          Func<IReadOnlyList<AudioDeviceInfo>>? outputDevices = null,
+                          Func<IReadOnlyList<AsioDriverInfo>>? asioDrivers = null)
     {
         InitializeComponent();
         _settings = settings;
         _tracks = tracks;
         _playlists = playlists;
         _listOutputs = outputDevices ?? ListOutputDevices;
+        _asioDrivers = asioDrivers ?? AsioSourceCatalog.Probe;
         _oauth = new SpotifyOAuthService(settings);
         // The main window owns the process's one watcher; a dialog that
         // registered its own would be a second COM callback nobody unregisters.
@@ -225,6 +238,19 @@ public partial class SettingsWindow : Window
         public float Volume { get; set; } = 1f;
         public bool Muted { get; set; }
         public bool Monitor { get; set; }
+        /// <summary>First source channel this strip reads, or -1 for a whole capture endpoint.</summary>
+        public int Channel { get; init; } = -1;
+        /// <summary>Mono tap or stereo pair; Mono for every non-ASIO source.</summary>
+        public AsioChannelMode Mode { get; init; } = AsioChannelMode.Mono;
+
+        public bool IsAsio => Channel >= 0;
+    }
+
+    /// <summary>The picker's selection for one driver: mode and offset, before "Add".</summary>
+    private sealed class AsioDraft
+    {
+        public AsioChannelMode Mode { get; set; } = AsioChannelMode.Mono;
+        public int Offset { get; set; }
     }
 
     private readonly List<MicRow> _micRows = new();
@@ -263,11 +289,13 @@ public partial class SettingsWindow : Window
             _micRows.Add(new MicRow
             {
                 DeviceId = saved.DeviceId,
-                DeviceName = "Saved device (not connected)",
+                DeviceName = SavedDeviceName(saved),
                 Enabled = true,
                 Volume = Math.Clamp(saved.Volume, 0f, 2f),
                 Muted = saved.Muted,
                 Monitor = saved.Monitor,
+                Channel = SourceChannel(saved),
+                Mode = SourceMode(saved),
             });
         }
 
@@ -304,6 +332,8 @@ public partial class SettingsWindow : Window
                 Volume = was?.Volume ?? 1f,
                 Muted = was?.Muted ?? false,
                 Monitor = was?.Monitor ?? false,
+                Channel = was?.Channel ?? -1,
+                Mode = was?.Mode ?? AsioChannelMode.Mono,
             });
         }
         foreach (var was in previous.Values)
@@ -313,11 +343,13 @@ public partial class SettingsWindow : Window
             _micRows.Add(new MicRow
             {
                 DeviceId = was.DeviceId,
-                DeviceName = "Saved device (not connected)",
+                DeviceName = was.DeviceName,
                 Enabled = was.Enabled,
                 Volume = was.Volume,
                 Muted = was.Muted,
                 Monitor = was.Monitor,
+                Channel = was.Channel,
+                Mode = was.Mode,
             });
         }
         RenderMicRows();
@@ -337,6 +369,11 @@ public partial class SettingsWindow : Window
                 Volume = Math.Clamp(r.Volume, 0f, 2f),
                 Muted = r.Muted,
                 Monitor = r.Monitor,
+                // The mode and offset are the operator's choice, not the default: writing
+                // them back from the row is what keeps a stereo pair a stereo pair across
+                // a save. Leaving them off silently reset every ASIO source to Mono.
+                Channel = r.Channel,
+                Mode = r.Mode,
             })
             .ToList();
     }
@@ -349,6 +386,11 @@ public partial class SettingsWindow : Window
     {
         MicListPanel.Children.Clear();
 
+        // ASIO first: it is where the operator composes a source that the WASAPI list
+        // cannot show at all. An empty driver list is rendered in words below, never as
+        // a blank space.
+        AddAsioSection();
+
         var enabled = _micRows.Where(r => r.Enabled).ToList();
         var available = _micRows.Where(r => !r.Enabled).ToList();
 
@@ -360,6 +402,7 @@ public partial class SettingsWindow : Window
                 Foreground = LookupBrush("TextDimBrush", Brushes.Gray),
                 Margin = new Thickness(0, 2, 0, 6),
             });
+            Dispatcher.BeginInvoke(() => MicListRendered = true, DispatcherPriority.Loaded);
             return;
         }
 
@@ -405,6 +448,288 @@ public partial class SettingsWindow : Window
         Foreground = LookupBrush("AccentABrush", Brushes.Cyan),
         Margin = new Thickness(0, 2, 0, 0),
     };
+
+    // ================================================== ASIO source picker
+
+    /// <summary>
+    /// The installed ASIO drivers, probed once per dialog. Reading a driver's channel
+    /// count opens it, and ASIO is single-client, so the answer is kept rather than the
+    /// interface re-opened on every render.
+    /// </summary>
+    private IReadOnlyList<AsioDriverInfo> Drivers()
+    {
+        if (_asioDriversLoaded != null) return _asioDriversLoaded;
+        try
+        {
+            _asioDriversLoaded = _asioDrivers() ?? Array.Empty<AsioDriverInfo>();
+        }
+        catch
+        {
+            _asioDriversLoaded = Array.Empty<AsioDriverInfo>();
+        }
+
+        return _asioDriversLoaded;
+    }
+
+    private AsioDriverInfo? DriverByName(string name) =>
+        Drivers().FirstOrDefault(d => string.Equals(d.Name, name, StringComparison.Ordinal));
+
+    /// <summary>
+    /// The ASIO block at the top of the mic panel: a caption, then for each installed
+    /// driver its live state and (when readable) the source composer. No drivers at all
+    /// is a real state and says so in words; it is never an empty box.
+    /// </summary>
+    private void AddAsioSection()
+    {
+        var drivers = Drivers();
+        MicListPanel.Children.Add(GroupCaption("ASIO INPUTS"));
+
+        if (drivers.Count == 0)
+        {
+            MicListPanel.Children.Add(new TextBlock
+            {
+                Text = "No ASIO drivers installed. Install the interface's ASIO driver, then reopen Settings.",
+                Foreground = LookupBrush("TextDimBrush", Brushes.Gray),
+                FontSize = 11,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(0, 0, 0, 8),
+            });
+            return;
+        }
+
+        foreach (var driver in drivers)
+        {
+            MicListPanel.Children.Add(AsioDriverHeader(driver));
+            if (driver.Ready) MicListPanel.Children.Add(BuildAsioComposer(driver));
+        }
+
+        MicListPanel.Children.Add(new Border { Height = 6 });
+    }
+
+    /// <summary>The driver line: its name and what it answered, in words.</summary>
+    private TextBlock AsioDriverHeader(AsioDriverInfo driver)
+    {
+        string state = driver.State switch
+        {
+            AsioDriverState.Ready => driver.Detail is { Length: > 0 } detail
+                ? $"{driver.Channels} inputs · {detail}"
+                : $"{driver.Channels} input{(driver.Channels == 1 ? "" : "s")}",
+            AsioDriverState.InUse =>
+                "in use by another application — ASIO is single-client, so close it there to read its channels",
+            _ => driver.Detail is { Length: > 0 } why ? why : "reports no usable inputs",
+        };
+
+        return new TextBlock
+        {
+            Text = $"{driver.Name} — {state}",
+            FontSize = 11,
+            Foreground = driver.Ready
+                ? LookupBrush("TextBrush", Brushes.White)
+                : LookupBrush("TextDimBrush", Brushes.Gray),
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 2, 0, 2),
+        };
+    }
+
+    /// <summary>
+    /// Mode + offset + Add for one readable driver. Both modes are reachable without
+    /// listing overlapping rows: the mode switch redraws the offset list, so a 4-channel
+    /// 4i4 offers "Input 1"…"Input 4" as mono taps and "Input 1 + Input 2"… as pairs,
+    /// and the operator adds as many as they want.
+    /// </summary>
+    private FrameworkElement BuildAsioComposer(AsioDriverInfo driver)
+    {
+        if (!_asioDrafts.TryGetValue(driver.Name, out var draft))
+        {
+            draft = new AsioDraft();
+            _asioDrafts[driver.Name] = draft;
+        }
+
+        var mono = new RadioButton
+        {
+            Content = "Mono tap",
+            GroupName = "asio-mode:" + driver.Name,
+            Style = (Style)FindResource("AsioPill"),
+            Margin = new Thickness(0, 0, 6, 0),
+            ToolTip = "Read one channel and send it to both sides.",
+        };
+        var pair = new RadioButton
+        {
+            Content = "Stereo pair",
+            GroupName = "asio-mode:" + driver.Name,
+            Style = (Style)FindResource("AsioPill"),
+            Margin = new Thickness(0, 0, 10, 0),
+            ToolTip = "Read two adjacent channels as left and right.",
+        };
+        var offsets = new ComboBox
+        {
+            Width = 210,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 10, 0),
+            ToolTip = "The channel, or the first channel of the pair, this source reads.",
+        };
+        var add = new Button
+        {
+            Content = "Add source",
+            MinWidth = 104,
+            Padding = new Thickness(10, 2, 10, 2),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+
+        bool building = true;
+
+        void FillOffsets()
+        {
+            offsets.Items.Clear();
+            if (draft.Mode == AsioChannelMode.Mono)
+            {
+                for (int i = 0; i < driver.Channels; i++)
+                    offsets.Items.Add(new ComboBoxItem { Content = driver.ChannelLabel(i), Tag = i });
+            }
+            else
+            {
+                for (int i = 0; i + 1 < driver.Channels; i += 2)
+                    offsets.Items.Add(new ComboBoxItem
+                    {
+                        Content = $"{driver.ChannelLabel(i)} + {driver.ChannelLabel(i + 1)}",
+                        Tag = i,
+                    });
+            }
+
+            int index = 0;
+            for (int i = 0; i < offsets.Items.Count; i++)
+                if (offsets.Items[i] is ComboBoxItem item && item.Tag is int tag && tag == draft.Offset) index = i;
+            offsets.SelectedIndex = offsets.Items.Count > 0 ? index : -1;
+            if (offsets.SelectedItem is ComboBoxItem chosen && chosen.Tag is int value) draft.Offset = value;
+        }
+
+        void RefreshAdd()
+        {
+            string key = DeviceSourceKey.Compose(AsioDriverRegistry.Kind, driver.Name, draft.Offset, draft.Mode);
+            bool exists = draft.Offset >= 0
+                && _micRows.Any(r => string.Equals(r.DeviceId, key, StringComparison.OrdinalIgnoreCase));
+            add.IsEnabled = !exists && offsets.SelectedIndex >= 0;
+            add.Content = exists ? "Added" : "Add source";
+        }
+
+        FillOffsets();
+        mono.IsChecked = draft.Mode == AsioChannelMode.Mono;
+        pair.IsChecked = draft.Mode == AsioChannelMode.StereoPair;
+        RefreshAdd();
+        building = false;
+
+        mono.Checked += (_, _) =>
+        {
+            if (building) return;
+            draft.Mode = AsioChannelMode.Mono;
+            RenderMicRows();
+        };
+        pair.Checked += (_, _) =>
+        {
+            if (building) return;
+            draft.Mode = AsioChannelMode.StereoPair;
+            draft.Offset -= draft.Offset % 2; // pairs start on an even channel
+            RenderMicRows();
+        };
+        offsets.SelectionChanged += (_, _) =>
+        {
+            if (building) return;
+            if (offsets.SelectedItem is ComboBoxItem item && item.Tag is int value) draft.Offset = value;
+            RefreshAdd();
+        };
+        add.Click += (_, _) => AddAsioSource(driver, draft.Offset, draft.Mode);
+
+        var row = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            Margin = new Thickness(0, 0, 0, 10),
+        };
+        row.Children.Add(mono);
+        row.Children.Add(pair);
+        row.Children.Add(offsets);
+        row.Children.Add(add);
+        return row;
+    }
+
+    /// <summary>Adds one ASIO source as an enabled row, the same shape a WASAPI row takes.</summary>
+    private void AddAsioSource(AsioDriverInfo driver, int offset, AsioChannelMode mode)
+    {
+        string key = DeviceSourceKey.Compose(AsioDriverRegistry.Kind, driver.Name, offset, mode);
+        if (_micRows.Any(r => string.Equals(r.DeviceId, key, StringComparison.OrdinalIgnoreCase))) return;
+
+        _micRows.Add(new MicRow
+        {
+            DeviceId = key,
+            DeviceName = SourceLabel(driver.Name, offset, mode, notConnected: false),
+            Enabled = true,
+            Volume = 1f,
+            Channel = offset,
+            Mode = mode,
+        });
+        RenderMicRows();
+    }
+
+    /// <summary>
+    /// "Focusrite USB ASIO · Input 3 (mono)" — the driver's own channel name when it gave
+    /// one, index-only when it did not, never a bare number.
+    /// </summary>
+    private string SourceLabel(string driverName, int offset, AsioChannelMode mode, bool notConnected)
+    {
+        var driver = DriverByName(driverName);
+        string channels = mode == AsioChannelMode.StereoPair
+            ? $"{driver?.ChannelLabel(offset) ?? $"Input {offset + 1}"} + " +
+              $"{driver?.ChannelLabel(offset + 1) ?? $"Input {offset + 2}"}"
+            : driver?.ChannelLabel(offset) ?? $"Input {offset + 1}";
+        string kind = mode == AsioChannelMode.StereoPair ? "stereo pair" : "mono";
+        return $"{driverName} · {channels} ({kind}){(notConnected ? " — not connected" : "")}";
+    }
+
+    /// <summary>
+    /// The channel and mode a saved device carries: the strip key is the authority (it
+    /// is what the mixer routes by), and the settings fields are the fallback for a key
+    /// that does not parse.
+    /// </summary>
+    private static bool TryReadAsioSource(string deviceId, out string driver, out int channel, out AsioChannelMode mode)
+    {
+        driver = deviceId;
+        channel = -1;
+        mode = AsioChannelMode.Mono;
+        if (!DeviceSourceKey.TryParse(deviceId, out string kind, out string endpoint, out int ch, out AsioChannelMode md))
+            return false;
+        if (!string.Equals(kind, AsioDriverRegistry.Kind, StringComparison.Ordinal) || ch < 0) return false;
+        driver = endpoint;
+        channel = ch;
+        mode = md;
+        return true;
+    }
+
+    private static int SourceChannel(AppSettings.MicDeviceSettings saved) =>
+        TryReadAsioSource(saved.DeviceId, out _, out int channel, out _) ? channel : saved.Channel;
+
+    private static AsioChannelMode SourceMode(AppSettings.MicDeviceSettings saved) =>
+        TryReadAsioSource(saved.DeviceId, out _, out _, out AsioChannelMode mode) ? mode : saved.Mode;
+
+    private string SavedDeviceName(AppSettings.MicDeviceSettings saved)
+    {
+        if (TryReadAsioSource(saved.DeviceId, out string driver, out int channel, out AsioChannelMode mode))
+        {
+            var info = DriverByName(driver);
+            bool live = info is { Ready: true };
+            return SourceLabel(driver, channel, mode, notConnected: !live);
+        }
+
+        return "Saved device (not connected)";
+    }
+
+    /// <summary>Test seam: the list Save writes, without writing the file.</summary>
+    internal List<AppSettings.MicDeviceSettings> CollectMicDevicesForTest() => CollectMicDevices();
+
+    /// <summary>Test seam: add a source the way the picker's Add button does.</summary>
+    internal void AddAsioSourceForTest(string driverName, int offset, AsioChannelMode mode)
+    {
+        var driver = DriverByName(driverName);
+        if (driver != null) AddAsioSource(driver, offset, mode);
+    }
 
     /// <summary>One device row: enable box, name, 0-200 % volume, Mute, Monitor.</summary>
     private Border BuildMicRow(MicRow row)
