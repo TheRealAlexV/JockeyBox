@@ -19,12 +19,6 @@ namespace JockeyBox.Audio.Graph;
 /// </summary>
 public sealed class MicStrip : IDisposable
 {
-    /// <summary>The limiter lookahead is the only chain latency (5 ms at 48 kHz).</summary>
-    private const int PadRingFrames = 240;
-
-    /// <summary>A pad change ramps over this many frames, so a device never steps.</summary>
-    private const int PadFadeFrames = 480;
-
     private readonly IMicSource? _source;
     private readonly MicCapture? _capture;
 
@@ -34,12 +28,13 @@ public sealed class MicStrip : IDisposable
     /// </summary>
     private readonly InterleavedMixerStrip _strip;
 
-    /// <summary>Fixed alignment delay ring: <see cref="PadRingFrames"/> frames, never grown.</summary>
-    private readonly float[] _padRing = new float[PadRingFrames * AudioEngine.Channels];
-    private int _padWrite;
-    private int _padTarget;
-    private float _padCurrent;
-    private float _padStep;
+    /// <summary>
+    /// Alignment delay. Its ring is sized from the pad actually needed, and it grows only on
+    /// the settings/route path (<see cref="SetPadding"/>), so the render path never allocates.
+    /// </summary>
+    private readonly PadRing _pad = new(AudioEngine.Channels);
+
+    private int _padClampLogged;
     private volatile bool _mixerEnabled;
     private int _started;
     private int _failedLogged;
@@ -145,6 +140,23 @@ public sealed class MicStrip : IDisposable
     internal int ChainLatencyFrames => _strip.LatencyFrames;
 
     /// <summary>
+    /// Latency the capture device itself adds, in frames, before this strip ever sees a sample.
+    /// Default 0: a WASAPI source does not report one and stays 0. The ASIO lane sets it from
+    /// the driver's reported input latency, so a fast ASIO interface can be padded against a
+    /// slower WASAPI mic instead of being aligned on chain latency alone.
+    /// </summary>
+    public int DeviceLatencyFrames { get; set; }
+
+    /// <summary>Everything this device's signal carries before the mix: chain plus device.</summary>
+    internal int TotalLatencyFrames => ChainLatencyFrames + DeviceLatencyFrames;
+
+    /// <summary>
+    /// True when this device's alignment pad hit the ceiling and was clamped: the mix is
+    /// knowingly misaligned by whatever it could not absorb. Read by the diagnostics window.
+    /// </summary>
+    public bool LatencyClamped => _pad.Clamped;
+
+    /// <summary>
     /// Master gate. When false the strip and its pad are skipped entirely, so the device
     /// block reaches the sums byte-identical to a build without a mixer.
     /// </summary>
@@ -158,16 +170,21 @@ public sealed class MicStrip : IDisposable
     internal void ApplyStripParameters(StripParameters parameters) => _strip.Apply(parameters);
 
     /// <summary>
-    /// Sets this device's alignment pad. The mix pads every device to the slowest chain in
-    /// the collection, so two devices cannot comb-filter when only one has a limiter. The
-    /// change ramps in over <see cref="PadFadeFrames"/> frames rather than stepping.
+    /// Sets this device's alignment pad. The mix pads every device to the slowest total (chain
+    /// + device) latency in the collection, so two devices cannot comb-filter. The change ramps
+    /// in over the ring's fade rather than stepping. A pad past the ring's ceiling is clamped
+    /// and logged once: a misaligned mix is never silent.
     /// </summary>
     internal void SetPadding(int frames)
     {
-        frames = Math.Clamp(frames, 0, PadRingFrames);
-        if (frames == _padTarget) return;
-        _padTarget = frames;
-        _padStep = (frames - _padCurrent) / PadFadeFrames;
+        _pad.SetPadding(frames);
+
+        if (_pad.Clamped && VolatileFlag.First(ref _padClampLogged))
+        {
+            Log.Warn(
+                $"mic: '{DeviceId}' needs {frames} frames of alignment, more than the " +
+                $"{PadRing.MaxFrames}-frame ceiling; clamped, the mix stays misaligned");
+        }
     }
 
     /// <summary>
@@ -185,79 +202,8 @@ public sealed class MicStrip : IDisposable
     {
         if (!_mixerEnabled) return;
         if (channels != AudioEngine.Channels) return;
-        if (_padTarget > 0 || _padCurrent > 0f) Pad(buffer, offset, channels, frames);
+        if (_pad.Active) _pad.Process(buffer, offset, channels, frames);
         _strip.Process(buffer, offset, frames);
-    }
-
-    /// <summary>
-    /// Fractional-delay crossfade through the fixed ring. Reads the tap at the ramp's floor
-    /// and ceiling so a pad change slides instead of clicking; reads before the write, so a
-    /// 240-frame pad reads the oldest sample the ring holds.
-    /// </summary>
-    private void Pad(float[] buffer, int offset, int channels, int frames)
-    {
-        float current = _padCurrent;
-        float step = _padStep;
-        int write = _padWrite;
-
-        for (int frame = 0; frame < frames; frame++)
-        {
-            int d0 = (int)current;
-            float frac = current - d0;
-            int d1 = frac > 0f ? d0 + 1 : d0;
-
-            int baseIndex = offset + frame * channels;
-            for (int c = 0; c < channels; c++)
-            {
-                int bi = baseIndex + c;
-                float input = buffer[bi];
-
-                float s0;
-                if (d0 == 0)
-                {
-                    s0 = input;
-                }
-                else
-                {
-                    int i0 = write - d0;
-                    if (i0 < 0) i0 += PadRingFrames;
-                    s0 = _padRing[i0 * channels + c];
-                }
-
-                float outSample;
-                if (d1 == d0 || d1 > PadRingFrames)
-                {
-                    outSample = s0;
-                }
-                else
-                {
-                    int i1 = write - d1;
-                    if (i1 < 0) i1 += PadRingFrames;
-                    outSample = s0 + (_padRing[i1 * channels + c] - s0) * frac;
-                }
-
-                _padRing[write * channels + c] = input;
-                buffer[bi] = outSample;
-            }
-
-            write++;
-            if (write == PadRingFrames) write = 0;
-
-            if (step > 0f)
-            {
-                current += step;
-                if (current >= _padTarget) { current = _padTarget; step = 0f; }
-            }
-            else if (step < 0f)
-            {
-                current += step;
-                if (current <= _padTarget) { current = _padTarget; step = 0f; }
-            }
-        }
-
-        _padWrite = write;
-        _padCurrent = current;
-        _padStep = step;
     }
 
     public void Dispose()
@@ -297,6 +243,22 @@ public sealed class MicMixer : IDisposable
     public IReadOnlyList<MicStrip> Strips => _strips;
 
     public int Count => _strips.Length;
+
+    /// <summary>
+    /// True when any device's pad hit the ceiling and was clamped, so the mix is misaligned by
+    /// more than it can compensate. Read by the diagnostics window.
+    /// </summary>
+    public bool LatencyClamped
+    {
+        get
+        {
+            var strips = _strips;
+            for (int i = 0; i < strips.Length; i++)
+                if (strips[i].LatencyClamped) return true;
+
+            return false;
+        }
+    }
 
     /// <summary>
     /// Replace the collection. Old strips are disposed after the swap; new strips
@@ -486,9 +448,10 @@ public sealed class MicMixer : IDisposable
         _stored.TryGetValue(deviceId ?? "", out var parameters) ? parameters : StripParameters.Neutral;
 
     /// <summary>
-    /// Registers every strip in the ledger and pads all of them to the slowest chain, in one
-    /// pass. Runs on the settings path, never per device: one device cannot know what its
-    /// peers carry. With no limiter engaged anywhere every pad is 0.
+    /// Registers every strip in the ledger and pads all of them to the slowest total latency
+    /// (chain + device), in one pass. Runs on the settings path, never per block: one device
+    /// cannot know what its peers carry. With no limiter engaged and no device latency
+    /// reported, every pad is 0.
     /// </summary>
     private void RecalculateLatency(MicStrip[] strips)
     {
@@ -497,12 +460,12 @@ public sealed class MicMixer : IDisposable
             string id = string.IsNullOrWhiteSpace(strips[i].DeviceId)
                 ? "device." + i.ToString(System.Globalization.CultureInfo.InvariantCulture)
                 : strips[i].DeviceId;
-            _latency.Set(id, strips[i].ChainLatencyFrames, 0, 0);
+            _latency.Set(id, strips[i].ChainLatencyFrames, strips[i].DeviceLatencyFrames, 0);
         }
 
         int max = _latency.MaxLatencyFrames;
         for (int i = 0; i < strips.Length; i++)
-            strips[i].SetPadding(max - strips[i].ChainLatencyFrames);
+            strips[i].SetPadding(max - strips[i].TotalLatencyFrames);
     }
 
     /// <summary>Peak of strip <paramref name="index"/>, or 0 when out of range.</summary>

@@ -87,4 +87,16 @@ public class LatencyLedgerTests
         Assert.Equal(3, ledger.Entries.Count);
         Assert.Equal(11, ledger.Entries[0].TotalFrames);
     }
+
+    [Fact]
+    public void Device_frames_count_toward_compensation_not_chain_frames_alone()
+    {
+        var ledger = new LatencyLedger();
+        ledger.Set("limiter", chainFrames: 240, deviceFrames: 0, userOffsetFrames: 0);
+        ledger.Set("asio", chainFrames: 0, deviceFrames: 500, userOffsetFrames: 0);
+
+        Assert.Equal(500, ledger.MaxLatencyFrames);
+        Assert.Equal(260, ledger.PaddingFor("limiter"));
+        Assert.Equal(0, ledger.PaddingFor("asio"));
+    }
 }
