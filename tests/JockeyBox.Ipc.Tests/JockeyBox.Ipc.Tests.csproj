@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <!-- Exe so the cross-process proof can run this same assembly as a child reader:
+         dotnet JockeyBox.Ipc.Tests.dll with the child-reader switch. -->
+    <OutputType>Exe</OutputType>
+    <AssemblyName>JockeyBox.Ipc.Tests</AssemblyName>
+    <RootNamespace>JockeyBox.Ipc.Tests</RootNamespace>
+    <StartupObject>Program</StartupObject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
+    <PackageReference Include="xunit" Version="2.5.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.5.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\JockeyBox.Ipc\JockeyBox.Ipc.csproj" />
+  </ItemGroup>
+
+</Project>
