@@ -123,6 +123,13 @@ public sealed class AudioEngine : IDisposable
     // the same equalisation.
     private readonly MixEq _eq = new();
 
+    // Per-channel strip chains for the two decks, downstream of the mix EQ and
+    // upstream of the crossfade fan-out (see RenderBlock), so a chain feeds the
+    // program sum, the monitor tap and the recording tap alike. Empty today: an
+    // empty chain is a passthrough, so the deck block is never touched.
+    private readonly InterleavedStripChain _deckAChain = new(Channels, BlockFrames);
+    private readonly InterleavedStripChain _deckBChain = new(Channels, BlockFrames);
+
     private Thread? _thread;
     private volatile bool _running;
     private long _frameIndex;
@@ -701,6 +708,8 @@ public sealed class AudioEngine : IDisposable
         foreach (var bus in _buses) bus.ResetDelay();
         _deckADelay.Reset();
         _deckBDelay.Reset();
+        _deckAChain.Reset();
+        _deckBChain.Reset();
 
         if (built.Outputs.Count > 0)
             Log.Info($"audio route: {built.Outputs.Count} device session(s) for " +
@@ -899,6 +908,14 @@ public sealed class AudioEngine : IDisposable
         _eq.BeginBlock();
         _eq.Process(_deckABuffer, 0, BlockFrames, EqPath.DeckA);
         _eq.Process(_deckBBuffer, 0, BlockFrames, EqPath.DeckB);
+
+        // 1c. Per-channel strip chain, EQ first then the chain. Sitting on the
+        //     equalised deck block and before the crossfade below means its output is
+        //     what the program sum, the monitor tap and the recording tap all hear.
+        //     While the chains are empty IsPassthrough is true and the blocks are not
+        //     even read, so the render stays bit-identical to a chain-less build.
+        if (!_deckAChain.IsPassthrough) _deckAChain.Process(_deckABuffer, 0, BlockFrames);
+        if (!_deckBChain.IsPassthrough) _deckBChain.Process(_deckBBuffer, 0, BlockFrames);
 
         // 2. Soundboard, always rendered so its own gain and meter stay live.
         Array.Clear(_soundboardBlock, 0, _soundboardBlock.Length);

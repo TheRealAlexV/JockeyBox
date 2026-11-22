@@ -1,10 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Threading;
 using JockeyBox.Audio.Beat;
 using JockeyBox.Audio.Graph;
 using JockeyBox.Audio.Transition;
+using JockeyBox.Dsp;
 using JockeyBox.Playback;
 using JockeyBox.Settings;
 
@@ -41,6 +43,8 @@ public static class SelftestRunner
             ("no-zero-reads", NoZeroReads),
             ("end-of-track-handoff", EndOfTrackHandoff),
             ("deck-output-delay", DeckOutputDelay),
+            ("chain-bypass-bit-exact", ChainBypassBitExact),
+            ("chain-latency-align-null", ChainLatencyAlignNull),
         };
 
         output.WriteLine("JockeyBox selftest - offline audio graph, no sound device");
@@ -408,6 +412,152 @@ public static class SelftestRunner
             $"outgoing deck is {rig.Engine.DeckA.State}, expected Ended");
         Require(incoming >= 0.8 * 0.25,
             $"deck B is not audible after the hand-off (660 Hz amplitude {incoming:0.000}, expected 0.250)");
+    }
+
+    // ------------------------------------------------------------- chain seam
+
+    /// <summary>
+    /// An empty chain, and a chain whose every processor is bypassed, must leave an
+    /// interleaved stereo block byte-for-byte identical. Raw bytes, no tolerance: the
+    /// claim is exactness.
+    /// </summary>
+    private static void ChainBypassBitExact(Case test)
+    {
+        const int frames = AudioEngine.BlockFrames;
+        var input = new float[frames * AudioEngine.Channels];
+        for (int i = 0; i < input.Length; i++)
+            input[i] = (float)(0.5 * Math.Sin(i * 0.017) + (i % 7) * 0.001);
+
+        var empty = new InterleavedStripChain(AudioEngine.Channels, frames);
+        var output = (float[])input.Clone();
+        empty.Process(output, 0, frames);
+        Require(empty.IsPassthrough, "an empty chain does not report passthrough");
+        Require(MemoryMarshal.AsBytes(output.AsSpan()).SequenceEqual(
+                MemoryMarshal.AsBytes(input.AsSpan())),
+            "an empty chain changed the block");
+
+        var bypassed = new InterleavedStripChain(AudioEngine.Channels, frames);
+        for (int c = 0; c < AudioEngine.Channels; c++)
+        {
+            bypassed[c].Add(new GainStage($"gain.{c}") { Bypass = true });
+            bypassed[c].Add(new LowPassFilter(AudioEngine.Rate, 1_000, id: $"lowpass.{c}") { Bypass = true });
+        }
+
+        output = (float[])input.Clone();
+        bypassed.Process(output, 0, frames);
+        Require(bypassed.IsPassthrough, "a fully bypassed chain does not report passthrough");
+        Require(MemoryMarshal.AsBytes(output.AsSpan()).SequenceEqual(
+                MemoryMarshal.AsBytes(input.AsSpan())),
+            "a fully bypassed chain changed the block");
+
+        test.Note("empty and bypassed chains are bit-identical");
+    }
+
+    /// <summary>
+    /// Two chains declare different latency; the shorter one is padded by the declared
+    /// difference and the two outputs cross-correlated. The best lag must be exactly 0,
+    /// so a declared LatencyFrames that lies would move the peak.
+    /// </summary>
+    private static void ChainLatencyAlignNull(Case test)
+    {
+        const int frames = AudioEngine.BlockFrames;
+        const int shortDelay = 6;
+        const int longDelay = 11;
+        const int maxLag = 32;
+
+        var chirp = new float[frames];
+        double phase = 0;
+        for (int i = 0; i < frames; i++)
+        {
+            double hz = 500 + 3500.0 * i / frames;
+            chirp[i] = (float)(0.6 * Math.Sin(phase));
+            phase += 2 * Math.PI * hz / AudioEngine.Rate;
+        }
+
+        var shortChain = new InterleavedStripChain(1, frames);
+        shortChain[0].Add(new LatencyProbe("probe.short", shortDelay));
+        var longChain = new InterleavedStripChain(1, frames);
+        longChain[0].Add(new LatencyProbe("probe.long", longDelay));
+
+        var shortOut = (float[])chirp.Clone();
+        var longOut = (float[])chirp.Clone();
+        shortChain.Process(shortOut, 0, frames);
+        longChain.Process(longOut, 0, frames);
+
+        Require(shortChain.LatencyFrames == shortDelay,
+            $"short chain reports {shortChain.LatencyFrames} frames, declared {shortDelay}");
+        Require(longChain.LatencyFrames == longDelay,
+            $"long chain reports {longChain.LatencyFrames} frames, declared {longDelay}");
+
+        int pad = longChain.LatencyFrames - shortChain.LatencyFrames;
+        Require(pad > 0, "the two chains do not declare different latency");
+
+        var padded = new float[frames];
+        for (int i = 0; i + pad < frames; i++) padded[i + pad] = shortOut[i];
+
+        int bestLag = 0;
+        double bestScore = double.NegativeInfinity;
+        for (int lag = -maxLag; lag <= maxLag; lag++)
+        {
+            double score = 0;
+            for (int i = 0; i < frames; i++)
+            {
+                int j = i + lag;
+                if (j < 0 || j >= frames) continue;
+                score += padded[i] * (double)longOut[j];
+            }
+
+            if (score > bestScore)
+            {
+                bestScore = score;
+                bestLag = lag;
+            }
+        }
+
+        Require(bestScore > 0, "the cross-correlation found no signal");
+        Require(bestLag == 0,
+            $"best lag is {bestLag} frames, expected 0 (declared latency {shortDelay} vs {longDelay})");
+        test.Note($"best lag 0 over +/-{maxLag} frames");
+    }
+
+    /// <summary>Test double: a fixed frame delay that declares exactly that latency.</summary>
+    private sealed class LatencyProbe : IAudioProcessor
+    {
+        private readonly int _delay;
+        private readonly float[] _history;
+        private int _written;
+
+        public LatencyProbe(string id, int delayFrames)
+        {
+            Id = id;
+            _delay = delayFrames;
+            _history = new float[delayFrames];
+        }
+
+        public string Id { get; }
+
+        public int LatencyFrames => _delay;
+
+        public bool Bypass { get; set; }
+
+        public void Process(Span<float> samples)
+        {
+            if (Bypass) return;
+            for (int i = 0; i < samples.Length; i++)
+            {
+                int slot = _written % _delay;
+                float incoming = samples[i];
+                samples[i] = _history[slot];
+                _history[slot] = incoming;
+                _written++;
+            }
+        }
+
+        public void Reset()
+        {
+            Array.Clear(_history, 0, _history.Length);
+            _written = 0;
+        }
     }
 
     // ------------------------------------------------------------------ harness

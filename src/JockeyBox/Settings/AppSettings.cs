@@ -195,6 +195,15 @@ public class AppSettings
     /// <summary>Master fader for every output; 0..1.2.</summary>
     public float MasterVolume { get; set; } = 1.0f;
 
+    /// <summary>
+    /// Per-channel mixer chains in the deck render path. Off means the engine skips
+    /// the chains entirely, so the output is bit-identical to a build without them.
+    /// </summary>
+    public bool MixerEnabled { get; set; }
+
+    // MixerEnabled is additive: an existing schema-5 file deserialises with the
+    // default (false) and needs no migration, so do not bump SettingsSchemaVersion for it.
+
     // ------------------------------------------------------------------
     // Talk-over microphone (2.0).
     //

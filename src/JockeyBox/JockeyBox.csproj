@@ -8,7 +8,9 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <RootNamespace>JockeyBox</RootNamespace>
     <AssemblyName>JockeyBox</AssemblyName>
-    <Version>1.5.0</Version>
+    <!-- 2.2.0-m0: milestone 0 of the mixer work. The field binary used to report
+         1.5.0, identical to the live build, so a deploy was unattributable. -->
+    <Version>2.2.0-m0</Version>
     <!-- Allows building this Windows-targeted WPF app from Linux/WSL -->
     <EnableWindowsTargeting>true</EnableWindowsTargeting>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
@@ -69,6 +71,11 @@
          script is bundled into the exe and never appears next to it. Same reason as the libVLC
          target above - BpmAnalysisService reads the script from AppContext.BaseDirectory. -->
     <None Update="AnalysisScripts\analysis\*.py" CopyToOutputDirectory="PreserveNewest" ExcludeFromSingleFile="true" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- The WPF-free DSP library: processors, strip chain, latency ledger. -->
+    <ProjectReference Include="..\JockeyBox.Dsp\JockeyBox.Dsp.csproj" />
   </ItemGroup>
 
 </Project>
