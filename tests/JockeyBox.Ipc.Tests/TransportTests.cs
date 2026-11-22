@@ -236,12 +236,12 @@ public sealed class TransportTests
 
         using var writer = VirtualBusWriter.Open(name, SampleRate, Channels, BlockFrames, Capacity);
 
-        using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-        using var map = MemoryMappedFile.CreateFromFile(file, null, 0, MemoryMappedFileAccess.Read, HandleInheritability.None, leaveOpen: true);
+        using var map = RawRegion.OpenRead(name);
         using var view = map.CreateViewAccessor(0, 0, MemoryMappedFileAccess.Read);
 
         Assert.Equal(BusLayout.HeaderSize, BusLayout.PayloadOffset);
-        Assert.Equal(new FileInfo(path).Length, BusLayout.RegionSize(SampleRate, Channels, BlockFrames, Capacity));
+        long regionSize = BusLayout.RegionSize(SampleRate, Channels, BlockFrames, Capacity);
+        Assert.Equal(regionSize, OperatingSystem.IsWindows() ? view.Capacity : new FileInfo(path).Length);
         Assert.Equal(unchecked((uint)BusLayout.Magic), view.ReadUInt32(BusLayout.MagicOffset));
         Assert.Equal(BusLayout.Version, view.ReadInt32(BusLayout.VersionOffset));
         Assert.Equal(BusLayout.HeaderSize, view.ReadInt32(BusLayout.HeaderSizeOffset));
@@ -320,29 +320,74 @@ public sealed class TransportTests
 
 internal static class RawRegion
 {
+    // Windows backs a Local\ bus with a named, pagefile-backed section, and that section lives
+    // only while a handle is open. Seeding it therefore has to hold the map until Delete(),
+    // or the section vanishes before the code under test can open it by name. On Linux the
+    // backing file persists on disk and needs no such lifeline.
+    private static readonly Dictionary<string, MemoryMappedFile> WindowsSections = new(StringComparer.Ordinal);
+
     public static void Write(string name, uint magic, int version, int sampleRate = 48000, int channels = 2, int blockFrames = 480, int capacityBlocks = 4)
     {
-        string path = BusLayout.PathFor(name);
         long size = BusLayout.RegionSize(sampleRate, channels, blockFrames, capacityBlocks);
 
-        using var file = new FileStream(path, FileMode.Create, FileAccess.ReadWrite, FileShare.ReadWrite);
-        file.SetLength(size);
-        using var map = MemoryMappedFile.CreateFromFile(file, null, size, MemoryMappedFileAccess.ReadWrite, HandleInheritability.None, leaveOpen: true);
-        using var view = map.CreateViewAccessor(0, size, MemoryMappedFileAccess.ReadWrite);
+        MemoryMappedFile map;
+        FileStream? backing = null;
+        if (OperatingSystem.IsWindows())
+        {
+            lock (WindowsSections)
+            {
+                if (!WindowsSections.TryGetValue(name, out map!))
+                {
+                    map = MemoryMappedFile.CreateNew(BusLayout.MapNameFor(name, BusScope.Local), size);
+                    WindowsSections[name] = map;
+                }
+            }
+        }
+        else
+        {
+            string path = BusLayout.PathFor(name);
+            backing = new FileStream(path, FileMode.Create, FileAccess.ReadWrite, FileShare.ReadWrite);
+            backing.SetLength(size);
+            map = MemoryMappedFile.CreateFromFile(backing, null, size, MemoryMappedFileAccess.ReadWrite, HandleInheritability.None, leaveOpen: true);
+        }
 
-        view.Write(BusLayout.MagicOffset, magic);
-        view.Write(BusLayout.VersionOffset, version);
-        view.Write(BusLayout.HeaderSizeOffset, BusLayout.HeaderSize);
-        view.Write(BusLayout.SampleRateOffset, sampleRate);
-        view.Write(BusLayout.ChannelsOffset, channels);
-        view.Write(BusLayout.BlockFramesOffset, blockFrames);
-        view.Write(BusLayout.CapacityBlocksOffset, capacityBlocks);
-        view.Write(BusLayout.ReaderSlotCountFieldOffset, BusLayout.ReaderSlotCount);
-        view.Write(BusLayout.PayloadOffsetFieldOffset, BusLayout.PayloadOffset);
+        try
+        {
+            using var view = map.CreateViewAccessor(0, size, MemoryMappedFileAccess.ReadWrite);
+
+            view.Write(BusLayout.MagicOffset, magic);
+            view.Write(BusLayout.VersionOffset, version);
+            view.Write(BusLayout.HeaderSizeOffset, BusLayout.HeaderSize);
+            view.Write(BusLayout.SampleRateOffset, sampleRate);
+            view.Write(BusLayout.ChannelsOffset, channels);
+            view.Write(BusLayout.BlockFramesOffset, blockFrames);
+            view.Write(BusLayout.CapacityBlocksOffset, capacityBlocks);
+            view.Write(BusLayout.ReaderSlotCountFieldOffset, BusLayout.ReaderSlotCount);
+            view.Write(BusLayout.PayloadOffsetFieldOffset, BusLayout.PayloadOffset);
+        }
+        finally
+        {
+            backing?.Dispose();
+        }
     }
+
+    /// <summary>Maps the region a writer or seeder created, for read-only header inspection.</summary>
+    public static MemoryMappedFile OpenRead(string name) =>
+        OperatingSystem.IsWindows()
+            ? MemoryMappedFile.OpenExisting(BusLayout.MapNameFor(name, BusScope.Local), MemoryMappedFileRights.Read)
+            : MemoryMappedFile.CreateFromFile(BusLayout.PathFor(name), FileMode.Open, null, 0, MemoryMappedFileAccess.Read);
 
     public static void Delete(string name)
     {
+        if (OperatingSystem.IsWindows())
+        {
+            lock (WindowsSections)
+            {
+                if (WindowsSections.Remove(name, out var map))
+                    map.Dispose();
+            }
+        }
+
         foreach (string path in new[] { BusLayout.PathFor(name), BusLayout.LockPathFor(name) })
         {
             try
