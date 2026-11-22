@@ -10,8 +10,13 @@ public sealed class Limiter : IAudioProcessor
 {
     private readonly double _sampleRate;
     private readonly int _lookaheadFrames;
-    private readonly double _ceilingLin;
-    private readonly double _releaseCoef;
+
+    // Retunable while running. The lookahead buffers below never change size, so latency is
+    // fixed at construction no matter how often the ceiling or release changes.
+    private double _thresholdDb;
+    private double _ceilingLin;
+    private double _releaseMs;
+    private double _releaseCoef;
 
     private readonly float[] _delay;
     private int _delayWrite;
@@ -33,8 +38,10 @@ public sealed class Limiter : IAudioProcessor
         Id = id;
         _sampleRate = sampleRate;
         _lookaheadFrames = Math.Max(1, (int)Math.Round(Math.Max(0.01, lookaheadMs) * 0.001 * sampleRate));
-        _ceilingLin = Math.Pow(10, thresholdDb / 20.0);
-        _releaseCoef = 1 - Math.Exp(-1.0 / (Math.Max(0.01, releaseMs) * 0.001 * sampleRate));
+        _thresholdDb = Ranges.Fix(thresholdDb, -60, 0, 0);
+        _ceilingLin = Math.Pow(10, _thresholdDb / 20.0);
+        _releaseMs = Math.Max(0.01, releaseMs);
+        _releaseCoef = 1 - Math.Exp(-1.0 / (_releaseMs * 0.001 * sampleRate));
 
         _delay = new float[_lookaheadFrames];
         _dequeCapacity = _lookaheadFrames + 1;
@@ -48,7 +55,37 @@ public sealed class Limiter : IAudioProcessor
 
     public bool Bypass { get; set; }
 
-    public double ThresholdDb => 20 * Math.Log10(_ceilingLin);
+    public double ThresholdDb => _thresholdDb;
+
+    /// <summary>
+    /// Ceiling in dBFS. Setting it retunes a running limiter in place: the lookahead buffers
+    /// are untouched, so <see cref="LatencyFrames"/> and the allocation footprint never change
+    /// and the new ceiling applies to the very next sample (a lower ceiling clamps instantly,
+    /// as the attack does). Non-finite input keeps the current value; the range is −60..0 dB.
+    /// </summary>
+    public double CeilingDb
+    {
+        get => _thresholdDb;
+        set
+        {
+            _thresholdDb = Ranges.Fix(value, -60, 0, _thresholdDb);
+            _ceilingLin = Math.Pow(10, _thresholdDb / 20.0);
+        }
+    }
+
+    /// <summary>
+    /// Release time in milliseconds. Setting it only recomputes the one-pole coefficient of the
+    /// gain recovery ramp, so it takes effect without rebuilding anything and without allocating.
+    /// </summary>
+    public double ReleaseMs
+    {
+        get => _releaseMs;
+        set
+        {
+            _releaseMs = Math.Max(0.01, value);
+            _releaseCoef = 1 - Math.Exp(-1.0 / (_releaseMs * 0.001 * _sampleRate));
+        }
+    }
 
     public void Process(Span<float> samples)
     {

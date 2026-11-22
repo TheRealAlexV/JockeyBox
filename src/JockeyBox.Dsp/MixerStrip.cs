@@ -155,6 +155,11 @@ public sealed class MixerStrip
         if (_limiter is not null)
         {
             _limiter.Bypass = bypassAll || !p.Limiter.Enabled;
+
+            // Retune the live limiter in place. Rebuilding it would churn the heap and lose the
+            // lookahead buffer; the setters keep latency and allocation flat.
+            _limiter.CeilingDb = p.Limiter.CeilingDb;
+            _limiter.ReleaseMs = p.Limiter.ReleaseMs;
         }
     }
 
