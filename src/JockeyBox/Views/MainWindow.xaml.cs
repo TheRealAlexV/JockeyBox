@@ -327,6 +327,21 @@ public partial class MainWindow : Window
             _vm.LoadSelectedTreeTrackCommand.Execute(null);
     }
 
+    /// <summary>
+    /// Double-click on a channel-strip parameter row returns that value to neutral, the way
+    /// a console fader snaps back. The row's Tag names the parameter, so the mapping lives
+    /// in <see cref="MicChannelStripViewModel.ResetParameter"/> instead of twenty handlers.
+    /// Preview, not the bubble: a slider's thumb marks the press handled before it would reach us.
+    /// </summary>
+    private void OnStripValueDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ClickCount != 2) return;
+        if (sender is not FrameworkElement row || row.DataContext is not MicChannelStripViewModel strip) return;
+
+        strip.ResetParameter(row.Tag as string);
+        e.Handled = true;
+    }
+
     /// <summary>WPF does not select rows on right-click; do it so the context menu targets the row under the cursor.</summary>
     private void OnTrackRightClick(object sender, MouseButtonEventArgs e)
     {

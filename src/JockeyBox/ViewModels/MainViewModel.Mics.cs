@@ -60,6 +60,9 @@ public partial class MainViewModel
         }
 
         AdoptSelectedMicValues();
+
+        // The rack's highlighted strip follows the same selection as the mic row.
+        SyncStripSelection();
     }
 
     /// <summary>
@@ -203,5 +206,9 @@ public partial class MainViewModel
             _ => $"MIC {count}",
         };
         if (MicStripLabel != label) MicStripLabel = label;
+
+        // The channel-strip rack shares this 20 Hz tick: it is the only place that
+        // already runs while the meters do, so a second timer would be pure cost.
+        RefreshChannelStripsFromTick();
     }
 }
