@@ -50,10 +50,11 @@ public sealed class MicStrip : IDisposable
 
         // A composite key names one channel of a multi-channel source. Every strip of an ASIO
         // interface shares one client (ASIO is single-client) and reads its own channel from it.
-        if (DeviceSourceKey.TryParse(DeviceId, out string kind, out string endpoint, out int channel) &&
+        if (DeviceSourceKey.TryParse(
+                DeviceId, out string kind, out string endpoint, out int channel, out AsioChannelMode mode) &&
             channel >= 0 && string.Equals(kind, AsioDriverRegistry.Kind, StringComparison.Ordinal))
         {
-            var asio = new AsioInput(endpoint, channel, AsioChannelMode.Mono);
+            var asio = new AsioInput(endpoint, channel, mode);
             _source = asio;
             DeviceLatencyFrames = asio.DeviceLatencyFrames;
             _strip = new InterleavedMixerStrip(AudioEngine.Rate, AudioEngine.Channels, AudioEngine.BlockFrames);

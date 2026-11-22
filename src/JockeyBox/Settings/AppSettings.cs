@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using JockeyBox.Dsp;
 using JockeyBox.Tools;
 
 namespace JockeyBox.Settings;
@@ -908,5 +909,10 @@ public sealed class MicDeviceSettings
     // already exists has no "Channel" and deserialises to -1, meaning the whole device.
     // -1 keeps every saved device on the strip it has today.
     public int Channel { get; set; } = -1;
+
+    // How Channel is read: one source channel duplicated to both sides (the default), or
+    // Channel and Channel + 1 as a stereo pair. Additive on the schema too - a file with no
+    // "Mode" deserialises to Mono, so every saved device keeps the strip it has today.
+    public AsioChannelMode Mode { get; set; } = AsioChannelMode.Mono;
 }
 }

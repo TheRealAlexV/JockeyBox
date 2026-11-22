@@ -237,4 +237,78 @@ public class DeviceSourceKeyTests : IDisposable
         using JsonDocument document = JsonDocument.Parse(File.ReadAllText(store.FilePath));
         Assert.Equal(MixerSettingsStore.SchemaVersion, document.RootElement.GetProperty("Schema").GetInt32());
     }
+
+    [Fact]
+    public void A_pair_key_round_trips_and_parses_back_as_a_pair()
+    {
+        string key = DeviceSourceKey.Compose("asio", Asio, 2, AsioChannelMode.StereoPair);
+
+        Assert.Equal("asio:Focusrite USB ASIO#pair2", key);
+        Assert.True(DeviceSourceKey.TryParse(
+            key, out string kind, out string endpoint, out int offset, out AsioChannelMode mode));
+        Assert.Equal("asio", kind);
+        Assert.Equal(Asio, endpoint);
+        Assert.Equal(2, offset);
+        Assert.Equal(AsioChannelMode.StereoPair, mode);
+
+        // The mode-less overload still parses the pair key; it just drops the mode.
+        Assert.True(DeviceSourceKey.TryParse(key, out kind, out endpoint, out offset));
+        Assert.Equal(2, offset);
+    }
+
+    [Fact]
+    public void A_mono_key_and_a_bare_id_produce_exactly_todays_keys_in_both_modes()
+    {
+        // The pinned literals above must keep passing; these assert the mode-aware entry point
+        // does not change a single byte for mono or for the whole device.
+        Assert.Equal(DeviceSourceKey.Compose("asio", Asio, 2),
+            DeviceSourceKey.Compose("asio", Asio, 2, AsioChannelMode.Mono));
+        Assert.Equal(DeviceSourceKey.Compose("wasapi", WasapiA, 0),
+            DeviceSourceKey.Compose("wasapi", WasapiA, 0, AsioChannelMode.Mono));
+        Assert.Equal(WasapiA, DeviceSourceKey.Compose("wasapi", WasapiA, -1, AsioChannelMode.StereoPair));
+
+        Assert.True(DeviceSourceKey.TryParse(WasapiA, out _, out _, out int channel, out AsioChannelMode mode));
+        Assert.Equal(DeviceSourceKey.WholeDevice, channel);
+        Assert.Equal(AsioChannelMode.Mono, mode);
+    }
+
+    [Fact]
+    public void Channel_two_and_pair_two_are_different_keys_with_different_slugs()
+    {
+        string mono = DeviceSourceKey.Compose("asio", Asio, 2);
+        string pair = DeviceSourceKey.Compose("asio", Asio, 2, AsioChannelMode.StereoPair);
+
+        Assert.NotEqual(mono, pair);
+        Assert.NotEqual(DeviceControlId.Slug(mono), DeviceControlId.Slug(pair));
+    }
+
+    [Fact]
+    public void A_pair_at_the_last_source_channel_does_not_fit_and_the_failure_names_both_numbers()
+    {
+        string key = DeviceSourceKey.Compose("asio", Asio, 5, AsioChannelMode.StereoPair);
+        Assert.True(DeviceSourceKey.TryParse(key, out _, out _, out int offset, out AsioChannelMode mode));
+        Assert.Equal(AsioChannelMode.StereoPair, mode);
+
+        // A pair needs offset and offset + 1, so offset 5 does not fit six channels: channel 6
+        // does not exist. The message has to name the offset and the channel count.
+        var ex = Assert.Throws<ArgumentException>(() => AsioChannelMap.Validate(6, offset, mode));
+        Assert.Contains("5..6", ex.Message);
+        Assert.Contains("6-channel", ex.Message);
+
+        // The last pair that does fit on six channels starts at four.
+        AsioChannelMap.Validate(6, 4, mode);
+    }
+
+    [Theory]
+    [InlineData("asio:endpoint#pair")]
+    [InlineData("asio:endpoint#pair-1")]
+    [InlineData("asio:endpoint#pairx")]
+    [InlineData("asio:endpoint#pair1.5")]
+    [InlineData(":endpoint#pair0")]
+    [InlineData("#pair0")]
+    public void A_malformed_pair_key_is_rejected(string key)
+    {
+        Assert.False(DeviceSourceKey.TryParse(key, out _, out _, out _, out _));
+        Assert.False(DeviceSourceKey.TryParse(key, out _, out _, out _));
+    }
 }
