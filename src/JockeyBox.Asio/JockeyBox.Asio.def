@@ -1,0 +1,7 @@
+; COM in-proc server exports. The names are undecorated on x64, which is what
+; a host's OLE loader looks for. PRIVATE keeps them out of the import library.
+; No LIBRARY line: MSVC then uses the output filename as the module name, which
+; avoids the LNK4070 "directive differs from output filename" noise.
+EXPORTS
+    DllGetClassObject   PRIVATE
+    DllCanUnloadNow     PRIVATE
