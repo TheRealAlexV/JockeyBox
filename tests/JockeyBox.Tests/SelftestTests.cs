@@ -20,7 +20,7 @@ namespace JockeyBox.Tests;
 /// </summary>
 public class SelftestTests
 {
-    private const int CaseCount = 9;
+    private const int CaseCount = 15;
 
     private static readonly Lazy<(int ExitCode, string Output)> Result = new(() =>
     {
@@ -57,6 +57,8 @@ public class SelftestTests
                      "silence-at-rest", "peak-headroom", "tempo-ratio", "output-delay",
                      "crossfade-law", "no-zero-reads", "end-of-track-handoff",
                      "deck-output-delay", "eq-flat-bit-exact",
+                     "mic-strip-flat-bit-exact", "mic-strip-audible", "mic-strip-sums-aligned",
+                     "mic-strip-mute-vs-monitor", "mixer-off-untouched", "strip-settings-round-trip",
                  })
         {
             Assert.Contains(passLines, line => line.StartsWith($"PASS {name}", StringComparison.Ordinal));

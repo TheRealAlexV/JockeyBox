@@ -3,30 +3,51 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using JockeyBox.Audio.Graph;
+using JockeyBox.Dsp;
 using JockeyBox.Selftest;
 using JockeyBox.Settings;
+using JockeyBox.Tools;
 
 namespace JockeyBox.ViewModels;
 
 /// <summary>
-/// Read-only facts about the running audio engine and the M0 rails, for the
-/// diagnostics window.
+/// Read-only facts about the running audio engine, its buses and the microphone mixer,
+/// for the diagnostics window.
 ///
 /// <para><b>What it may do.</b> Only read: it never starts or stops the engine, never
 /// opens a device and never runs a selftest. <see cref="Refresh"/> re-reads values that
 /// already exist and is safe to call while audio is rendering.</para>
 ///
-/// <para><b>What it cannot say.</b> The latency ledger and the control registry have no
-/// instance anywhere in this build, so they are reported as such rather than as zeros.</para>
+/// <para><b>Where the mixer numbers come from.</b> The strips the mixer already holds, not
+/// a fresh enumeration of capture endpoints: a route change replaces that collection and
+/// the rows follow it. Per-device parameters are read once from the same
+/// <c>mixer-settings.json</c> the mixer loads, and only re-read when the file's timestamp
+/// moves.</para>
+///
+/// <para><b>What it cannot say.</b> No <see cref="ControlRegistry"/> instance is constructed
+/// in this process, so the window reports that as current state rather than as zeros.</para>
 /// </summary>
 public sealed class DiagnosticsViewModel : NotifyBase
 {
     private readonly AudioEngine _engine;
     private readonly AppSettings _settings;
+
+    /// <summary>
+    /// Channel strips are expensive to build per tick, so one is kept to answer "how many
+    /// processors does this device's strip have?" from its stored parameters. It never
+    /// touches an audio device.
+    /// </summary>
+    private readonly InterleavedMixerStrip _probe =
+        new(AudioEngine.Rate, AudioEngine.Channels, AudioEngine.BlockFrames);
+
+    private readonly Dictionary<string, StripParameters> _stored = new(StringComparer.Ordinal);
+    private DateTime _storedStamp = DateTime.MinValue;
+    private string _micSignature = "uninitialised";
 
     public DiagnosticsViewModel(AudioEngine engine, AppSettings settings)
     {
@@ -85,6 +106,21 @@ public sealed class DiagnosticsViewModel : NotifyBase
     public ObservableCollection<BusRow> Buses { get; } = new();
     public ObservableCollection<CaseRow> Cases { get; } = new();
 
+    /// <summary>
+    /// One row per attached capture device, in mixer order. Rebuilt only when the mixer's
+    /// strip collection changes, so the ticker never enumerates devices.
+    /// </summary>
+    public ObservableCollection<MicRow> Mics { get; } = new();
+
+    private string _latencyEntries = "";
+    public string LatencyEntries { get => _latencyEntries; private set => Set(ref _latencyEntries, value); }
+
+    private string _mixLatency = "";
+    public string MixLatency { get => _mixLatency; private set => Set(ref _mixLatency, value); }
+
+    /// <summary>Current state, not a promise about the future: nothing builds one yet.</summary>
+    public string ControlRegistry => "no instance";
+
     private string _mixerEnabled = "";
     public string MixerEnabled { get => _mixerEnabled; private set => Set(ref _mixerEnabled, value); }
 
@@ -96,8 +132,71 @@ public sealed class DiagnosticsViewModel : NotifyBase
         MixerEnabled = _settings.MixerEnabled ? "on" : "off";
 
         foreach (BusRow bus in Buses) bus.Update();
+        RefreshMics();
 
         RefreshCount++;
+    }
+
+    /// <summary>
+    /// Re-reads the mixer's strips. The row list is rebuilt only when the device set changes;
+    /// each row is then refreshed in place, so a renamed device or a moved pad shows up
+    /// without allocating on every tick.
+    /// </summary>
+    private void RefreshMics()
+    {
+        var strips = _engine.Mics.Strips;
+        ReloadStoredParameters();
+
+        string signature = string.Join("|", strips.Select(strip => strip.DeviceId));
+        if (signature != _micSignature)
+        {
+            _micSignature = signature;
+            Mics.Clear();
+            foreach (var strip in strips) Mics.Add(new MicRow(strip.DeviceId));
+        }
+
+        int maxChain = 0;
+        foreach (var strip in strips) maxChain = Math.Max(maxChain, strip.ChainLatencyFrames);
+
+        // The mixer's ledger holds one entry per strip and pads each to the slowest chain;
+        // with device and user offsets at zero, those are exactly these numbers.
+        LatencyEntries = strips.Count.ToString(CultureInfo.InvariantCulture)
+                         + (strips.Count == 1 ? " device" : " devices");
+        MixLatency = maxChain.ToString(CultureInfo.InvariantCulture) + " fr / "
+                     + (maxChain * 1000.0 / AudioEngine.Rate).ToString("0.00", CultureInfo.InvariantCulture) + " ms";
+
+        for (int i = 0; i < Mics.Count && i < strips.Count; i++)
+        {
+            var strip = strips[i];
+            string id = strip.DeviceId ?? "";
+            bool stored = _stored.TryGetValue(id, out var parameters);
+            Mics[i].Update(strip, stored ? parameters : StripParameters.Neutral, stored,
+                maxChain - strip.ChainLatencyFrames, _probe);
+        }
+    }
+
+    /// <summary>
+    /// The same file the mixer loads, re-read only when its timestamp moves. One stat per
+    /// tick, no device enumeration. An unreadable file means every device is neutral, which
+    /// is what the mixer itself does with it.
+    /// </summary>
+    private void ReloadStoredParameters()
+    {
+        string path = Path.Combine(AppPaths.Home, MixerSettingsStore.FileName);
+        DateTime stamp = File.GetLastWriteTimeUtc(path);
+        if (stamp == _storedStamp) return;
+
+        _storedStamp = stamp;
+        _stored.Clear();
+        try
+        {
+            var loaded = new MixerSettingsStore(AppPaths.Home).Load();
+            foreach (var pair in loaded.Devices) _stored[pair.Key] = pair.Value;
+        }
+        catch (Exception)
+        {
+            _stored.Clear();
+        }
     }
 
     /// <summary>
@@ -108,6 +207,46 @@ public sealed class DiagnosticsViewModel : NotifyBase
     public int RefreshCount { get; private set; }
 
     // ---- rows ---------------------------------------------------------------
+
+    /// <summary>
+    /// One capture device as the mixer holds it: the friendly name, the control slug, the
+    /// bypass state, how many processors its chain carries, its chain latency and the pad the
+    /// mix-wide pass gave it. A device with no stored settings reads "neutral", never blank.
+    /// </summary>
+    public sealed class MicRow : NotifyBase
+    {
+        public MicRow(string deviceId) => Slug = deviceId;
+
+        /// <summary>The control slug: the capture endpoint id this strip is bound to.</summary>
+        public string Slug { get; }
+
+        private string _name = "";
+        public string Name { get => _name; private set => Set(ref _name, value); }
+
+        private string _bypass = "";
+        public string Bypass { get => _bypass; private set => Set(ref _bypass, value); }
+
+        private string _processors = "";
+        public string Processors { get => _processors; private set => Set(ref _processors, value); }
+
+        private string _chain = "";
+        public string Chain { get => _chain; private set => Set(ref _chain, value); }
+
+        private string _pad = "";
+        public string Pad { get => _pad; private set => Set(ref _pad, value); }
+
+        public void Update(MicStrip strip, StripParameters parameters, bool stored, int padFrames,
+            InterleavedMixerStrip probe)
+        {
+            Name = string.IsNullOrWhiteSpace(strip.DeviceName) ? "(unnamed)" : strip.DeviceName;
+            Bypass = !stored ? "neutral" : parameters.MasterBypass ? "yes" : "no";
+
+            probe.Apply(parameters);
+            Processors = probe.ProcessorCount.ToString(CultureInfo.InvariantCulture);
+            Chain = strip.ChainLatencyFrames.ToString(CultureInfo.InvariantCulture);
+            Pad = padFrames.ToString(CultureInfo.InvariantCulture);
+        }
+    }
 
     /// <summary>One render bus: where it goes and how hot it is this block.</summary>
     public sealed class BusRow : NotifyBase

@@ -4,11 +4,13 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
 using JockeyBox.Audio.Beat;
+using JockeyBox.Audio.Endpoints;
 using JockeyBox.Audio.Graph;
 using JockeyBox.Audio.Transition;
 using JockeyBox.Dsp;
 using JockeyBox.Playback;
 using JockeyBox.Settings;
+using NAudio.Wave;
 
 namespace JockeyBox.Selftest;
 
@@ -45,6 +47,12 @@ public static class SelftestRunner
         ("end-of-track-handoff", EndOfTrackHandoff),
         ("deck-output-delay", DeckOutputDelay),
         ("eq-flat-bit-exact", EqFlatBitExact),
+        ("mic-strip-flat-bit-exact", MicStripFlatBitExact),
+        ("mic-strip-audible", MicStripAudible),
+        ("mic-strip-sums-aligned", MicStripSumsAligned),
+        ("mic-strip-mute-vs-monitor", MicStripMuteVsMonitor),
+        ("mixer-off-untouched", MixerOffUntouched),
+        ("strip-settings-round-trip", StripSettingsRoundTrip),
     };
 
     /// <summary>
@@ -473,6 +481,416 @@ public static class SelftestRunner
         }
 
         test.Note($"paths={paths.Length}", "flat-bit-exact", $"max|dev|={maxDeviation:0.000000}");
+    }
+
+    // ------------------------------------------------------------- mic strips
+
+    /// <summary>
+    /// 10. Every strip neutral, mixer on: the Recording and Monitor sums are byte-identical
+    /// to the same devices rendered with the strip path bypassed. Raw bytes, no tolerance:
+    /// neutrality is claimed as exactness, so a limiter lookahead or a flat-but-active EQ
+    /// left in the chain fails here and nowhere else.
+    /// </summary>
+    private static void MicStripFlatBitExact(Case test)
+    {
+        const int frames = AudioEngine.BlockFrames * 4;
+
+        using var bypassed = new MicRig(false,
+            ("flat-a", new ToneMic(1_000, 0.30f), StripParameters.Neutral),
+            ("flat-b", new ToneMic(660, 0.20f), StripParameters.Neutral));
+        using var neutral = new MicRig(true,
+            ("flat-a", new ToneMic(1_000, 0.30f), StripParameters.Neutral),
+            ("flat-b", new ToneMic(660, 0.20f), StripParameters.Neutral));
+
+        // Monitor is off by default; send both devices there so the second bus carries
+        // signal instead of proving that silence equals silence.
+        foreach (var strip in neutral.Mixer.Strips) strip.Monitor = true;
+        foreach (var strip in bypassed.Mixer.Strips) strip.Monitor = true;
+
+        var (recOff, monOff) = bypassed.Render(frames);
+        var (recOn, monOn) = neutral.Render(frames);
+
+        int recDiff = FirstDifference(recOff, recOn);
+        int monDiff = FirstDifference(monOff, monOn);
+        test.Note($"frames={frames}", $"recording-diff={recDiff}", $"monitor-diff={monDiff}");
+
+        Require(recOff.Length == recOn.Length, "the two renders produced different buffer lengths");
+        Require(recDiff < 0,
+            $"recording bus differs at sample {recDiff} with every strip neutral "
+            + $"({recOn[recDiff]:0.000000} vs {recOff[recDiff]:0.000000})");
+        Require(monDiff < 0,
+            $"monitor bus differs at sample {monDiff} with every strip neutral "
+            + $"({monOn[monDiff]:0.000000} vs {monOff[monDiff]:0.000000})");
+    }
+
+    /// <summary>
+    /// 11. +12 dB on the 1 kHz band of a synthetic device must move that device's
+    /// contribution to the Recording bus by +12 dB at 1 kHz. Measured as a gain against the
+    /// same device with a neutral strip, so it fails if the EQ is wired to the wrong bus,
+    /// applied per channel differently, or never leaves its ramp.
+    /// </summary>
+    private static void MicStripAudible(Case test)
+    {
+        const int frames = AudioEngine.BlockFrames * 16;
+        int window = Frames(0.05);
+
+        var boosted = StripParameters.Neutral with
+        {
+            Eq = EqParameters.Flat with { Gain1kDb = 12 },
+        };
+
+        using var flat = new MicRig(true, ("tone", new ToneMic(1_000, 0.25f), StripParameters.Neutral));
+        using var hot = new MicRig(true, ("tone", new ToneMic(1_000, 0.25f), boosted));
+
+        var (flatRec, _) = flat.Render(frames);
+        var (hotRec, _) = hot.Render(frames);
+
+        double before = SelftestSignals.ToneAmplitude(flatRec, frames - window, window, 1_000);
+        double after = SelftestSignals.ToneAmplitude(hotRec, frames - window, window, 1_000);
+        double gainDb = 20 * Math.Log10(after / Math.Max(before, 1e-12));
+
+        test.Note($"flat={before:0.0000}", $"+12={after:0.0000}", $"gain={gainDb:0.00} dB");
+
+        Require(before > 0.01, $"the neutral device does not reach the recording bus at all (amplitude {before:0.0000})");
+        Require(Math.Abs(gainDb - 12) <= 1.0,
+            $"the 1 kHz band moved the device by {gainDb:0.00} dB, expected +12.00 dB");
+    }
+
+    /// <summary>
+    /// 12. Two synthetic devices, one with a limiter engaged (240 frames of lookahead) and
+    /// one without, must cross-correlate to lag 0. The mixer pads every device to the
+    /// slowest chain, so the pad only appears if the mixer read the whole collection; a
+    /// per-device pad would leave the two contributions 240 frames apart.
+    /// </summary>
+    private static void MicStripSumsAligned(Case test)
+    {
+        const int frames = AudioEngine.BlockFrames * 8;
+        const int maxLag = 32;
+        int start = AudioEngine.BlockFrames * 2;   // past the pad fade
+
+        var chirp = Chirp(frames);
+        var limited = StripParameters.Neutral with
+        {
+            Limiter = new LimiterParameters(Enabled: true),
+        };
+
+        using (var probe = new MicRig(true,
+            ("limiter", new BlockMic(chirp), limited),
+            ("plain", new BlockMic(chirp), StripParameters.Neutral)))
+        {
+            int limiterChain = probe.Mixer.Strips[0].ChainLatencyFrames;
+            int plainChain = probe.Mixer.Strips[1].ChainLatencyFrames;
+            test.Note($"limiter-chain={limiterChain}", $"plain-chain={plainChain}");
+
+            Require(limiterChain > 0,
+                $"the limiter declares no chain latency, so alignment is untested");
+            Require(plainChain == 0,
+                $"the plain device declares {plainChain} frames of chain latency, expected 0");
+        }
+
+        // Isolate each contribution through Mute. Mute runs after the strip, so a muted
+        // device still carries whatever pad the mix-wide pass gave it.
+        float[] Contribution(bool muteLimiter, bool mutePlain)
+        {
+            using var rig = new MicRig(true,
+                ("limiter", new BlockMic(chirp), limited),
+                ("plain", new BlockMic(chirp), StripParameters.Neutral));
+            rig.Mixer.Strips[0].Muted = muteLimiter;
+            rig.Mixer.Strips[1].Muted = mutePlain;
+            return rig.Render(frames).Recording;
+        }
+
+        var withLimiter = Contribution(false, true);
+        var without = Contribution(true, false);
+
+        int bestLag = 0;
+        double bestScore = double.NegativeInfinity;
+        for (int lag = -maxLag; lag <= maxLag; lag++)
+        {
+            double score = 0;
+            for (int i = start; i < frames; i++)
+            {
+                int j = i + lag;
+                if (j < start || j >= frames) continue;
+                score += withLimiter[i * AudioEngine.Channels] * (double)without[j * AudioEngine.Channels];
+            }
+
+            if (score > bestScore)
+            {
+                bestScore = score;
+                bestLag = lag;
+            }
+        }
+
+        test.Note($"lag={bestLag}", $"score={bestScore:0.0}");
+        Require(bestLag == 0,
+            $"the limiter and plain devices peak at lag {bestLag} frames (score {bestScore:0.0}), "
+            + "so the devices are not padded to one mix-wide latency");
+    }
+
+    /// <summary>
+    /// 13. A muted-but-monitored device contributes nothing to Recording while still reaching
+    /// Monitor, with both strips active. Monitor wins over mute: the operator's own cue must
+    /// survive mute, and mute must still silence the audience.
+    /// </summary>
+    private static void MicStripMuteVsMonitor(Case test)
+    {
+        const int frames = AudioEngine.BlockFrames * 8;
+        int window = Frames(0.05);
+        int start = frames - window;
+
+        var active = StripParameters.Neutral with
+        {
+            Eq = EqParameters.Flat with { Gain1kDb = 6 },
+        };
+
+        using var rig = new MicRig(true,
+            ("cue", new ToneMic(1_000, 0.20f), active),
+            ("room", new ToneMic(660, 0.20f), active));
+
+        rig.Mixer.Strips[0].Muted = true;      // cue: muted for the audience ...
+        rig.Mixer.Strips[0].Monitor = true;    // ... but heard by the operator
+        rig.Mixer.Strips[1].Monitor = false;
+
+        var (recording, monitor) = rig.Render(frames);
+
+        double recCue = SelftestSignals.ToneAmplitude(recording, start, window, 1_000);
+        double recRoom = SelftestSignals.ToneAmplitude(recording, start, window, 660);
+        double monCue = SelftestSignals.ToneAmplitude(monitor, start, window, 1_000);
+        double monRoom = SelftestSignals.ToneAmplitude(monitor, start, window, 660);
+
+        test.Note($"recording 1k={recCue:0.0000}", $"recording 660={recRoom:0.0000}",
+            $"monitor 1k={monCue:0.0000}", $"monitor 660={monRoom:0.0000}");
+
+        Require(recRoom > 0.05, $"the unmuted device does not reach Recording (660 Hz {recRoom:0.0000})");
+        Require(recCue < 1e-3, $"the muted device reaches Recording (1 kHz {recCue:0.0000})");
+        Require(monCue > 0.05, $"the monitored device does not reach Monitor (1 kHz {monCue:0.0000})");
+        Require(monRoom < 1e-3, $"an unmonitored device reaches Monitor (660 Hz {monRoom:0.0000})");
+    }
+
+    /// <summary>
+    /// 14. Mixer off with a stored non-neutral strip: the render equals the raw device read,
+    /// byte for byte. A pad, a limiter delay or an EQ gain that leaks past the master gate
+    /// shows up here as a mismatch, not as a slightly different level.
+    /// </summary>
+    private static void MixerOffUntouched(Case test)
+    {
+        const int frames = AudioEngine.BlockFrames * 2;
+        var raw = Chirp(frames);
+
+        var stored = StripParameters.Neutral with
+        {
+            Eq = EqParameters.Flat with { Gain125Db = 9, Gain2kDb = -6 },
+            Limiter = new LimiterParameters(Enabled: true),
+            MasterBypass = false,
+        };
+
+        using var rig = new MicRig(false, ("dev", new BlockMic(raw), stored));
+        var (recording, monitor) = rig.Render(frames);
+
+        int recDiff = FirstDifference(recording, raw);
+        test.Note($"diff={recDiff}", $"peak={SelftestSignals.Peak(recording, 0, recording.Length):0.000}");
+
+        Require(MonitorIsSilent(monitor), "the monitor bus is not silent for a strip with Monitor off");
+        Require(recDiff < 0,
+            $"the disabled mixer altered the device at sample {recDiff} "
+            + $"({recording[recDiff]:0.000000} vs raw {raw[recDiff]:0.000000})");
+    }
+
+    /// <summary>
+    /// 15. Parameters written through the persist path read back identically on a fresh load.
+    /// Round-trip is structural equality on the whole value, so a dropped field (a bypass
+    /// flag, a limiter release) fails rather than decoding as its default.
+    /// </summary>
+    private static void StripSettingsRoundTrip(Case test)
+    {
+        var parameters = (StripParameters.Neutral with
+        {
+            Eq = EqParameters.Flat with { Gain250Db = -6.5, Gain4kDb = 9.75 },
+            HighPass = new FilterParameters(Enabled: true, FrequencyHz: 85),
+            Limiter = new LimiterParameters(Enabled: true, CeilingDb: -1.5, ReleaseMs: 37),
+            MasterBypass = true,
+        }).Clamp();
+
+        string directory = NewTempDirectory();
+        try
+        {
+            using (var writer = new MicMixer())
+            {
+                writer.SetStrips(new[] { new MicStrip("dev-1", new ToneMic(1_000, 0.10f)) });
+                writer.ApplyAndPersist(directory, "dev-1", parameters);
+            }
+
+            using var reader = new MicMixer();
+            var loaded = reader.LoadStoredSettings(directory, mixerEnabled: true);
+
+            test.Note($"file={MixerSettingsStore.FileName}", $"devices={loaded.Devices.Count}");
+
+            Require(!loaded.HasProblem, $"the saved file did not load: {loaded.Reason}");
+            Require(loaded.Devices.TryGetValue("dev-1", out var read),
+                "the saved device is missing from a fresh load");
+            Require(read.Equals(parameters),
+                $"round-trip changed the parameters: read {read.Eq} / {read.Limiter} / "
+                + $"bypass={read.MasterBypass}, wrote {parameters.Eq} / {parameters.Limiter} / "
+                + $"bypass={parameters.MasterBypass}");
+        }
+        finally
+        {
+            DeleteDirectory(directory);
+        }
+    }
+
+    /// <summary>A stereo tone with zero phase at frame 0: the hermetic stand-in for a device.</summary>
+    private sealed class ToneMic : IMicSource
+    {
+        private readonly double _hertz;
+        private readonly float _amplitude;
+        private double _phase;
+
+        public ToneMic(double hertz, float amplitude)
+        {
+            _hertz = hertz;
+            _amplitude = amplitude;
+        }
+
+        public WaveFormat WaveFormat { get; } =
+            WaveFormat.CreateIeeeFloatWaveFormat(AudioEngine.Rate, AudioEngine.Channels);
+
+        public int Read(float[] buffer, int offset, int count)
+        {
+            for (int i = 0; i + AudioEngine.Channels <= count; i += AudioEngine.Channels)
+            {
+                float value = (float)(_amplitude * Math.Sin(_phase));
+                _phase += 2 * Math.PI * _hertz / AudioEngine.Rate;
+                if (_phase >= 2 * Math.PI) _phase -= 2 * Math.PI;
+                for (int c = 0; c < AudioEngine.Channels; c++) buffer[offset + i + c] = value;
+            }
+
+            return count;
+        }
+
+        public void Maintain(int blockFrames) { }
+    }
+
+    /// <summary>A precomputed block, played once from the start and silent afterwards.</summary>
+    private sealed class BlockMic : IMicSource
+    {
+        private readonly float[] _samples;
+        private int _position;
+
+        public BlockMic(float[] samples) => _samples = samples;
+
+        public WaveFormat WaveFormat { get; } =
+            WaveFormat.CreateIeeeFloatWaveFormat(AudioEngine.Rate, AudioEngine.Channels);
+
+        public int Read(float[] buffer, int offset, int count)
+        {
+            int available = Math.Max(0, Math.Min(count, _samples.Length - _position));
+            Array.Copy(_samples, _position, buffer, offset, available);
+            Array.Clear(buffer, offset + available, count - available);
+            _position += available;
+            return count;
+        }
+
+        public void Maintain(int blockFrames) { }
+    }
+
+    /// <summary>
+    /// One mixer over a private settings file, with synthetic strips. Uses the same public
+    /// load path the app uses (settings file, then SetStrips), so per-device parameters and
+    /// the mix-wide padding are the ones a real route change produces.
+    /// </summary>
+    private sealed class MicRig : IDisposable
+    {
+        private readonly string _directory;
+
+        public MicRig(bool mixerEnabled,
+            params (string Id, IMicSource Source, StripParameters Parameters)[] devices)
+        {
+            _directory = NewTempDirectory();
+
+            var stored = new Dictionary<string, StripParameters>(StringComparer.Ordinal);
+            foreach (var device in devices) stored[device.Id] = device.Parameters.Clamp();
+            new MixerSettingsStore(_directory).Save(stored);
+
+            Mixer = new MicMixer();
+            Mixer.LoadStoredSettings(_directory, mixerEnabled);
+            Mixer.SetStrips(Array.ConvertAll(devices, d => new MicStrip(d.Id, d.Source)));
+        }
+
+        public MicMixer Mixer { get; }
+
+        public (float[] Recording, float[] Monitor) Render(int frames)
+        {
+            var recording = new float[frames * AudioEngine.Channels];
+            var monitor = new float[frames * AudioEngine.Channels];
+            Mixer.Render(frames, recording, monitor, AudioEngine.Channels);
+            return (recording, monitor);
+        }
+
+        public void Dispose()
+        {
+            Mixer.Dispose();
+            DeleteDirectory(_directory);
+        }
+    }
+
+    /// <summary>An increasing 500 Hz - 4 kHz chirp: a peak at one lag, no period ambiguity.</summary>
+    private static float[] Chirp(int frames)
+    {
+        var block = new float[frames * AudioEngine.Channels];
+        double phase = 0;
+        for (int i = 0; i < frames; i++)
+        {
+            double hertz = 500 + 3500.0 * i / frames;
+            float value = (float)(0.6 * Math.Sin(phase));
+            phase += 2 * Math.PI * hertz / AudioEngine.Rate;
+            for (int c = 0; c < AudioEngine.Channels; c++)
+                block[i * AudioEngine.Channels + c] = value;
+        }
+
+        return block;
+    }
+
+    /// <summary>Index of the first sample whose bits differ, or -1 when the two are identical.</summary>
+    private static int FirstDifference(float[] a, float[] b)
+    {
+        int count = Math.Min(a.Length, b.Length);
+        for (int i = 0; i < count; i++)
+        {
+            if (BitConverter.SingleToInt32Bits(a[i]) != BitConverter.SingleToInt32Bits(b[i])) return i;
+        }
+
+        return a.Length == b.Length ? -1 : count;
+    }
+
+    private static bool MonitorIsSilent(float[] monitor)
+    {
+        for (int i = 0; i < monitor.Length; i++)
+        {
+            if (monitor[i] != 0f) return false;
+        }
+
+        return true;
+    }
+
+    private static string NewTempDirectory()
+    {
+        string path = Path.Combine(Path.GetTempPath(), "jb-selftest-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(path);
+        return path;
+    }
+
+    private static void DeleteDirectory(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path)) Directory.Delete(path, recursive: true);
+        }
+        catch (Exception)
+        {
+            // A leftover temp directory must never fail a case.
+        }
     }
 
     // ------------------------------------------------------------------ harness

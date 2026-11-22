@@ -92,7 +92,7 @@
             <StackPanel Orientation="Vertical" VerticalAlignment="Center">
                 <TextBlock Text="DIAGNOSTICS" FontSize="13" FontWeight="Bold"
                            Foreground="{StaticResource TextBrush}"/>
-                <TextBlock Text="Live state of the audio engine and the M0 rails. Read-only."
+                <TextBlock Text="Live state of the audio engine, its buses and the microphone mixer. Read-only."
                            FontSize="10" Foreground="{StaticResource TextDimBrush}" Margin="0,2,0,0"/>
             </StackPanel>
         </DockPanel>
@@ -211,17 +211,93 @@
 
                     </StackPanel>
 
-                    <!-- M0 RAILS -->
+                    <!-- MIC INPUTS -->
                     <StackPanel Margin="0,20,0,0">
-                        <TextBlock Text="M0 RAILS" Style="{StaticResource SectionHeader}"/>
+                        <TextBlock Text="MIC INPUTS" Style="{StaticResource SectionHeader}"/>
+                        <Border Height="1" Background="{StaticResource BorderBrush}" Margin="0,5,0,8"/>
+
+                        <Grid Height="18" Margin="0,0,0,2">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="148"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="62"/>
+                                <ColumnDefinition Width="40"/>
+                                <ColumnDefinition Width="46"/>
+                                <ColumnDefinition Width="40"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="device" Style="{StaticResource SectionHeader}"/>
+                            <TextBlock Grid.Column="1" Text="slug" Style="{StaticResource SectionHeader}"/>
+                            <TextBlock Grid.Column="2" Text="bypass" Style="{StaticResource SectionHeader}"
+                                       HorizontalAlignment="Right"/>
+                            <TextBlock Grid.Column="3" Text="proc" Style="{StaticResource SectionHeader}"
+                                       HorizontalAlignment="Right"/>
+                            <TextBlock Grid.Column="4" Text="chain" Style="{StaticResource SectionHeader}"
+                                       HorizontalAlignment="Right"/>
+                            <TextBlock Grid.Column="5" Text="pad" Style="{StaticResource SectionHeader}"
+                                       HorizontalAlignment="Right"/>
+                        </Grid>
+
+                        <ItemsControl ItemsSource="{Binding Mics}" Focusable="False">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Grid Height="20" ToolTip="{Binding Slug}">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="148"/>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="62"/>
+                                            <ColumnDefinition Width="40"/>
+                                            <ColumnDefinition Width="46"/>
+                                            <ColumnDefinition Width="40"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0" Text="{Binding Name}" Style="{StaticResource Label}"
+                                                   FontSize="11" Foreground="{StaticResource TextBrush}"
+                                                   TextTrimming="CharacterEllipsis" Margin="0,0,8,0"/>
+                                        <TextBlock Grid.Column="1" Text="{Binding Slug}" Style="{StaticResource Label}"
+                                                   TextTrimming="CharacterEllipsis" Margin="0,0,10,0"/>
+                                        <TextBlock Grid.Column="2" Text="{Binding Bypass}" Style="{StaticResource Value}"/>
+                                        <TextBlock Grid.Column="3" Text="{Binding Processors}" Style="{StaticResource Value}"/>
+                                        <TextBlock Grid.Column="4" Text="{Binding Chain}" Style="{StaticResource Value}"/>
+                                        <TextBlock Grid.Column="5" Text="{Binding Pad}" Style="{StaticResource Value}"/>
+                                    </Grid>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+
+                        <TextBlock Text="The mixer holds no capture device right now; a row appears for each one it is given."
+                                   FontSize="10" Foreground="{StaticResource TextDimBrush}"
+                                   TextWrapping="Wrap" Margin="0,6,12,0">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock">
+                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Mics.Count}" Value="0">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </StackPanel>
+
+                    <!-- LATENCY -->
+                    <StackPanel Margin="0,20,0,0">
+                        <TextBlock Text="LATENCY LEDGER" Style="{StaticResource SectionHeader}"/>
                         <Border Height="1" Background="{StaticResource BorderBrush}" Margin="0,5,0,8"/>
                         <Grid Height="21">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="*"/>
                                 <ColumnDefinition Width="190"/>
                             </Grid.ColumnDefinitions>
-                            <TextBlock Grid.Column="0" Text="latency ledger" Style="{StaticResource Label}"/>
-                            <TextBlock Grid.Column="1" Text="no instance in this build" Style="{StaticResource Muted}"/>
+                            <TextBlock Grid.Column="0" Text="entries" Style="{StaticResource Label}"/>
+                            <TextBlock Grid.Column="1" Text="{Binding LatencyEntries}" Style="{StaticResource Value}"/>
+                        </Grid>
+                        <Grid Height="21">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="190"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="mix maximum" Style="{StaticResource Label}"/>
+                            <TextBlock Grid.Column="1" Text="{Binding MixLatency}" Style="{StaticResource Value}"/>
                         </Grid>
                         <Grid Height="21">
                             <Grid.ColumnDefinitions>
@@ -229,9 +305,9 @@
                                 <ColumnDefinition Width="190"/>
                             </Grid.ColumnDefinitions>
                             <TextBlock Grid.Column="0" Text="control registry" Style="{StaticResource Label}"/>
-                            <TextBlock Grid.Column="1" Text="no instance in this build" Style="{StaticResource Muted}"/>
+                            <TextBlock Grid.Column="1" Text="{Binding ControlRegistry}" Style="{StaticResource Muted}"/>
                         </Grid>
-                        <TextBlock Text="Neither type is constructed anywhere yet, so there is no state to read."
+                        <TextBlock Text="Read from the strips the mixer holds: one entry per device, each padded to the slowest chain. Device and user offsets are zero today, so the mix maximum is that slowest chain."
                                    FontSize="10" Foreground="{StaticResource TextDimBrush}"
                                    TextWrapping="Wrap" Margin="0,6,12,0"/>
                     </StackPanel>
