@@ -362,6 +362,13 @@ public sealed class DualDeckTransport : IDisposable
 
         Engine.SoundboardFollowsMain = settings.SoundboardFollowsMain;
 
+        // The master gate and the per-device strips are stored, not live: without this
+        // the toggle only reached the engine at startup. Reuse the startup loader so the
+        // attached strips re-read their stored parameters, the new gate reaches them, and
+        // the ledger re-aligns (an enabled strip can bring a limiter into the chain).
+        // Never saves: this is the apply path, not the edit path.
+        Engine.Mics.LoadStoredSettings(AppPaths.Home, settings.MixerEnabled);
+
         LogMicRoute(current);
     }
 

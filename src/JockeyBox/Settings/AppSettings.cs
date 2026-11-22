@@ -198,11 +198,17 @@ public class AppSettings
     /// <summary>
     /// Per-channel mixer chains in the deck render path. Off means the engine skips
     /// the chains entirely, so the output is bit-identical to a build without them.
+    /// <para>On by default, which is safe: a device with no stored strip runs a
+    /// neutral strip, a neutral strip is byte-transparent (proven by test), and no
+    /// limiter is constructed unless one is enabled. So on-by-default adds exactly
+    /// zero latency and cannot change the sound until a parameter is moved.</para>
     /// </summary>
-    public bool MixerEnabled { get; set; }
+    public bool MixerEnabled { get; set; } = true;
 
-    // MixerEnabled is additive: an existing schema-5 file deserialises with the
-    // default (false) and needs no migration, so do not bump SettingsSchemaVersion for it.
+    // MixerEnabled is additive on schema 5: an existing settings.json that already
+    // holds "MixerEnabled": false keeps that value (the deploy step sets the live
+    // file explicitly), and a file without the key gets the default above. No
+    // migration, so do not bump SettingsSchemaVersion for it.
 
     // ------------------------------------------------------------------
     // Talk-over microphone (2.0).
