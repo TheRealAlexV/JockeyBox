@@ -903,5 +903,10 @@ public sealed class MicDeviceSettings
     public float Volume { get; set; } = 1.0f;
     public bool Muted { get; set; }
     public bool Monitor { get; set; }
+
+    // Additive on the schema, the same precedent as MixerEnabled: a settings.json that
+    // already exists has no "Channel" and deserialises to -1, meaning the whole device.
+    // -1 keeps every saved device on the strip it has today.
+    public int Channel { get; set; } = -1;
 }
 }
