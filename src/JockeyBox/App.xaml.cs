@@ -2,6 +2,7 @@
 using System.Threading;
 using System.Windows;
 using System.Windows.Threading;
+using JockeyBox.Diagnostics;
 using JockeyBox.Selftest;
 using Velopack;
 
@@ -121,7 +122,8 @@ public partial class App : Application
             SelftestRequested(e.Args) || LibraryDump.Requested(e.Args) ||
             UiShot.Requested(e.Args) || PerfProbe.Requested(e.Args) ||
             PreviewCheck.Requested(e.Args) || LingerCheck.Requested(e.Args) ||
-            LyricsProbe.Requested(e.Args) || AudioTrace.Requested(e.Args);
+            LyricsProbe.Requested(e.Args) || AudioTrace.Requested(e.Args) ||
+            AsioProbe.Requested(e.Args);
 
         if (!Tools.SingleInstance.TryAcquire(Tools.AppPaths.Home, out string owner, out int ownerPid))
         {
@@ -224,6 +226,18 @@ public partial class App : Application
             int nullExit = NullRender.Run(e.Args);
             Console.Out.Flush();
             Shutdown(nullExit);
+            return;
+        }
+
+        // --asio-probe [driver]: list the ASIO drivers the registry actually holds,
+        // then open one (or each in turn) through AsioOut and capture two seconds,
+        // printing per-channel peak and RMS (see Diagnostics/AsioProbe.cs).
+        // Console mode: no window, no device enumeration beyond what it opens.
+        if (AsioProbe.Requested(e.Args))
+        {
+            int probeExit = AsioProbe.Run(e.Args);
+            Console.Out.Flush();
+            Shutdown(probeExit);
             return;
         }
 
