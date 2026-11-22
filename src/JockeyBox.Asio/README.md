@@ -4,9 +4,39 @@ A user-mode, in-process COM **ASIO driver**: a DLL a host enumerates, opens and
 pulls buffers from. No kernel component, no WDK, no test signing. This is the
 same shape ASIO4ALL and FlexASIO have.
 
-v1 is a tracer bullet: 2 inputs / 2 outputs at 48 kHz, 128/256/512 frame
-buffers, zeros in every direction, and a real clock thread. It exists to prove
-the ABI and the callback cadence, not to carry audio.
+v1 carries audio one way: the JockeyBox app writes into the transport ring and
+this driver reads it into its ASIO **inputs**. obs-asio records those inputs;
+that is the delivery path. The ASIO **outputs** stay silent — this is not a
+playback path. 2 inputs / 2 outputs at 48 kHz, 128/256/512 frame buffers, a real
+clock thread at 375 callbacks/s.
+
+## Audio path
+
+| Piece | Value |
+| --- | --- |
+| Section name | `Local\JockeyBox.Bus.<name>` (same session as the app) |
+| Bus name | env `JOCKEYBOX_ASIO_BUS`, default `main` |
+| Layout | `src/JockeyBox.Ipc/BusLayout.cs` — the single source of truth |
+
+`src/RingReader.h` transcribes the documented header (magic `0x5355424A`,
+version 1, header 1024 bytes, payload at 1024, interleaved float32) and pins it
+with `static_assert`s on the shared atomics. Header geometry that does not
+validate is rejected, and the driver falls back to silence.
+
+Per buffer switch:
+
+- The newest unconsumed block is deinterleaved into the ASIO input buffers.
+  The callback never blocks, never allocates and never throws.
+- No new block means silence, and the reader slot's `underruns` counter ticks.
+  The reader never rewinds.
+- Falling further behind than the ring holds means a jump to the newest block
+  and one `corrections` tick.
+- One reader slot is claimed (`active = 1`, `readBlockIndex`,
+  `corrections`, `underruns`), so the app can see a live reader.
+
+If the section is absent at `start()`, the driver serves silence and retries
+attaching at most **once per second** from the clock thread, never per callback.
+`getErrorMessage` reports which bus it is waiting for.
 
 ## No SDK code
 
@@ -54,7 +84,8 @@ first).
 powershell -ExecutionPolicy Bypass -File .\build.ps1
 ```
 
-Output: `out\JockeyBox.Asio.dll`, `out\AsioHostHarness.exe`.
+Output: `out\JockeyBox.Asio.dll`, `out\AsioHostHarness.exe`,
+`out\buswriter\BusWriterCli.exe`.
 
 ## Verify
 
@@ -69,11 +100,29 @@ passes: one that reaches slots by their documented numbers through raw vtable
 pointers (this is what actually proves the ordering, since it never consults the
 local C++ interface), and one through the declared interface.
 
+It then proves the audio path against a section it creates with the documented
+layout:
+
+1. **Bit-exactness** — a block is published only once the driver has consumed
+   the previous one, and every buffer that reached the host is compared sample
+   by sample, bit for bit, against the block that should be there.
+2. **Gap** — the writer stops mid-run; later buffers must be exactly zero and
+   the reader slot's `underruns` must have risen.
+3. **Cadence under load** — a writer streams at 375 blocks/s for two seconds
+   while the callback rate is measured.
+4. **Cross-language** — `BusWriterCli.exe` (the real
+   `JockeyBox.Ipc.VirtualBusWriter`) writes the same ramp and the same
+   assertions run against it.
+
 Measured on this box, 128 frames @ 48 kHz:
 
 ```
 bufferSwitch      : 377 calls in 1.004 s
 cadence           : 375.5 callbacks/s (expected 375.0)
+bit-exact blocks  : 64/64 matched, 0 mismatched
+gap -> silence    : yes (underruns 0 -> 45)
+cadence streaming : 375.2 callbacks/s
+cross-language    : ran (n matched, 0 mismatched, n silence)
 ```
 
 ## Register for real hosts

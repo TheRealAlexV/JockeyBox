@@ -1,6 +1,7 @@
 #pragma once
 
 #include "JockeyBoxAsioAbi.h"
+#include "RingReader.h"
 
 #include <atomic>
 #include <cstdint>
@@ -71,6 +72,12 @@ private:
     void fire(long bufferIndex);
     static bool isAcceptableBufferSize(long size);
 
+    // Bus name from JOCKEYBOX_ASIO_BUS (default "main"), resolved in start().
+    void resolveBusName() noexcept;
+    // Opens/claims the ring. Called from start() and from clockLoop's
+    // once-a-second retry, never from the callback.
+    void attachBus() noexcept;
+
     std::atomic<long> m_refs{1};
 
     // Set by the host, read by the clock thread. Written before start() and
@@ -90,10 +97,20 @@ private:
     bool m_activeIn[kChannelsPerDirection] = {};
     bool m_activeOut[kChannelsPerDirection] = {};
 
-    // Zeroed once at construction and never written again: v1 is a silent
-    // driver, so there is nothing to fill on each callback.
+    // Zeroed once at construction. The input halves are filled from the ring on
+    // every buffer switch; the output halves are never written, so the ASIO
+    // outputs stay silent (this driver is an input path, not a playback path).
     float m_in[kChannelsPerDirection][2][kMaxBufferSize] = {};
     float m_out[kChannelsPerDirection][2][kMaxBufferSize] = {};
+
+    // Read by the clock thread after start(), so no locking is needed. Only the
+    // clock thread calls read()/attachBus(); start/stop own the lifetime.
+    bus::RingReader m_ring;
+    char m_busName[72] = {};
+    enum BusState : long { kBusAbsent = 0, kBusAttached = 1 };
+    std::atomic<long> m_busState{kBusAbsent};
+    long long m_lastBusAttempt = 0;  // QPC ticks, clock thread only
+    LARGE_INTEGER m_qpcFreq{};
 };
 
 }  // namespace jb::asio

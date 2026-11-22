@@ -45,5 +45,13 @@ finally {
     Pop-Location
 }
 
+# The real C# producer, so the harness can prove the ring contract across the
+# language boundary. Published next to the harness.
+Write-Host '--- BusWriterCli.exe (C# writer) ---'
+$cli = Join-Path $root 'tools\BusWriterCli\BusWriterCli.csproj'
+$cliOut = Join-Path $out 'buswriter'
+& dotnet publish $cli -c Release -o $cliOut --nologo
+if ($LASTEXITCODE -ne 0) { throw "BusWriterCli publish failed ($LASTEXITCODE)" }
+
 Get-ChildItem $out | Where-Object { $_.Extension -in '.dll', '.exe' } |
     Select-Object Name, Length

@@ -1,5 +1,6 @@
 #include "VirtualAsioDriver.h"
 
+#include <cstdio>
 #include <cstring>
 
 // Timer flag from the 1803 SDK onwards; older SDK headers lack it.
@@ -66,6 +67,7 @@ ULONG JB_COM_CALL VirtualAsioDriver::Release() {
 
 AsioBool JB_ASIO_CALL VirtualAsioDriver::init(void* sysHandle) {
     m_sysHandle = sysHandle;  // unused in v1: there is no window to parent
+    resolveBusName();         // so getErrorMessage names the bus before start()
     m_initialised = true;
     return kAsioTrue;
 }
@@ -79,7 +81,31 @@ long JB_ASIO_CALL VirtualAsioDriver::getDriverVersion() { return 1; }
 
 void JB_ASIO_CALL VirtualAsioDriver::getErrorMessage(char* text) {
     if (!text) return;
-    strcpy_s(text, 124, "JockeyBox Virtual ASIO: no error");
+    if (m_busState.load(std::memory_order_relaxed) == kBusAttached) {
+        _snprintf_s(text, 124, _TRUNCATE, "JockeyBox Virtual ASIO: reading bus '%s'", m_busName);
+    } else {
+        _snprintf_s(text, 124, _TRUNCATE,
+                    "JockeyBox Virtual ASIO: bus '%s' not attached; serving silence, "
+                    "retrying once a second", m_busName);
+    }
+}
+
+void VirtualAsioDriver::resolveBusName() noexcept {
+    if (m_busName[0]) return;
+    char value[64] = {};
+    const DWORD n = GetEnvironmentVariableA("JOCKEYBOX_ASIO_BUS", value, sizeof(value));
+    if (n == 0 || n >= sizeof(value)) {
+        strcpy_s(m_busName, "main");
+    } else {
+        strcpy_s(m_busName, value);
+    }
+}
+
+void VirtualAsioDriver::attachBus() noexcept {
+    if (m_ring.attach(m_busName))
+        m_busState.store(kBusAttached, std::memory_order_relaxed);
+    else
+        m_busState.store(kBusAbsent, std::memory_order_relaxed);
 }
 
 AsioError JB_ASIO_CALL VirtualAsioDriver::start() {
@@ -92,6 +118,15 @@ AsioError JB_ASIO_CALL VirtualAsioDriver::start() {
                                          TIMER_ALL_ACCESS);
         if (!m_timer) m_timer = CreateWaitableTimerW(nullptr, FALSE, nullptr);
     }
+
+    resolveBusName();
+    // Attach before the clock starts, so the first callback already has data
+    // when the app is up. If the section is missing, the clock thread retries
+    // once a second; the callback itself never touches the filesystem.
+    QueryPerformanceFrequency(&m_qpcFreq);
+    m_lastBusAttempt = 0;
+    attachBus();
+    m_lastBusAttempt = qpcNow(m_qpcFreq);
 
     m_frames.store(0);
     m_running.store(true);
@@ -107,6 +142,9 @@ AsioError JB_ASIO_CALL VirtualAsioDriver::start() {
 AsioError JB_ASIO_CALL VirtualAsioDriver::stop() {
     m_running.store(false);
     if (m_clock.joinable()) m_clock.join();
+    // Release the reader slot so the app sees one reader fewer, not a dead one.
+    m_ring.detach();
+    m_busState.store(kBusAbsent, std::memory_order_relaxed);
     return kAseOk;
 }
 
@@ -309,6 +347,16 @@ void VirtualAsioDriver::clockLoop() {
     long index = 0;
 
     while (m_running.load(std::memory_order_relaxed)) {
+        // Reattach at most once a second: a missing section must not turn into
+        // per-callback work, and the retry allocates. Until then, silence.
+        if (!m_ring.attached()) {
+            const long long nowTicks = qpcNow(freq);
+            if (nowTicks - m_lastBusAttempt >= freq.QuadPart) {
+                m_lastBusAttempt = nowTicks;
+                attachBus();
+            }
+        }
+
         const double now = seconds(freq, qpcNow(freq));
         const double remain = next - now;
 
@@ -342,8 +390,16 @@ void VirtualAsioDriver::clockLoop() {
 void VirtualAsioDriver::fire(long bufferIndex) {
     m_frames.fetch_add(m_bufferSize, std::memory_order_relaxed);
     AsioCallbacks* callbacks = m_callbacks;
-    if (callbacks && callbacks->bufferSwitch)
-        callbacks->bufferSwitch(bufferIndex, kAsioFalse);
+    if (!callbacks || !callbacks->bufferSwitch) return;
+
+    // Fill the inputs for the half the host is about to read. read() never
+    // blocks, allocates or throws: no block in the ring leaves the buffers
+    // silent and ticks the reader slot's underrun counter.
+    const int frames = static_cast<int>(m_bufferSize);
+    float* dst[kChannelsPerDirection] = {m_in[0][bufferIndex], m_in[1][bufferIndex]};
+    m_ring.read(dst, static_cast<int>(kChannelsPerDirection), frames);
+
+    callbacks->bufferSwitch(bufferIndex, kAsioFalse);
 }
 
 }  // namespace jb::asio

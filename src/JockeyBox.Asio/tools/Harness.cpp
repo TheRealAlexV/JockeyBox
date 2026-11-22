@@ -14,12 +14,15 @@
 //     built against the driver header would do.
 
 #include "JockeyBoxAsioAbi.h"
+#include "../src/RingReader.h"
 
 #include <windows.h>
 
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstring>
+#include <memory>
 #include <thread>
 
 namespace {
@@ -27,10 +30,47 @@ namespace {
 std::atomic<long> g_callbacks{0};
 long g_lastIndex = -1;
 
+// ---- audio-path capture ----------------------------------------------------
+// Set by a bus test; null during the ABI passes. The callback copies the two
+// input halves it is about to hand the host, so the comparison is against
+// exactly what reached the host, not against the ring.
+constexpr int kBusFrames = 128;
+constexpr int kBusChannels = 2;
+constexpr int kBusCapacity = 16;
+constexpr int kBusSampleRate = 48000;
+constexpr int kMaxCaptures = 4096;
+
+struct Captures {
+    std::atomic<long> count{0};
+    float block[kMaxCaptures][kBusChannels][kBusFrames];
+};
+
+Captures* g_capture = nullptr;
+const float* g_inBuf[kBusChannels][2] = {};
+
+// Every published block carries its own index in every sample, so a wrong
+// block, a stale block or a byte-level layout error is visible in the numbers.
+float sampleFor(int64_t block, int frame, int channel) {
+    return static_cast<float>(block * 1000 + frame * 2 + channel);
+}
+
 void onBufferSwitch(long doubleBufferIndex, jb::asio::AsioBool directProcess) {
     (void)directProcess;
     g_lastIndex = doubleBufferIndex;
     g_callbacks.fetch_add(1, std::memory_order_relaxed);
+
+    Captures* cap = g_capture;
+    if (!cap) return;
+    const long seq = cap->count.load(std::memory_order_relaxed);
+    if (seq >= kMaxCaptures) return;
+    for (int ch = 0; ch < kBusChannels; ++ch) {
+        const float* src = g_inBuf[ch][doubleBufferIndex & 1];
+        if (src)
+            memcpy(cap->block[seq][ch], src, sizeof(float) * kBusFrames);
+        else
+            memset(cap->block[seq][ch], 0, sizeof(float) * kBusFrames);
+    }
+    cap->count.store(seq + 1, std::memory_order_release);
 }
 
 void onSampleRateChanged(jb::asio::AsioSampleRate) {}
@@ -69,6 +109,411 @@ void unregisterInHkcu() {
     wchar_t key[512];
     swprintf_s(key, L"Software\\Classes\\CLSID\\%s", jb::asio::kDriverClsidText);
     RegDeleteTreeW(HKEY_CURRENT_USER, key);
+}
+
+// ---- audio-path tests -----------------------------------------------------
+//
+// The app writes into the ring, the driver reads it into its ASIO inputs. These
+// tests play the app's part with the documented layout and then assert on the
+// buffers that actually reached the host callback.
+
+struct TestBus {
+    HANDLE map = nullptr;
+    uint8_t* base = nullptr;
+    uint8_t* payload = nullptr;
+    std::atomic<int64_t>* write = nullptr;
+    int64_t blockBytes = 0;
+    wchar_t mapName[160] = {};
+
+    bool create(const wchar_t* busName) {
+        swprintf_s(mapName, L"Local\\JockeyBox.Bus.%s", busName);
+        const int64_t size = jb::asio::bus::kPayloadOffset +
+                             int64_t(kBusCapacity) * kBusFrames * kBusChannels * 4;
+        map = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE,
+                                 static_cast<DWORD>(size >> 32),
+                                 static_cast<DWORD>(size & 0xffffffffu), mapName);
+        if (!map) return false;
+        base = static_cast<uint8_t*>(MapViewOfFile(map, FILE_MAP_ALL_ACCESS, 0, 0, 0));
+        if (!base) return false;
+
+        auto put32 = [&](int offset, int32_t value) {
+            memcpy(base + offset, &value, sizeof(value));
+        };
+        const uint32_t magic = jb::asio::bus::kMagic;
+        memcpy(base + jb::asio::bus::kMagicOffset, &magic, sizeof(magic));
+        put32(jb::asio::bus::kVersionOffset, jb::asio::bus::kVersion);
+        put32(jb::asio::bus::kHeaderSizeOffset, jb::asio::bus::kHeaderSize);
+        put32(jb::asio::bus::kSampleRateOffset, kBusSampleRate);
+        put32(jb::asio::bus::kChannelsOffset, kBusChannels);
+        put32(jb::asio::bus::kBlockFramesOffset, kBusFrames);
+        put32(jb::asio::bus::kCapacityBlocksOffset, kBusCapacity);
+        put32(jb::asio::bus::kReaderSlotCountFieldOffset, jb::asio::bus::kReaderSlotCount);
+        put32(jb::asio::bus::kPayloadOffsetFieldOffset, jb::asio::bus::kPayloadOffset);
+
+        write = reinterpret_cast<std::atomic<int64_t>*>(
+            base + jb::asio::bus::kWriteBlockIndexOffset);
+        write->store(0, std::memory_order_release);
+        payload = base + jb::asio::bus::kPayloadOffset;
+        blockBytes = int64_t(kBusFrames) * kBusChannels * 4;
+        return true;
+    }
+
+    void publish(int64_t block) {
+        float* dst = reinterpret_cast<float*>(
+            payload + (block % kBusCapacity) * blockBytes);
+        for (int f = 0; f < kBusFrames; ++f)
+            for (int c = 0; c < kBusChannels; ++c)
+                dst[f * kBusChannels + c] = sampleFor(block, f, c);
+        write->store(block + 1, std::memory_order_release);
+    }
+
+    uint8_t* slot(int index) const {
+        return base + jb::asio::bus::kReaderSlotBase + index * jb::asio::bus::kReaderSlotSize;
+    }
+
+    int activeSlot() const {
+        for (int i = 0; i < jb::asio::bus::kReaderSlotCount; ++i) {
+            const int32_t active =
+                *reinterpret_cast<const volatile int32_t*>(slot(i) + jb::asio::bus::kSlotActive);
+            if (active == 1) return i;
+        }
+        return -1;
+    }
+
+    int64_t slotValue(int index, int field) const {
+        return *reinterpret_cast<const volatile int64_t*>(slot(index) + field);
+    }
+
+    void close() {
+        if (base) UnmapViewOfFile(base);
+        if (map) CloseHandle(map);
+        base = nullptr;
+        map = nullptr;
+    }
+};
+
+bool blockEquals(const float (*captured)[kBusFrames], int64_t block) {
+    for (int f = 0; f < kBusFrames; ++f)
+        for (int c = 0; c < kBusChannels; ++c) {
+            const float expected = sampleFor(block, f, c);
+            float got = captured[c][f];
+            if (memcmp(&got, &expected, sizeof(float)) != 0) return false;
+        }
+    return true;
+}
+
+bool blockSilent(const float (*captured)[kBusFrames]) {
+    for (int c = 0; c < kBusChannels; ++c)
+        for (int f = 0; f < kBusFrames; ++f)
+            if (captured[c][f] != 0.0f) return false;
+    return true;
+}
+
+void reportMismatch(const float (*captured)[kBusFrames], int64_t block) {
+    for (int f = 0; f < kBusFrames; ++f)
+        for (int c = 0; c < kBusChannels; ++c) {
+            const float expected = sampleFor(block, f, c);
+            const float got = captured[c][f];
+            if (memcmp(&got, &expected, sizeof(float)) != 0) {
+                wprintf(L"  first mismatch at block %lld frame %d ch %d: got %.1f expected %.1f\n",
+                        static_cast<long long>(block), f, c, got, expected);
+                return;
+            }
+        }
+}
+
+long long qpcTicks() {
+    LARGE_INTEGER t;
+    QueryPerformanceCounter(&t);
+    return t.QuadPart;
+}
+
+double qpcSeconds(long long ticks) {
+    LARGE_INTEGER f;
+    QueryPerformanceFrequency(&f);
+    return double(ticks) / double(f.QuadPart);
+}
+
+// Creates the CLSID registration's driver object for one bus test.
+jb::asio::IASIO* openDriver(const char* busName) {
+    SetEnvironmentVariableA("JOCKEYBOX_ASIO_BUS", busName);
+    void* raw = nullptr;
+    if (FAILED(CoCreateInstance(jb::asio::kDriverClsid, nullptr, CLSCTX_INPROC_SERVER,
+                                jb::asio::kDriverClsid, &raw)) ||
+        !raw)
+        return nullptr;
+    auto* driver = static_cast<jb::asio::IASIO*>(raw);
+    driver->init(nullptr);
+    return driver;
+}
+
+struct AudioPathResult {
+    bool bitExactRan = false;
+    bool bitExactPassed = false;
+    long matched = 0;
+    long mismatched = 0;
+    long expectedBlocks = 0;
+    bool gapPassed = false;
+    long long underrunsBeforeGap = 0;
+    long long underrunsAfterGap = 0;
+    double callbacksPerSecond = 0.0;
+    bool crossLanguageRan = false;
+    bool crossLanguagePassed = false;
+    long crossLanguageMatched = 0;
+    long crossLanguageMismatched = 0;
+    long crossLanguageSilent = 0;
+};
+
+// Spawns the real C# VirtualBusWriter (BusWriterCli) so the contract is proven
+// across the language boundary, not just against a C++ re-implementation.
+bool spawnBusWriter(const wchar_t* exe, const wchar_t* busName, PROCESS_INFORMATION* pi) {
+    wchar_t cmd[512];
+    swprintf_s(cmd, L"\"%s\" 750 %s", exe, busName);
+    STARTUPINFOW si = {};
+    si.cb = sizeof(si);
+    return CreateProcessW(nullptr, cmd, nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr,
+                          nullptr, &si, pi) != FALSE;
+}
+
+AudioPathResult runAudioPathTests(const wchar_t* harnessDir) {
+    AudioPathResult r;
+    wprintf(L"\n== audio path: ring -> ASIO inputs ==\n");
+
+    auto captures = std::unique_ptr<Captures>(new Captures());
+    wchar_t busName[64];
+    char busNameA[64];
+    swprintf_s(busName, L"harness-%lu", GetCurrentProcessId());
+    sprintf_s(busNameA, "harness-%lu", GetCurrentProcessId());
+
+    TestBus bus;
+    if (!bus.create(busName)) {
+        wprintf(L"FATAL: could not create section %s\n", bus.mapName);
+        return r;
+    }
+
+    jb::asio::IASIO* driver = openDriver(busNameA);
+    if (!driver) {
+        wprintf(L"FATAL: could not create the driver for the bus test\n");
+        bus.close();
+        return r;
+    }
+
+    jb::asio::AsioCallbacks callbacks = {onBufferSwitch, onSampleRateChanged,
+                                         onAsioMessage, onBufferSwitchTimeInfo};
+    jb::asio::AsioBufferInfo infos[4] = {};
+    for (long i = 0; i < 2; ++i) {
+        infos[i].isInput = jb::asio::kAsioTrue;
+        infos[i].channelNum = i;
+        infos[2 + i].isInput = jb::asio::kAsioFalse;
+        infos[2 + i].channelNum = i;
+    }
+    if (driver->createBuffers(infos, 4, kBusFrames, &callbacks) != jb::asio::kAseOk) {
+        wprintf(L"FATAL: createBuffers failed in the bus test\n");
+        driver->Release();
+        bus.close();
+        return r;
+    }
+    for (int ch = 0; ch < kBusChannels; ++ch) {
+        g_inBuf[ch][0] = static_cast<const float*>(infos[ch].buffers[0]);
+        g_inBuf[ch][1] = static_cast<const float*>(infos[ch].buffers[1]);
+    }
+
+    char error[124] = {};
+    driver->getErrorMessage(error);
+    wprintf(L"bus section       : %s\n", bus.mapName);
+    wprintf(L"getErrorMessage   : %hs\n", error);
+
+    g_capture = captures.get();
+    if (driver->start() != jb::asio::kAseOk) {
+        wprintf(L"FATAL: start failed in the bus test\n");
+        g_capture = nullptr;
+        driver->Release();
+        bus.close();
+        return r;
+    }
+
+    // --- 1. bit-exactness, in lockstep with the reader --------------------
+    // One block is published only once the driver has consumed the previous
+    // one, so the sequence is deterministic: no skips and no repeats unless
+    // the driver is wrong.
+    const int64_t wanted = 64;
+    int lockstepTimeouts = 0;
+    int claimedSlot = -1;
+    LARGE_INTEGER freq;
+    QueryPerformanceFrequency(&freq);
+    for (int64_t block = 0; block < wanted; ++block) {
+        bus.publish(block);
+        const int slot = bus.activeSlot();
+        if (slot < 0) {
+            lockstepTimeouts++;
+            break;
+        }
+        claimedSlot = slot;
+        const long long limit = qpcTicks() + freq.QuadPart / 5;  // 200 ms
+        while (bus.slotValue(slot, jb::asio::bus::kSlotReadBlockIndex) < block + 1 &&
+               qpcTicks() < limit) {
+            Sleep(0);
+        }
+        if (bus.slotValue(slot, jb::asio::bus::kSlotReadBlockIndex) < block + 1)
+            lockstepTimeouts++;
+    }
+
+    // --- 2. gap: stop writing mid-run ----------------------------------------
+    // The driver's clock keeps running with nothing to read: every later buffer
+    // must be exactly zero, and the reader slot must tick once per callback.
+    const long long underrunsBefore =
+        claimedSlot >= 0 ? bus.slotValue(claimedSlot, jb::asio::bus::kSlotUnderruns) : -1;
+    Sleep(150);  // ~56 callbacks at 128 frames
+    driver->stop();
+    const long long underrunsAfter =
+        claimedSlot >= 0 ? bus.slotValue(claimedSlot, jb::asio::bus::kSlotUnderruns) : -1;
+    g_capture = nullptr;
+
+    const long captured = captures->count.load(std::memory_order_acquire);
+    long matched = 0, mismatched = 0, silent = 0;
+    int64_t expect = 0;
+    for (long i = 0; i < captured && expect < wanted; ++i) {
+        if (blockEquals(captures->block[i], expect)) {
+            matched++;
+            expect++;
+        } else if (blockSilent(captures->block[i])) {
+            silent++;
+        } else {
+            if (mismatched == 0) reportMismatch(captures->block[i], expect);
+            mismatched++;
+        }
+    }
+
+    r.bitExactRan = true;
+    r.expectedBlocks = wanted;
+    r.matched = matched;
+    r.mismatched = mismatched;
+    r.bitExactPassed = (matched == wanted && mismatched == 0 && lockstepTimeouts == 0);
+
+    const long gapWindow = captured < 15 ? captured : 15;
+    bool gapSilent = gapWindow > 0;
+    for (long i = captured - gapWindow; i < captured; ++i)
+        if (!blockSilent(captures->block[i])) gapSilent = false;
+    r.underrunsBeforeGap = underrunsBefore;
+    r.underrunsAfterGap = underrunsAfter;
+    r.gapPassed = gapSilent && underrunsAfter - underrunsBefore >= 10;
+
+    // --- 3. cadence while streaming -------------------------------------------
+    // A free-running writer at exactly the driver's block rate. The cadence is
+    // the clock thread's job: a blocking read path would show up here.
+    g_callbacks.store(0);
+    driver->start();
+    const long long cadenceStart = qpcTicks();
+    std::thread writer([&bus] {
+        const long long t0 = qpcTicks();
+        const double period = double(kBusFrames) / double(kBusSampleRate);
+        int64_t block = bus.write->load(std::memory_order_acquire);
+        for (int i = 0; i < 750; ++i) {  // 2 seconds at 375 blocks/s
+            const double due = (i + 1) * period;
+            while (qpcSeconds(qpcTicks() - t0) < due) {
+                const double left = due - qpcSeconds(qpcTicks() - t0);
+                if (left > 0.001)
+                    Sleep(0);
+                else
+                    YieldProcessor();
+            }
+            bus.publish(block++);
+        }
+    });
+    writer.join();
+    const double cadenceSeconds = qpcSeconds(qpcTicks() - cadenceStart);
+    const long cadenceCallbacks = g_callbacks.load();
+    driver->stop();
+    r.callbacksPerSecond = cadenceSeconds > 0
+        ? double(cadenceCallbacks) / cadenceSeconds
+        : 0.0;
+
+    driver->disposeBuffers();
+    driver->Release();
+    bus.close();
+
+    // --- 4. cross-language: the real C# writer --------------------------------
+    wchar_t cli[512];
+    swprintf_s(cli, L"%sbuswriter\\BusWriterCli.exe", harnessDir);
+    if (GetFileAttributesW(cli) == INVALID_FILE_ATTRIBUTES) {
+        wprintf(L"cross-language    : not run (%s not found)\n", cli);
+        return r;
+    }
+
+    auto xcaptures = std::unique_ptr<Captures>(new Captures());
+    wchar_t xname[64];
+    char xnameA[64];
+    swprintf_s(xname, L"harness-cli-%lu", GetCurrentProcessId());
+    sprintf_s(xnameA, "harness-cli-%lu", GetCurrentProcessId());
+
+    // The C# writer creates and owns the section; the driver joins it.
+    PROCESS_INFORMATION pi = {};
+    if (!spawnBusWriter(cli, xname, &pi)) {
+        wprintf(L"cross-language    : not run (could not spawn %s)\n", cli);
+        return r;
+    }
+    Sleep(150);  // let it create the section and publish its first blocks
+
+    // The C# writer creates and owns the section; the driver joins it. Poll for
+    // it, because a .NET host cold start can take longer than one block period.
+    TestBus xbus;
+    wchar_t xmap[160];
+    swprintf_s(xmap, L"Local\\JockeyBox.Bus.%s", xname);
+    for (int attempt = 0; attempt < 100 && !xbus.map; ++attempt) {
+        xbus.map = OpenFileMappingW(FILE_MAP_READ | FILE_MAP_WRITE, FALSE, xmap);
+        if (!xbus.map) Sleep(50);
+    }
+    jb::asio::IASIO* xdriver = xbus.map ? openDriver(xnameA) : nullptr;
+    if (xdriver) {
+        const jb::asio::AsioError xcb = xdriver->createBuffers(infos, 4, kBusFrames, &callbacks);
+        if (xcb == jb::asio::kAseOk) {
+            for (int ch = 0; ch < kBusChannels; ++ch) {
+                g_inBuf[ch][0] = static_cast<const float*>(infos[ch].buffers[0]);
+                g_inBuf[ch][1] = static_cast<const float*>(infos[ch].buffers[1]);
+            }
+            g_capture = xcaptures.get();
+            xdriver->start();
+            WaitForSingleObject(pi.hProcess, 5000);
+            xdriver->stop();
+            g_capture = nullptr;
+            r.crossLanguageRan = true;
+        }
+        xdriver->disposeBuffers();
+        xdriver->Release();
+    } else {
+        wprintf(L"cross-language    : section open=%p driver=%p\n", (void*)xbus.map,
+                (void*)xdriver);
+    }
+    if (xbus.map) CloseHandle(xbus.map);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+
+    if (r.crossLanguageRan) {
+        const long n = xcaptures->count.load(std::memory_order_acquire);
+        int64_t last = -1;
+        long matchedX = 0, mismatchedX = 0, silentX = 0;
+        for (long i = 0; i < n; ++i) {
+            if (blockSilent(xcaptures->block[i])) {
+                silentX++;
+                continue;
+            }
+            bool found = false;
+            for (int64_t k = last + 1; k < 750 && !found; ++k) {
+                if (blockEquals(xcaptures->block[i], k)) {
+                    last = k;
+                    matchedX++;
+                    found = true;
+                }
+            }
+            if (!found) mismatchedX++;
+        }
+        r.crossLanguageMatched = matchedX;
+        r.crossLanguageMismatched = mismatchedX;
+        r.crossLanguageSilent = silentX;
+        r.crossLanguagePassed = (matchedX >= 300 && mismatchedX == 0);
+    }
+
+    return r;
 }
 
 }  // namespace
@@ -208,6 +653,35 @@ int wmain(int argc, wchar_t** argv) {
 
     driver->disposeBuffers();
     driver->Release();
+
+    // ---- audio path: ring -> ASIO inputs ----------------------------------
+    wchar_t harnessDir[MAX_PATH] = {};
+    GetModuleFileNameW(nullptr, harnessDir, MAX_PATH);
+    if (wchar_t* slash = wcsrchr(harnessDir, L'\\')) *slash = L'\0';
+    wcscat_s(harnessDir, L"\\");
+
+    const AudioPathResult audio = runAudioPathTests(harnessDir);
+
+    wprintf(L"\n== audio path summary ==\n");
+    wprintf(L"bit-exact blocks  : %ld/%ld matched, %ld mismatched\n", audio.matched,
+            audio.expectedBlocks, audio.mismatched);
+    wprintf(L"gap -> silence    : %s (underruns %lld -> %lld)\n",
+            audio.gapPassed ? L"yes" : L"NO",
+            audio.underrunsBeforeGap, audio.underrunsAfterGap);
+    wprintf(L"cadence streaming : %.1f callbacks/s\n", audio.callbacksPerSecond);
+    if (audio.crossLanguageRan) {
+        wprintf(L"cross-language    : ran (%ld matched, %ld mismatched, %ld silence)\n",
+                audio.crossLanguageMatched, audio.crossLanguageMismatched,
+                audio.crossLanguageSilent);
+    } else {
+        wprintf(L"cross-language    : not run\n");
+    }
+
+    const bool audioPassed = audio.bitExactPassed && audio.gapPassed &&
+                             audio.callbacksPerSecond > 350.0 &&
+                             audio.callbacksPerSecond < 400.0 &&
+                             (!audio.crossLanguageRan || audio.crossLanguagePassed);
+
     CoUninitialize();
 
     if (argc > 2 && wcscmp(argv[2], L"--keep") == 0) {
