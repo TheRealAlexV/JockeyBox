@@ -1689,6 +1689,7 @@
                         <ToggleButton DockPanel.Dock="Right" Style="{StaticResource RackBandToggle}"
                                       Margin="10,0,0,0"
                                       IsChecked="{Binding AreStripControlsOpen, Mode=TwoWay}"
+                                      Visibility="{Binding HasMicStrips, Converter={StaticResource BoolToVisibility}}"
                                       AutomationProperties.Name="Show strip controls"/>
                         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal"
                                     VerticalAlignment="Center" Margin="12,0,0,0"
