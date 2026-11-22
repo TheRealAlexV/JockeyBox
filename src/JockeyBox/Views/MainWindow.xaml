@@ -1135,7 +1135,7 @@
                         <ControlTemplate TargetType="RadioButton">
                             <Border x:Name="bd" Background="{StaticResource PanelAltBrush}"
                                     BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
-                                    CornerRadius="3" Padding="7,4">
+                                    CornerRadius="3" Padding="7,3">
                                 <ContentPresenter/>
                             </Border>
                             <ControlTemplate.Triggers>
@@ -1191,7 +1191,7 @@
             </Style>
 
             <Style x:Key="RackCaption" TargetType="TextBlock">
-                <Setter Property="FontSize" Value="8"/>
+                <Setter Property="FontSize" Value="9"/>
                 <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
                 <Setter Property="VerticalAlignment" Value="Center"/>
             </Style>
@@ -1669,7 +1669,7 @@
                  the HTTP API takes - so nothing here touches a filter from the UI thread.
                  Numbers sit in fixed-width right-aligned columns so a change never reflows the
                  row. Double-click a value or its fader to return it to neutral. -->
-            <Border Margin="0,7,0,0" Padding="0,7,0,0"
+            <Border Margin="0,5,0,0" Padding="0,4,0,0"
                     BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0">
 
                 <StackPanel>
@@ -1684,6 +1684,7 @@
                                    Margin="8,0,0,0" VerticalAlignment="Center"/>
                         <TextBlock DockPanel.Dock="Left" FontSize="9" Margin="8,0,0,0"
                                    VerticalAlignment="Center" Foreground="{StaticResource AccentABrush}"
+                                   MaxWidth="220" TextTrimming="CharacterEllipsis"
                                    Text="{Binding SelectedMicStrip.Name, StringFormat={}editing {0}}"/>
 
                         <ToggleButton DockPanel.Dock="Right" Style="{StaticResource RackBandToggle}"
@@ -1712,7 +1713,7 @@
                     </DockPanel>
 
                     <!-- Strip row: one button per attached device. -->
-                    <ItemsControl ItemsSource="{Binding MicStrips}" Margin="0,6,0,0">
+                    <ItemsControl ItemsSource="{Binding MicStrips}" Margin="0,4,0,0">
                         <ItemsControl.ItemsPanel>
                             <ItemsPanelTemplate>
                                 <WrapPanel Orientation="Horizontal"/>
@@ -1737,7 +1738,7 @@
                                         <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,6,0">
                                             <TextBlock Text="{Binding Name}" FontSize="10"
                                                        TextTrimming="CharacterEllipsis" ToolTip="{Binding Name}"/>
-                                            <TextBlock Text="not connected" FontSize="8"
+                                            <TextBlock Text="not connected" FontSize="9"
                                                        Foreground="{StaticResource TextDimBrush}">
                                                 <TextBlock.Style>
                                                     <Style TargetType="TextBlock">
@@ -3952,14 +3953,13 @@
                                 <!-- Band limits. Neutral is wide open; the fader is log so a voice
                                      filter's useful band is not two pixels wide. -->
                                 <StackPanel Width="190" Margin="0,0,10,0">
-                                    <TextBlock Text="FILTERS" Style="{StaticResource RackGroupTitle}"/>
+                                    <TextBlock Text="FILTERS (Hz)" Style="{StaticResource RackGroupTitle}"/>
                                     <DockPanel Style="{StaticResource RackRow}">
                                         <TextBlock Text="HP" Style="{StaticResource RackRowLabel}"/>
                                         <ToggleButton Style="{StaticResource RackBandGate}" Margin="0,0,6,0"
                                                       IsChecked="{Binding HighPassOn, Mode=TwoWay}"
                                                       AutomationProperties.Name="High-pass on"/>
-                                        <TextBlock Text="{Binding HighPassHz, StringFormat={}{0:0}}" Style="{StaticResource RackValue}" Width="44"/>
-                                        <TextBlock Text="Hz" Style="{StaticResource RackUnit}"/>
+                                        <TextBlock Text="{Binding HighPassHz, StringFormat={}{0:0}}" Style="{StaticResource RackValue}" Width="52"/>
                                     </DockPanel>
                                     <DockPanel Style="{StaticResource RackRow}" Tag="hp.freq" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
                                         <Slider Minimum="0" Maximum="1" SmallChange="0.01" LargeChange="0.05"
@@ -3971,8 +3971,7 @@
                                         <ToggleButton Style="{StaticResource RackBandGate}" Margin="0,0,6,0"
                                                       IsChecked="{Binding LowPassOn, Mode=TwoWay}"
                                                       AutomationProperties.Name="Low-pass on"/>
-                                        <TextBlock Text="{Binding LowPassHz, StringFormat={}{0:0}}" Style="{StaticResource RackValue}" Width="44"/>
-                                        <TextBlock Text="Hz" Style="{StaticResource RackUnit}"/>
+                                        <TextBlock Text="{Binding LowPassHz, StringFormat={}{0:0}}" Style="{StaticResource RackValue}" Width="52"/>
                                     </DockPanel>
                                     <DockPanel Style="{StaticResource RackRow}" Tag="lp.freq" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
                                         <Slider Minimum="0" Maximum="1" SmallChange="0.01" LargeChange="0.05"
