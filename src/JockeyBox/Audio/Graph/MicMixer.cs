@@ -399,6 +399,67 @@ public sealed class MicMixer : IDisposable
     }
 
     /// <summary>
+    /// Render-thread queue. The HTTP API, hotkeys and presets post here and return at once;
+    /// <see cref="Render"/> drains it at the top of the block, so nothing outside the render
+    /// thread ever writes a filter, envelope or gain stage.
+    /// </summary>
+    public RenderCommands Commands { get; } = new();
+
+    /// <summary>
+    /// Applies a batch of strips on the render thread and re-aligns once, after the whole
+    /// batch. Call only from a <see cref="Commands"/> action: one call per block is what keeps
+    /// a preset atomic instead of staggering device by device across blocks.
+    /// </summary>
+    public void ApplyAll(IReadOnlyList<KeyValuePair<string, StripParameters>> updates)
+    {
+        if (updates == null || updates.Count == 0) return;
+
+        var byId = new Dictionary<string, StripParameters>(updates.Count, StringComparer.Ordinal);
+        for (int i = 0; i < updates.Count; i++)
+        {
+            byId[updates[i].Key ?? ""] = updates[i].Value.Clamp();
+        }
+
+        MicStrip[] strips = _strips;
+        for (int i = 0; i < strips.Length; i++)
+        {
+            if (byId.TryGetValue(strips[i].DeviceId ?? "", out StripParameters parameters))
+            {
+                strips[i].ApplyStripParameters(parameters);
+            }
+        }
+
+        lock (_gate)
+        {
+            foreach (var pair in byId) _stored[pair.Key] = pair.Value;
+        }
+
+        // After the batch, before the strips process in this same block: a preset that
+        // switches a limiter on re-pads every peer in the block it arrives in.
+        RecalculateLatency(strips);
+    }
+
+    /// <summary>
+    /// Copy of the applied map for a caller on another thread (the HTTP read side and the
+    /// debounced writer). Every attached device is present, neutral when it has no entry.
+    /// </summary>
+    public IReadOnlyDictionary<string, StripParameters> SnapshotStrips()
+    {
+        var copy = new Dictionary<string, StripParameters>(StringComparer.Ordinal);
+        lock (_gate)
+        {
+            foreach (var pair in _stored) copy[pair.Key] = pair.Value;
+            foreach (var strip in _strips)
+            {
+                string id = strip.DeviceId ?? "";
+                if (!copy.ContainsKey(id)) copy[id] = StripParameters.Neutral;
+            }
+        }
+
+        return copy;
+    }
+
+    /// <summary>
     /// Applies one device's strip and persists the whole map: the entry point the settings
     /// API lane calls. The render path itself never writes the file.
     /// </summary>
@@ -458,6 +519,10 @@ public sealed class MicMixer : IDisposable
     /// </summary>
     public void Render(int frames, float[] recording, float[] monitor, int channels)
     {
+        // Everything the API, a hotkey or a preset asked for lands here, at the top of the
+        // block, before any strip processes: one block sees one consistent set of targets.
+        Commands.Drain();
+
         int samples = frames * channels;
         Array.Clear(recording, 0, samples);
         Array.Clear(monitor, 0, samples);

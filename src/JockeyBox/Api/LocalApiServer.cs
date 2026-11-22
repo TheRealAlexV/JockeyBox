@@ -51,6 +51,7 @@ public sealed class LocalApiServer : IDisposable
     private Func<ApiState>? _stateSource;
     private Func<string?, string?, Task<ApiAddResult>>? _addSound;
     private CueApiRouter? _cueRouter;
+    private MixerApiRouter? _mixerRouter;
     private string _token = string.Empty;
     private Task? _loop;
 
@@ -71,7 +72,8 @@ public sealed class LocalApiServer : IDisposable
         Action stopAll,
         Func<ApiState> stateSource,
         Func<string?, string?, Task<ApiAddResult>>? addSound = null,
-        CueApiRouter? cueRouter = null)
+        CueApiRouter? cueRouter = null,
+        MixerApiRouter? mixerRouter = null)
     {
         _token = token ?? string.Empty;
         _padSource = padSource;
@@ -80,6 +82,7 @@ public sealed class LocalApiServer : IDisposable
         _stateSource = stateSource;
         _addSound = addSound;
         _cueRouter = cueRouter;
+        _mixerRouter = mixerRouter;
     }
 
     /// <summary>Start listening on 127.0.0.1:<paramref name="port"/> (falls back to the next free port).</summary>
@@ -245,6 +248,32 @@ public sealed class LocalApiServer : IDisposable
                 }
 
                 var outcome = _cueRouter.Handle(method, path, body);
+                context.Response.StatusCode = outcome.Status;
+                await WriteRawJsonAsync(context.Response, outcome.Json).ConfigureAwait(false);
+                return;
+            }
+
+            // Mixer: same delegation, but a write is a PUT as well as a POST, so the body
+            // is read for both. The router only validates and queues; the render thread
+            // applies between blocks.
+            if (_mixerRouter != null && MixerApiRouter.Handles(path))
+            {
+                string? body = null;
+                if (method is "POST" or "PUT")
+                {
+                    var read = await ReadBodyAsync(context.Request).ConfigureAwait(false);
+                    if (!read.Ok)
+                    {
+                        Log.Warn($"local api: refused {method} {path} ({read.Status}): {read.Error}");
+                        context.Response.StatusCode = read.Status;
+                        await WriteTextAsync(context.Response, read.Error).ConfigureAwait(false);
+                        return;
+                    }
+
+                    body = read.Body;
+                }
+
+                var outcome = _mixerRouter.Handle(method, path, body);
                 context.Response.StatusCode = outcome.Status;
                 await WriteRawJsonAsync(context.Response, outcome.Json).ConfigureAwait(false);
                 return;
