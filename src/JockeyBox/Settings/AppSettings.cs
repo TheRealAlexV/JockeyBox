@@ -243,6 +243,54 @@ public class AppSettings
     /// </summary>
     public string VirtualAsioBusName { get; set; } = "main";
 
+    /// <summary>
+    /// Longest ring name the native driver accepts: it reads <c>JOCKEYBOX_ASIO_BUS</c>
+    /// into a 64-byte buffer. A longer name is published but never attached, and the
+    /// driver retries once a second forever, so it is refused before it is saved.
+    /// </summary>
+    public const int VirtualAsioBusNameMaxLength = 64;
+
+    /// <summary>
+    /// Null when <paramref name="name"/> can be published to the ring, otherwise the
+    /// reason it cannot. Shared by the settings window (refuse at save, with the
+    /// reason shown) and the engine (refuse at route apply with a distinct line
+    /// instead of opening a section the driver can never attach to).
+    /// </summary>
+    public static string? ValidateVirtualAsioBusName(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            return "the ring name must not be empty";
+        if (name.Length > VirtualAsioBusNameMaxLength)
+            return $"the ring name is {name.Length} characters; the driver accepts at most " +
+                   $"{VirtualAsioBusNameMaxLength}";
+        foreach (char c in name)
+            if (!char.IsAsciiLetterOrDigit(c) && c is not ('_' or '-' or '.'))
+                return "the ring name may only contain letters, digits, '_', '-' and '.'";
+        return null;
+    }
+
+    /// <summary>How many buses are ticked to publish to the virtual ASIO ring.</summary>
+    public int VirtualAsioBusCount =>
+        (VirtualAsioDeckA ? 1 : 0) + (VirtualAsioDeckB ? 1 : 0) + (VirtualAsioRecording ? 1 : 0) +
+        (VirtualAsioSoundboard ? 1 : 0) + (VirtualAsioMonitor ? 1 : 0);
+
+    /// <summary>
+    /// There is one ring, so exactly one bus may feed it. Clears every flag after the
+    /// first in routing order and returns how many were dropped. The engine already
+    /// publishes only the first, but a second tick in the file would then be a silent
+    /// drop; normalising makes that state unrepresentable.
+    /// </summary>
+    public int NormalizeVirtualAsioBuses()
+    {
+        bool keep = VirtualAsioDeckA;
+        int dropped = 0;
+        if (VirtualAsioDeckB) { if (keep) { VirtualAsioDeckB = false; dropped++; } else keep = true; }
+        if (VirtualAsioRecording) { if (keep) { VirtualAsioRecording = false; dropped++; } else keep = true; }
+        if (VirtualAsioSoundboard) { if (keep) { VirtualAsioSoundboard = false; dropped++; } else keep = true; }
+        if (VirtualAsioMonitor) { if (keep) { VirtualAsioMonitor = false; dropped++; } else keep = true; }
+        return dropped;
+    }
+
     // One ring, so one bus publishes: with several flags set the engine uses the
     // first in routing order and names the ignored buses in the log.
 
@@ -666,6 +714,20 @@ public class AppSettings
         settings.MigrateLegacyRoot();
         settings.MigrateAudioRouting();
         settings.NormalizeKaraokeRoot();
+
+        // The ring has one section and one producer. A name the driver cannot
+        // resolve would publish audio nothing ever attaches to, and a second ticked
+        // bus would be dropped silently, so a hand-edited file is normalised to the
+        // one representable state rather than saved back as-is.
+        if (ValidateVirtualAsioBusName(settings.VirtualAsioBusName) != null)
+        {
+            Log.Warn($"settings: virtual ASIO ring name '{settings.VirtualAsioBusName}' is not " +
+                     "one the driver accepts; falling back to 'main'");
+            settings.VirtualAsioBusName = "main";
+        }
+        if (settings.NormalizeVirtualAsioBuses() > 0)
+            Log.Warn("settings: more than one bus was flagged for the virtual ASIO ring; " +
+                     "only the first in routing order can publish, so the rest were cleared");
         return settings;
     }
 

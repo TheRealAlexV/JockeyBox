@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using JockeyBox.Audio.Endpoints;
+using JockeyBox.Settings;
 using JockeyBox.Tools;
 
 namespace JockeyBox.Audio.Graph;
@@ -170,6 +171,29 @@ public sealed class AudioEngine : IDisposable
 
     /// <summary>Which bus feeds the virtual ring (only meaningful while <see cref="_virtualSink"/> is set).</summary>
     private BusKind _virtualBus = BusKind.Monitor;
+
+    /// <summary>Non-zero when a flagged bus exists but its ring could not be opened.</summary>
+    private int _virtualRingFailed;
+
+    /// <summary>
+    /// The render thread's view of the ring: sink and bus published as one
+    /// immutable pair, so a route change can never hand it a sink from one route
+    /// with the bus index from another. Allocated once per route change, never per
+    /// block.
+    /// </summary>
+    public sealed record VirtualRing(VirtualBusSink Sink, BusKind Bus);
+
+    private VirtualRing? _virtualRing;
+
+    /// <summary>
+    /// True when a bus is flagged for the virtual ring but the section did not open
+    /// (bad name, missing section, single-writer claim taken). The operator needs
+    /// this to be distinguishable from "every bus is set to None".
+    /// </summary>
+    public bool VirtualRingFailed => Volatile.Read(ref _virtualRingFailed) != 0;
+
+    /// <summary>The sink+bus pair the render thread is publishing to, or null.</summary>
+    public VirtualRing? Ring => Volatile.Read(ref _virtualRing);
 
     /// <summary>
     /// When the render thread started, in <see cref="Stopwatch"/> ticks. A route with
@@ -706,6 +730,8 @@ public sealed class AudioEngine : IDisposable
             // bus flagged for it. Created here, never per block.
             oldVirtual = _virtualSink;
             _virtualSink = OpenVirtualBus(route, out _virtualBus);
+            Volatile.Write(ref _virtualRing,
+                _virtualSink is null ? null : new VirtualRing(_virtualSink, _virtualBus));
 
             foreach (var output in built.Outputs)
             {
@@ -755,7 +781,18 @@ public sealed class AudioEngine : IDisposable
             _firstSink = FirstOpenLocked();
             if (_firstSink == null)
             {
-                Log.Warn("audio engine not started: every bus is set to None");
+                // Distinguish the three reasons a start can have no sink. "Every bus
+                // is set to None" was being printed for a failed ring open too, which
+                // misdiagnosed exactly the path this milestone added.
+                if (VirtualRingFailed)
+                    Log.Warn($"audio engine not started: the virtual ASIO ring for bus " +
+                             $"{_virtualBus} ('{_route.VirtualBusName}') did not open, and no " +
+                             "bus has a device output");
+                else if (_route.VirtualBuses is { Count: > 0 })
+                    Log.Warn("audio engine not started: no bus has a device output and the " +
+                             $"virtual ASIO ring for bus {_virtualBus} has no producer");
+                else
+                    Log.Warn("audio engine not started: every bus is set to None");
                 return;
             }
         }
@@ -787,6 +824,7 @@ public sealed class AudioEngine : IDisposable
             foreach (var bus in _buses) bus.Sink = null;
             DisposeQuietly(_virtualSink);
             _virtualSink = null;
+            Volatile.Write(ref _virtualRing, null);
             _firstSink = null;
         }
 
@@ -813,7 +851,11 @@ public sealed class AudioEngine : IDisposable
     private VirtualBusSink? OpenVirtualBus(AudioRoute route, out BusKind bus)
     {
         bus = BusKind.Monitor;
-        if (route.VirtualBuses == null || route.VirtualBuses.Count == 0) return null;
+        if (route.VirtualBuses == null || route.VirtualBuses.Count == 0)
+        {
+            Volatile.Write(ref _virtualRingFailed, 0);
+            return null;
+        }
 
         bus = route.VirtualBuses[0];
         if (route.VirtualBuses.Count > 1)
@@ -821,7 +863,29 @@ public sealed class AudioEngine : IDisposable
                      $"'{route.VirtualBusName}'; publishing {bus} only " +
                      $"({string.Join(", ", route.VirtualBuses.Skip(1))} ignored)");
 
-        return VirtualBusSink.TryOpen(route.VirtualBusName, Rate, Channels, BlockFrames);
+        // Refuse a name the driver can never attach to before the writer is opened:
+        // the generic "not opened" line would hide which bus and which rule failed.
+        var nameError = AppSettings.ValidateVirtualAsioBusName(route.VirtualBusName);
+        if (nameError != null)
+        {
+            Volatile.Write(ref _virtualRingFailed, 1);
+            Log.Warn($"virtual ASIO ring: bus {bus} cannot publish to " +
+                     $"'{route.VirtualBusName}': {nameError}");
+            return null;
+        }
+
+        var sink = VirtualBusSink.TryOpen(route.VirtualBusName, Rate, Channels, BlockFrames,
+            out var error);
+        if (sink == null)
+        {
+            Volatile.Write(ref _virtualRingFailed, 1);
+            Log.Warn($"virtual ASIO ring: bus {bus} could not publish to " +
+                     $"'{route.VirtualBusName}': {error}");
+            return null;
+        }
+
+        Volatile.Write(ref _virtualRingFailed, 0);
+        return sink;
     }
 
     // ------------------------------------------------------------------ fader / tempo helpers
@@ -905,6 +969,15 @@ public sealed class AudioEngine : IDisposable
                         else
                         {
                             DisposeQuietly(firstSink);
+                            // The ring was the only sink: drop its snapshot so the
+                            // render thread stops pacing against a dead producer, and
+                            // report the ring as failed rather than as "no output".
+                            if (ReferenceEquals(firstSink, _virtualSink))
+                            {
+                                _virtualSink = null;
+                                Volatile.Write(ref _virtualRing, null);
+                                Volatile.Write(ref _virtualRingFailed, 1);
+                            }
                         }
                         _firstSink = FirstOpenLocked();
                     }
@@ -922,9 +995,10 @@ public sealed class AudioEngine : IDisposable
                     }
                 }
                 // A virtual-only route has no device clock: the wall clock is the
-                // cadence, and the ring's 8-block depth rides out a late wake-up.
-                else if (_virtualSink is { } virtualSink &&
-                         virtualSink.IsAheadOfClock(_clockStart, BlockFrames, Rate))
+                // cadence, and the ring's cushion (64 blocks by default) rides out a
+                // late wake-up. One atomic read: the sink and its bus come together.
+                else if (Volatile.Read(ref _virtualRing) is { } ring &&
+                         ring.Sink.IsAheadOfClock(_clockStart, BlockFrames, Rate))
                 {
                     Thread.Sleep(1);
                     continue;
@@ -1103,8 +1177,9 @@ public sealed class AudioEngine : IDisposable
 
         // 11b. The virtual ASIO ring gets the same post-delay block the flagged bus
         //      gave its device, so the driver serves what the operator routed to it.
-        if (_virtualSink is { } virtualRing)
-            virtualRing.Write(_buses[(int)_virtualBus].Output, 0, BlockFrames);
+        //      Snapshot read: sink and bus always belong to the same route.
+        if (Volatile.Read(ref _virtualRing) is { } ring)
+            ring.Sink.Write(_buses[(int)ring.Bus].Output, 0, BlockFrames);
 
         TraceIfDue(frame);
 

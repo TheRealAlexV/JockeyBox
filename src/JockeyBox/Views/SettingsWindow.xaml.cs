@@ -200,20 +200,6 @@ public partial class SettingsWindow : Window
         return string.IsNullOrWhiteSpace(id) ? null : id;
     }
 
-    /// <summary>
-    /// Same character set the transport ring accepts (<c>BusLayout.ValidateName</c>):
-    /// letters, digits, '_', '-' and '.'. Checked on save so a typo is refused here
-    /// instead of failing the ring at route time, where it would only sound silent.
-    /// </summary>
-    private static bool IsValidBusName(string name)
-    {
-        if (string.IsNullOrWhiteSpace(name)) return false;
-        foreach (char c in name)
-            if (!char.IsAsciiLetterOrDigit(c) && c is not ('_' or '-' or '.'))
-                return false;
-        return true;
-    }
-
     /// <summary>This endpoint's stored delay, or 0 when it has none.</summary>
     private static string DeviceDelayText(AppSettings settings, string? deviceId)
 
@@ -1077,20 +1063,36 @@ public partial class SettingsWindow : Window
         // Virtual ASIO ring: additive keys, default off. The name is validated
         // against the bus-name rules here so a typo cannot make the writer fail at
         // route time (where the operator would only see silence).
+        int ringBuses = (VirtualAsioDeckACheck.IsChecked == true ? 1 : 0) +
+                        (VirtualAsioDeckBCheck.IsChecked == true ? 1 : 0) +
+                        (VirtualAsioRecordingCheck.IsChecked == true ? 1 : 0) +
+                        (VirtualAsioSoundboardCheck.IsChecked == true ? 1 : 0) +
+                        (VirtualAsioMonitorCheck.IsChecked == true ? 1 : 0);
+        if (ringBuses > 1)
+        {
+            MessageBox.Show(this,
+                "Only one bus can publish to the virtual ASIO ring. Untick all but one " +
+                "(the ring has a single section, so a second bus could only be dropped).",
+                "One ring bus", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        var ringName = VirtualAsioBusNameBox.Text.Trim();
+        if (ringName.Length == 0) ringName = "main";
+        var ringNameError = AppSettings.ValidateVirtualAsioBusName(ringName);
+        if (ringNameError != null)
+        {
+            MessageBox.Show(this,
+                $"The virtual ASIO ring name is not valid: {ringNameError}.",
+                "Invalid ring name", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
         _settings.VirtualAsioDeckA = VirtualAsioDeckACheck.IsChecked == true;
         _settings.VirtualAsioDeckB = VirtualAsioDeckBCheck.IsChecked == true;
         _settings.VirtualAsioRecording = VirtualAsioRecordingCheck.IsChecked == true;
         _settings.VirtualAsioSoundboard = VirtualAsioSoundboardCheck.IsChecked == true;
         _settings.VirtualAsioMonitor = VirtualAsioMonitorCheck.IsChecked == true;
-        var ringName = VirtualAsioBusNameBox.Text.Trim();
-        if (ringName.Length == 0) ringName = "main";
-        if (!IsValidBusName(ringName))
-        {
-            MessageBox.Show(this,
-                "The virtual ASIO ring name may only contain letters, digits, '_', '-' and '.'.",
-                "Invalid ring name", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
         _settings.VirtualAsioBusName = ringName;
 
         // Recording devices: the rows ARE the list. An enabled row is the whole
