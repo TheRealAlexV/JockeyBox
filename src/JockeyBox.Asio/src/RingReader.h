@@ -54,6 +54,10 @@ constexpr int32_t kSlotActive = 24;
 // owns the trim and the app tree is out of scope; it is not part of the shared
 // contract and must not be treated as one.
 constexpr int32_t kSlotTrims = 32;
+// Native-only, same unused tail: instantaneous lag at the start of the last
+// read, in frames. The in-process harness reads it as a phase-free latency
+// reference; the app never reads it and it is not part of the shared contract.
+constexpr int32_t kSlotCurrentLagFrames = 40;
 
 // The section lives in the calling session, so an in-process host (obs-asio)
 // sees the same one the app created.
@@ -161,6 +165,7 @@ public:
         m_corrections = asI64(slotBase + kSlotCorrections);
         m_underruns = asI64(slotBase + kSlotUnderruns);
         m_slotActive = asI32(slotBase + kSlotActive);
+        m_slotCurrentLag = asI64(slotBase + kSlotCurrentLagFrames);
         m_trims = asI64(slotBase + kSlotTrims);
         m_trims->store(0, std::memory_order_release);
 
@@ -253,6 +258,8 @@ public:
         const int64_t written = m_write->load(std::memory_order_acquire);
         if (written <= m_cursorBlock) {
             m_underruns->fetch_add(1, std::memory_order_relaxed);
+            m_currentLagFrames.store(0, std::memory_order_relaxed);
+            if (m_slotCurrentLag) m_slotCurrentLag->store(0, std::memory_order_relaxed);
             m_read->store(m_cursorBlock, std::memory_order_release);
             return;
         }
@@ -272,6 +279,13 @@ public:
 
         const int32_t channels = m_channels;
         const int32_t blockFrames = m_blockFrames;
+
+        // The lag this callback is about to consume from, published so the
+        // harness can take a reference at the same instant getLatencies reports.
+        const int64_t lagNow =
+            (written - m_cursorBlock) * static_cast<int64_t>(blockFrames) - m_cursorFrame;
+        m_currentLagFrames.store(lagNow, std::memory_order_relaxed);
+        if (m_slotCurrentLag) m_slotCurrentLag->store(lagNow, std::memory_order_relaxed);
 
         // --- one-frame rate trim ------------------------------------------------
         // A mixed route paces the writer off the physical device's WASAPI clock
@@ -343,7 +357,16 @@ public:
                     // few blocks above the cushion and reports must follow it.
                     m_measuredLagFrames.store(static_cast<int64_t>(mean + 0.5),
                                               std::memory_order_release);
-                    const double deadband = 0.5 * static_cast<double>(blockFrames);
+                    // Bands. The feedforward deadband is a quarter block (32
+                    // frames at the smallest block) so the true rate is
+                    // re-estimated every span. A half-block deadband was larger
+                    // than one span's drift at 100 ppm, so after a refill the
+                    // feedforward could not fire again and the inflated rate
+                    // persisted until it drained the cushion. The refill band is
+                    // one block.
+                    const double deadband =
+                        blockFrames > 128 ? 0.25 * static_cast<double>(blockFrames) : 32.0;
+                    const double refillGate = static_cast<double>(blockFrames);
                     if (!m_trimBaseSet) {
                         m_trimLastMean = mean;
                         m_trimTargetLag = mean;  // anchor at the lag we settled at
@@ -351,30 +374,33 @@ public:
                         m_trimSlipsSinceBase = 0;
                         m_trimBaseSet = true;
                     } else {
-                        // Drift since the last rate update: how far the mean lag
-                        // moved, plus the samples already slipped (a slip moves it
-                        // back by one). This is the writer's real excess in frames,
-                        // so drift/span is the writer's own rate (feedforward).
+                        // Drift since the last span: how far the mean lag moved,
+                        // plus the samples already slipped. That is the writer's
+                        // real excess in frames, so drift/span is its own rate.
                         const double drift =
                             (mean - m_trimLastMean) + static_cast<double>(m_trimSlipsSinceBase);
                         const double err = mean - m_trimTargetLag;
                         const int64_t span = m_trimOutFrames - m_trimFramesBase;
-                        const double refillGate = 2.0 * static_cast<double>(blockFrames);
-                        if (span > 0 && (drift >= deadband || drift <= -deadband)) {
-                            // Exact rate estimate: `drift` already includes the
-                            // slips the current rate applied, so it is the writer's
-                            // true excess over the span. Assign, never add.
-                            m_trimRate = drift / static_cast<double>(span);
-                            m_trimLastMean = mean;
-                            m_trimFramesBase = m_trimOutFrames;
-                            m_trimSlipsSinceBase = 0;
-                        } else if (span > 0 && (err >= refillGate || err <= -refillGate)) {
-                            // Feedforward alone is open loop: after a gap freezes
-                            // the cursor the lag sits low and nothing pulls it back.
-                            // Refill a quarter of the offset per span. Two blocks of
-                            // gate keeps exact rate match (err stays under it) a
-                            // no-op, so the trim cannot become a click source.
-                            m_trimRate += 0.25 * err / static_cast<double>(span);
+                        if (span > 0) {
+                            // Replace the rate every span; never accumulate. A
+                            // rate left over from an earlier span cannot outlive
+                            // the offset that justified it.
+                            double rate = 0.0;
+                            if (drift >= deadband || drift <= -deadband) {
+                                rate = drift / static_cast<double>(span);
+                            }
+                            if (err >= refillGate || err <= -refillGate) {
+                                // Bounded proportional refill: at most half the
+                                // offset per span, clamped to 1e-3 (1000 ppm).
+                                // It stops as soon as the lag is back inside the
+                                // band, and it is replaced, not added, so it can
+                                // never wind up against a stale rate.
+                                double corr = 0.5 * err / static_cast<double>(span);
+                                if (corr > 0.001) corr = 0.001;
+                                if (corr < -0.001) corr = -0.001;
+                                rate += corr;
+                            }
+                            m_trimRate = rate;
                             m_trimLastMean = mean;
                             m_trimFramesBase = m_trimOutFrames;
                             m_trimSlipsSinceBase = 0;
@@ -442,6 +468,11 @@ public:
 
     int32_t channels() const noexcept { return m_channels; }
     int32_t blockFrames() const noexcept { return m_blockFrames; }
+    // Lag at the start of the last read, in frames: the value getLatencies
+    // aggregates. Sampled by the harness as a phase-free latency reference.
+    int64_t currentLagFrames() const noexcept {
+        return m_currentLagFrames.load(std::memory_order_relaxed);
+    }
     // Whole-block cushion actually used by attach(), in frames. 0 until attached,
     // or when attached at the newest block. getLatencies() adds this to the host
     // buffer to report the real input delay.
@@ -513,12 +544,15 @@ private:
     double m_trimSlipAccum = 0.0;
     // Steady-state lag published for getLatencies(); -1 until the first span.
     std::atomic<int64_t> m_measuredLagFrames{-1};
+    // Instantaneous lag at the start of the last read (frames), for the harness.
+    std::atomic<int64_t> m_currentLagFrames{0};
 
     std::atomic<int64_t>* m_write = nullptr;
     std::atomic<int64_t>* m_read = nullptr;
     std::atomic<int64_t>* m_corrections = nullptr;
     std::atomic<int64_t>* m_underruns = nullptr;
     std::atomic<int32_t>* m_slotActive = nullptr;
+    std::atomic<int64_t>* m_slotCurrentLag = nullptr;
 };
 
 }  // namespace jb::asio::bus

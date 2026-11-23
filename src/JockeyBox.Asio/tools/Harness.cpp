@@ -1203,10 +1203,13 @@ bool runSoakCell(const wchar_t* label, int blockFrames, int capacity, int buffer
     long long lagMin = -1, lagMax = 0, lagFinal = 0;
     long long lagSum = 0, lagN = 0;
     while (qpcSeconds(qpcTicks() - t0) < seconds) {
-        Sleep(100);
-        const int64_t wb = bus.write->load(std::memory_order_acquire);
-        const int64_t rb = bus.slotValue(slot, jb::asio::bus::kSlotReadBlockIndex);
-        const long long lag = (wb - rb) * blockFrames;
+        // Sample the driver's per-callback lag (the pre-consumption value
+        // getLatencies aggregates), not (write - readBlockIndex): the latter
+        // aliased the writer's publication phase against the sample clock and
+        // read a fraction of a block low at 1024.
+        Sleep(10);
+        const long long lag = static_cast<long long>(
+            bus.slotValue(slot, jb::asio::bus::kSlotCurrentLagFrames));
         if (lagMin < 0 || lag < lagMin) lagMin = lag;
         if (lag > lagMax) lagMax = lag;
         lagFinal = lag;
@@ -1238,14 +1241,10 @@ bool runSoakCell(const wchar_t* label, int blockFrames, int capacity, int buffer
     c.reportedLatency = repIn;
     const long meanLag = lagN > 0 ? static_cast<long>(lagSum / lagN) : static_cast<long>(lagFinal);
     c.actualLatency = bufferSize + meanLag;
-    // Tolerance follows what the reference can resolve, per geometry.
-    // Matched: block == buffer means one block per callback and cursorFrame 0,
-    // so the block-quantised reference is exact and 256 frames (~5.3 ms) has
-    // teeth. App (480-frame blocks): the reference is block-quantised and samples
-    // the writer between callbacks, so one ring block is its resolution; that is
-    // documented here rather than hidden in a loosened global constant.
-    const long latencyTol = (blockFrames == bufferSize) ? 256 : blockFrames;
-    c.latencyOk = labs(repIn - c.actualLatency) <= latencyTol;
+    // The reference is the driver's per-callback lag, sampled at the same
+    // instant getLatencies() aggregates it, so there is no sampler phase left:
+    // 256 frames (~5.3 ms) has teeth at every geometry.
+    c.latencyOk = labs(repIn - c.actualLatency) <= 256;
 
     // A matched cell must show no corrections, no underruns and no trims; a mixed
     // cell additionally proves the trim actually tracked (trims > 0) and kept the
