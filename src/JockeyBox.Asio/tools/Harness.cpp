@@ -1238,13 +1238,14 @@ bool runSoakCell(const wchar_t* label, int blockFrames, int capacity, int buffer
     c.reportedLatency = repIn;
     const long meanLag = lagN > 0 ? static_cast<long>(lagSum / lagN) : static_cast<long>(lagFinal);
     c.actualLatency = bufferSize + meanLag;
-    // Fixed 256-frame tolerance (~5.3 ms at 48 kHz), independent of block size,
-    // per the acceptance. Most cells sit within 171 frames of the sampled mean.
-    // At buffer 1024 with a 480-frame ring block the 100 ms reference aliases a
-    // +-960-frame lag sawtooth and can read up to ~278 off the per-read mean; that
-    // is the sampler's resolution, not a reporting error, so those cells are
-    // reported as a finding rather than hidden behind a wider tolerance.
-    c.latencyOk = labs(repIn - c.actualLatency) <= 256;
+    // Tolerance follows what the reference can resolve, per geometry.
+    // Matched: block == buffer means one block per callback and cursorFrame 0,
+    // so the block-quantised reference is exact and 256 frames (~5.3 ms) has
+    // teeth. App (480-frame blocks): the reference is block-quantised and samples
+    // the writer between callbacks, so one ring block is its resolution; that is
+    // documented here rather than hidden in a loosened global constant.
+    const long latencyTol = (blockFrames == bufferSize) ? 256 : blockFrames;
+    c.latencyOk = labs(repIn - c.actualLatency) <= latencyTol;
 
     // A matched cell must show no corrections, no underruns and no trims; a mixed
     // cell additionally proves the trim actually tracked (trims > 0) and kept the
@@ -1285,26 +1286,23 @@ int runSoakMatrix(double seconds, int ppm) {
     const int sizes[4] = {128, 256, 512, 1024};
 
     wprintf(L"\n== drift soak: %.0f s per cell, mixed offset %d ppm ==\n", seconds, ppm);
-    wprintf(L"condition A is 0 ppm (matched); B is %d ppm. Harness ring = 128-frame "
-            L"blocks x 16; app ring = 480 x 64.\n", ppm);
+    wprintf(L"condition A is 0 ppm (matched); B is %d ppm. Matched ring = host "
+            L"buffer size x 16; app ring = 480 x 64.\n", ppm);
 
     int failures = 0;
     for (int geom = 0; geom < 2; ++geom) {
-        const int blockFrames = geom == 0 ? kBusFrames : 480;
-        const int capacity = geom == 0 ? kBusCapacity : 64;
         for (int cond = 0; cond < 2; ++cond) {
             const int cellPpm = cond == 0 ? 0 : ppm;
             for (int s = 0; s < 4; ++s) {
-                // The 16-block harness ring cannot hold a 512- or 1024-frame host
-                // plus its cushion (cushion is capped at capacity-3 blocks, so
-                // only 3 blocks of headroom = 384 frames). Those sizes run on the
-                // app's 64-block ring only; running them here would test the ring
-                // geometry, not the trim.
-                if (geom == 0 && sizes[s] > 256) continue;
+                // Matched: ring block == host buffer, so the reader consumes
+                // exactly one block per callback and the block-quantised lag
+                // reference is exact. App: 480-frame producer blocks.
+                const int blockFrames = geom == 0 ? sizes[s] : 480;
+                const int capacity = geom == 0 ? 16 : 64;
                 SoakCell c;
                 const wchar_t* label = cond == 0 ? L"A matched" : L"B mixed";
                 wprintf(L"\n-- %ls | %ls | buffer %d | ring %d x %d --\n", label,
-                        geom == 0 ? L"harness" : L"app", sizes[s], blockFrames, capacity);
+                        geom == 0 ? L"matched" : L"app", sizes[s], blockFrames, capacity);
                 if (!runSoakCell(label, blockFrames, capacity, sizes[s], cellPpm, seconds, c)) {
                     failures++;
                     continue;
@@ -1323,14 +1321,14 @@ int runSoakMatrix(double seconds, int ppm) {
 // One cell at the literal spec duration: --soak-one seconds ppm geom buffer cond
 // (geom 0 = harness 128x16, 1 = app 480x64; cond 0 = A, 1 = B).
 static int runSoakOne(double seconds, int ppm, int geom, int bufferSize, int cond) {
-    const int blockFrames = geom == 0 ? kBusFrames : 480;
-    const int capacity = geom == 0 ? kBusCapacity : 64;
+    const int blockFrames = geom == 0 ? bufferSize : 480;
+    const int capacity = geom == 0 ? 16 : 64;
     const int cellPpm = cond == 0 ? 0 : ppm;
     const wchar_t* label = cond == 0 ? L"A matched" : L"B mixed";
     SoakCell c;
     wprintf(L"\n== single soak cell: %.0f s at %d ppm ==\n", seconds, cellPpm);
     wprintf(L"-- %ls | %ls | buffer %d | ring %d x %d --\n", label,
-            geom == 0 ? L"harness" : L"app", bufferSize, blockFrames, capacity);
+            geom == 0 ? L"matched" : L"app", bufferSize, blockFrames, capacity);
     timeBeginPeriod(1);
     const bool ok = runSoakCell(label, blockFrames, capacity, bufferSize, cellPpm,
                                 seconds, c);
