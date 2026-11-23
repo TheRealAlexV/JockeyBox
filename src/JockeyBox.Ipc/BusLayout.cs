@@ -42,7 +42,15 @@ public enum BusScope
 ///   8    8  corrections      i64  jumps forced by overrun or excessive lag
 ///  16    8  underruns        i64  reads that found no new block
 ///  24    4  active           i32  0 = free, 1 = claimed by a reader
-///  28   36  reserved
+///  28    4  reserved
+///  32    8  rateTrims        i64  written by the native reader: one-frame rate trims, not corrections
+///  40   24  reserved
+///
+/// <para><b>rateTrims.</b> The native ASIO reader owns and writes this counter; the
+/// app never writes it. It counts one-frame rate trims, which are not corrections
+/// (those are the overrun/excess-lag jumps at <see cref="SlotCorrections"/>). It is
+/// declared here so a future C# field cannot claim offset 32 and clobber it. The rest
+/// of the slot tail (40..63) is still free; the header does not change.</para>
 ///
 /// Payload follows the header at <see cref="PayloadOffset"/>:
 ///   capacityBlocks * blockFrames * channels float32 values, interleaved by frame.
@@ -77,6 +85,13 @@ public static class BusLayout
     public const int SlotCorrections = 8;
     public const int SlotUnderruns = 16;
     public const int SlotActive = 24;
+
+    /// <summary>
+    /// Per-reader rate-trim counter, written by the native ASIO reader. Counts
+    /// one-frame rate trims, not corrections (see <see cref="SlotCorrections"/>).
+    /// Declared so no future C# field reuses the bytes; the app does not write it.
+    /// </summary>
+    public const int SlotRateTrims = 32;
 
     /// <summary>Start of reader slot <paramref name="slot"/> within the region.</summary>
     public static long SlotOffset(int slot)

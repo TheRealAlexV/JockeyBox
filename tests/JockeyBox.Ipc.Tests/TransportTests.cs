@@ -294,11 +294,17 @@ public sealed class TransportTests
         Assert.Equal(0, view.ReadInt64(BusLayout.WriteBlockIndexOffset));
         Assert.Equal(0, view.ReadInt64(BusLayout.OverrunCountOffset));
 
+        // The native reader writes its rate-trim counter at offset 32; the constant
+        // is what stops a future C# field from claiming the same bytes.
+        Assert.Equal(32, BusLayout.SlotRateTrims);
+        Assert.True(BusLayout.SlotRateTrims + sizeof(long) <= BusLayout.ReaderSlotSize);
+
         for (int slot = 0; slot < BusLayout.ReaderSlotCount; slot++)
         {
             long offset = BusLayout.SlotOffset(slot);
             Assert.Equal(0L, view.ReadInt64(offset + BusLayout.SlotReadBlockIndex));
             Assert.Equal(0L, view.ReadInt64(offset + BusLayout.SlotCorrections));
+            Assert.Equal(0L, view.ReadInt64(offset + BusLayout.SlotRateTrims));
             Assert.Equal(0, view.ReadInt32(offset + BusLayout.SlotActive));
         }
 

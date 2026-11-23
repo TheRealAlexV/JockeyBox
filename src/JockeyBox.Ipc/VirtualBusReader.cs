@@ -78,6 +78,13 @@ public sealed unsafe class VirtualBusReader : IDisposable
     /// <summary>Jumps this reader was forced into (overrun by the writer or excess lag).</summary>
     public long Corrections => Volatile.Read(ref LongRef(_slotOffset + BusLayout.SlotCorrections));
 
+    /// <summary>
+    /// One-frame rate trims this reader applied. Written by the native ASIO reader,
+    /// not by this side, and not a correction count (corrections are the jumps forced
+    /// by overrun or excess lag). Zero for a slot the native reader never claimed.
+    /// </summary>
+    public long RateTrims => Volatile.Read(ref LongRef(_slotOffset + BusLayout.SlotRateTrims));
+
     /// <summary>Reads that found no new block.</summary>
     public long Underruns => Volatile.Read(ref LongRef(_slotOffset + BusLayout.SlotUnderruns));
 
