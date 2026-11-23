@@ -386,6 +386,26 @@ public:
                                 if (corr < -0.001) corr = -0.001;
                                 rate += corr;
                             }
+                            // Bound the draining direction by the margin actually
+                            // left. Draining is a positive rate (drop one input
+                            // frame), and a span that over-estimates drains across
+                            // its own length. The floor is the cushion plus one
+                            // block: a whole block absorbs the span rounding,
+                            // because m_trimOutFrames can overshoot the period by
+                            // up to one host buffer, so the predicted lag at the
+                            // end of the next span cannot reach the cushion, let
+                            // alone zero. Clamp, do not merely compare: with no
+                            // margin left the applied drain is held at zero while
+                            // the estimate keeps updating, so the refill or the
+                            // next span recovers. Adding lag needs no bound; it
+                            // cannot underrun.
+                            const double floor = static_cast<double>(m_trimTarget) +
+                                                 static_cast<double>(blockFrames);
+                            if (rate > 0.0) {
+                                const double cap = (mean - floor) /
+                                                   static_cast<double>(m_trimPeriodFrames);
+                                if (rate > cap) rate = cap > 0.0 ? cap : 0.0;
+                            }
                             m_trimRate = rate;
                             m_trimLastMean = mean;
                             m_trimFramesBase = m_trimOutFrames;
