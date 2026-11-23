@@ -209,14 +209,18 @@ AsioError JB_ASIO_CALL VirtualAsioDriver::getLatencies(long* inputLatency,
                                                        long* outputLatency) {
     if (!inputLatency || !outputLatency) return kAseInvalidParameter;
     // Input the host actually records:
-    //   inputLatency = bufferSize + cushionFrames
-    // One host buffer is the block currently being filled; cushionFrames is the
-    // effective ring cushion the reader joined behind the writer, read from the
-    // same value RingReader::attach used. Deriving it there means a dynamic
-    // cushion is reported as it changes, not as a literal 3 buffers. Without a
-    // bus (cushion 0) one buffer is the honest floor. The output path is a
-    // virtual sink this driver never writes, so one buffer stays honest.
-    *inputLatency = m_bufferSize + m_cushionFrames.load(std::memory_order_relaxed);
+    //   inputLatency = bufferSize + steadyStateLagFrames
+    // One host buffer is the block currently being filled. steadyStateLagFrames is
+    // the mean buffered frames the reader's trim measured over its last 4 s span,
+    // i.e. what the mixed route actually settles at; the trim can settle a few
+    // blocks above the cushion, and reporting the cushion there would under-state
+    // the delay by exactly that residual. Before the first span completes (or when
+    // no bus is attached) it falls back to the cushion, then to one buffer.
+    const int64_t measured = m_ring.measuredLagFrames();
+    const long lag = measured >= 0
+                         ? static_cast<long>(measured)
+                         : m_cushionFrames.load(std::memory_order_relaxed);
+    *inputLatency = m_bufferSize + lag;
     *outputLatency = m_bufferSize;
     return kAseOk;
 }

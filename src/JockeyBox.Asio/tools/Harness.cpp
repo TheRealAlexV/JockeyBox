@@ -17,6 +17,8 @@
 #include "../src/RingReader.h"
 
 #include <windows.h>
+#include <timeapi.h>
+#pragma comment(lib, "winmm.lib")
 
 #include <atomic>
 #include <chrono>
@@ -1058,6 +1060,9 @@ struct SoakCell {
     long long lagMax = 0;
     long long lagFinal = 0;
     long long lagTarget = 0;
+    long reportedLatency = 0;   // getLatencies() input, frames
+    long actualLatency = 0;     // bufferSize + observed steady-state lag, frames
+    bool latencyOk = false;
     bool ran = false;
     bool passed = false;
 };
@@ -1073,6 +1078,10 @@ struct DriftWriter {
     void join() { if (thread.joinable()) thread.join(); }
 
     void run() noexcept {
+        // The test writer must hold a 3-block cushion on a 16-block ring, so a
+        // single 10 ms scheduling hiccup is an underrun. Same priority trick the
+        // driver's clock thread uses.
+        SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
         const long long t0 = qpcTicks();
         int64_t published = prePublished;
         const double bf = double(bus->blockFrames);
@@ -1081,9 +1090,12 @@ struct DriftWriter {
             const double now = qpcSeconds(qpcTicks() - t0);
             if (now >= due) {
                 bus->publish(published++);
-            } else if (due - now > 0.0015) {
-                Sleep(0);
             } else {
+                // Pure spin for the whole wait. Sleep(1) still occasionally
+                // returns after a 15.6 ms tick on this host, which at a 3-block
+                // cushion is a burst of underruns and a lag jump that the trim
+                // then has to chase. The writer is a test instrument, so spend
+                // the CPU to make it deterministic.
                 YieldProcessor();
             }
         }
@@ -1183,6 +1195,7 @@ bool runSoakCell(const wchar_t* label, int blockFrames, int capacity, int buffer
 
     const long long t0 = qpcTicks();
     long long lagMin = -1, lagMax = 0, lagFinal = 0;
+    long long lagSum = 0, lagN = 0;
     while (qpcSeconds(qpcTicks() - t0) < seconds) {
         Sleep(100);
         const int64_t wb = bus.write->load(std::memory_order_acquire);
@@ -1191,6 +1204,8 @@ bool runSoakCell(const wchar_t* label, int blockFrames, int capacity, int buffer
         if (lagMin < 0 || lag < lagMin) lagMin = lag;
         if (lag > lagMax) lagMax = lag;
         lagFinal = lag;
+        lagSum += lag;
+        ++lagN;
     }
 
     c.callbacks = g_callbacks.load();
@@ -1201,10 +1216,28 @@ bool runSoakCell(const wchar_t* label, int blockFrames, int capacity, int buffer
     c.lagMax = lagMax;
     c.lagFinal = lagFinal;
     c.ran = true;
+
+    // Gap 1 check: the host is told bufferSize + the lag the route actually
+    // settles at, not bufferSize + the cushion. Compares against the observed
+    // block-quantised lag, so a one-block tolerance is the sampling precision.
+    long repIn = 0, repOut = 0;
+    driver->getLatencies(&repIn, &repOut);
+    c.reportedLatency = repIn;
+    // Compare against the mean sampled lag, not the final sample: the lag
+    // sawtooths by whole blocks (and by ~2 blocks when the host buffer is not a
+    // multiple of the ring block), so one instantaneous sample is not the delay.
+    // Two blocks of tolerance is the reference's own resolution: the 100 ms
+    // sample of a block-quantised counter differs from the per-read mean by up
+    // to ~1.5 blocks. It still catches the 960-frame under-report this fixes.
+    const long meanLag = lagN > 0 ? static_cast<long>(lagSum / lagN) : static_cast<long>(lagFinal);
+    c.actualLatency = bufferSize + meanLag;
+    c.latencyOk = labs(repIn - c.actualLatency) <= 2 * blockFrames;
+
     // A matched cell must show no corrections, no underruns and no trims; a mixed
     // cell additionally proves the trim actually tracked (trims > 0) and kept the
     // lag inside the ring (never at capacity, never empty for long).
-    c.passed = (c.underruns == 0) && (c.corrections == 0) &&
+    c.passed = c.latencyOk &&
+               (c.underruns == 0) && (c.corrections == 0) &&
                (ppm == 0 ? c.trims == 0 : c.trims > 0) &&
                c.lagMin >= 0 &&
                c.lagMax <= (long long)capacity * blockFrames;
@@ -1219,6 +1252,8 @@ bool runSoakCell(const wchar_t* label, int blockFrames, int capacity, int buffer
 }
 
 int runSoakMatrix(double seconds, int ppm) {
+    // 1 ms timer resolution so the writer's Sleep(1) is not a 15.6 ms stall.
+    timeBeginPeriod(1);
     const wchar_t* sizesLabel[4] = {L"128", L"256", L"512", L"1024"};
     const int sizes[4] = {128, 256, 512, 1024};
 
@@ -1252,12 +1287,16 @@ int runSoakMatrix(double seconds, int ppm) {
                 wprintf(L"lag frames min/max/final %lld/%lld/%lld  target %lld  %ls\n",
                         c.lagMin, c.lagMax, c.lagFinal, c.lagTarget,
                         c.passed ? L"PASS" : L"FAIL");
+                wprintf(L"latency reported %ld  actual(buffer+lag) %ld  %ls\n",
+                        c.reportedLatency, c.actualLatency,
+                        c.latencyOk ? L"OK" : L"MISMATCH");
                 if (!c.passed) failures++;
             }
         }
     }
     wprintf(L"\nsoak result: %s (%d failing cells)\n",
             failures == 0 ? L"PASS" : L"FAIL", failures);
+    timeEndPeriod(1);
     return failures;
 }
 

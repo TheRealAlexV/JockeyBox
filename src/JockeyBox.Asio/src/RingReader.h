@@ -199,12 +199,14 @@ public:
         m_trimOutFrames = 0;
         m_trimLagSum = 0.0;
         m_trimLagCount = 0;
-        m_trimBaseMeanLag = 0.0;
+        m_trimLastMean = 0.0;
+        m_trimTargetLag = 0.0;
         m_trimFramesBase = 0;
         m_trimSlipsSinceBase = 0;
         m_trimBaseSet = false;
         m_trimRate = 0.0;
         m_trimSlipAccum = 0.0;
+        m_measuredLagFrames.store(-1, std::memory_order_release);
         m_read->store(joined, std::memory_order_release);
         return true;
     }
@@ -227,6 +229,7 @@ public:
         m_trimRate = 0.0;
         m_trimSlipAccum = 0.0;
         m_trimBaseSet = false;
+        m_measuredLagFrames.store(-1, std::memory_order_release);
     }
 
     // Streams exactly `frames` frames into `dst` as deinterleaved float32,
@@ -334,27 +337,45 @@ public:
                 m_trimOutFrames += frames;
                 if (m_trimOutFrames >= m_trimPeriodEnd && m_trimLagCount > 0) {
                     const double mean = m_trimLagSum / static_cast<double>(m_trimLagCount);
+                    // Publish the smoothed steady-state lag. getLatencies() reads
+                    // this so the host is told the real input delay, not the
+                    // nominal cushion: in a mixed route the trim settles the lag a
+                    // few blocks above the cushion and reports must follow it.
+                    m_measuredLagFrames.store(static_cast<int64_t>(mean + 0.5),
+                                              std::memory_order_release);
                     const double deadband = 0.5 * static_cast<double>(blockFrames);
                     if (!m_trimBaseSet) {
-                        m_trimBaseMeanLag = mean;
+                        m_trimLastMean = mean;
+                        m_trimTargetLag = mean;  // anchor at the lag we settled at
                         m_trimFramesBase = m_trimOutFrames;
                         m_trimSlipsSinceBase = 0;
                         m_trimBaseSet = true;
                     } else {
-                        // Drift since the last correction: how far the mean lag
+                        // Drift since the last rate update: how far the mean lag
                         // moved, plus the samples already slipped (a slip moves it
-                        // back by one). This is the writer's real excess in frames.
+                        // back by one). This is the writer's real excess in frames,
+                        // so drift/span is the writer's own rate (feedforward).
                         const double drift =
-                            (mean - m_trimBaseMeanLag) + static_cast<double>(m_trimSlipsSinceBase);
+                            (mean - m_trimLastMean) + static_cast<double>(m_trimSlipsSinceBase);
+                        const double err = mean - m_trimTargetLag;
                         const int64_t span = m_trimOutFrames - m_trimFramesBase;
+                        const double refillGate = 2.0 * static_cast<double>(blockFrames);
                         if (span > 0 && (drift >= deadband || drift <= -deadband)) {
-                            // Re-estimate the *absolute* rate, not an increment:
-                            // `drift` already includes the samples slipped by the
-                            // current rate, so it is the writer's true excess over
-                            // the span. Adding it to the old rate compounds and
-                            // over-corrects; assigning keeps it exact.
+                            // Exact rate estimate: `drift` already includes the
+                            // slips the current rate applied, so it is the writer's
+                            // true excess over the span. Assign, never add.
                             m_trimRate = drift / static_cast<double>(span);
-                            m_trimBaseMeanLag = mean;
+                            m_trimLastMean = mean;
+                            m_trimFramesBase = m_trimOutFrames;
+                            m_trimSlipsSinceBase = 0;
+                        } else if (span > 0 && (err >= refillGate || err <= -refillGate)) {
+                            // Feedforward alone is open loop: after a gap freezes
+                            // the cursor the lag sits low and nothing pulls it back.
+                            // Refill a quarter of the offset per span. Two blocks of
+                            // gate keeps exact rate match (err stays under it) a
+                            // no-op, so the trim cannot become a click source.
+                            m_trimRate += 0.25 * err / static_cast<double>(span);
+                            m_trimLastMean = mean;
                             m_trimFramesBase = m_trimOutFrames;
                             m_trimSlipsSinceBase = 0;
                         }
@@ -425,6 +446,11 @@ public:
     // or when attached at the newest block. getLatencies() adds this to the host
     // buffer to report the real input delay.
     int32_t cushionFrames() const noexcept { return m_cushionFrames; }
+    // Mean buffered frames over the last completed trim span. -1 until the first
+    // span completes, so the caller can fall back to the cushion.
+    int64_t measuredLagFrames() const noexcept {
+        return m_measuredLagFrames.load(std::memory_order_acquire);
+    }
     int slot() const noexcept { return m_slot; }
     // The block currently being consumed. The frame offset inside it is not
     // published: `readBlockIndex` advances by one per whole block consumed and
@@ -478,12 +504,15 @@ private:
     int64_t m_trimOutFrames = 0;
     double m_trimLagSum = 0.0;        // lag frames summed over the span
     int64_t m_trimLagCount = 0;
-    double m_trimBaseMeanLag = 0.0;   // mean lag at the last rate update
+    double m_trimLastMean = 0.0;      // mean lag at the last rate update
+    double m_trimTargetLag = 0.0;     // fixed anchor: the mean lag of span one
     int64_t m_trimFramesBase = 0;
     int64_t m_trimSlipsSinceBase = 0; // signed: +1 per drop, -1 per hold
     bool m_trimBaseSet = false;
     double m_trimRate = 0.0;          // persistent slip rate, frames per frame
     double m_trimSlipAccum = 0.0;
+    // Steady-state lag published for getLatencies(); -1 until the first span.
+    std::atomic<int64_t> m_measuredLagFrames{-1};
 
     std::atomic<int64_t>* m_write = nullptr;
     std::atomic<int64_t>* m_read = nullptr;

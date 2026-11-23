@@ -54,10 +54,13 @@ the slot the writer is about to `memcpy`). The cushion is required, not cosmetic
 exactly at the writer's own block-quantisation amplitude and starves at every
 wrap. The chosen cushion is logged once at attach (debug output).
 
-`getLatencies` reports that cushion honestly: input latency is
-`bufferSize + cushionFrames`, where `cushionFrames` is the effective value
-`RingReader::attach` used, so the number follows the cushion if it changes. The
-output path is a virtual sink the driver never writes, so it reports one buffer.
+`getLatencies` reports that delay honestly: input latency is
+`bufferSize + steadyStateLagFrames`, where `steadyStateLagFrames` is the mean
+buffered frames the reader measured over its last 4 s trim span. In a mixed route
+the trim settles the lag a few blocks above the cushion, and this reports that
+residual instead of hiding it. Before the first span completes, or with no bus
+attached, it falls back to the cushion. The output path is a virtual sink the
+driver never writes, so it reports one buffer.
 
 The reader also runs a one-frame rate trim. When a bus shares a route with a
 physical device the writer is paced by that device's WASAPI clock while the
