@@ -16,7 +16,7 @@ class VirtualAsioDriver final : public IASIO {
 public:
     static constexpr long kChannelsPerDirection = 2;
     static constexpr long kMinBufferSize = 128;
-    static constexpr long kMaxBufferSize = 512;
+    static constexpr long kMaxBufferSize = 1024;
     static constexpr long kPreferredBufferSize = 128;
     static constexpr AsioSampleRate kSampleRate = 48000.0;
 

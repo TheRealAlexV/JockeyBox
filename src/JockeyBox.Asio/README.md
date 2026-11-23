@@ -7,8 +7,8 @@ same shape ASIO4ALL and FlexASIO have.
 v1 carries audio one way: the JockeyBox app writes into the transport ring and
 this driver reads it into its ASIO **inputs**. obs-asio records those inputs;
 that is the delivery path. The ASIO **outputs** stay silent — this is not a
-playback path. 2 inputs / 2 outputs at 48 kHz, 128/256/512 frame buffers, a real
-clock thread at 375 callbacks/s.
+playback path. 2 inputs / 2 outputs at 48 kHz, 128/256/512/1024 frame host
+buffers, a real clock thread paced by the host buffer size.
 
 ## Audio path
 
@@ -23,16 +23,34 @@ version 1, header 1024 bytes, payload at 1024, interleaved float32) and pins it
 with `static_assert`s on the shared atomics. Header geometry that does not
 validate is rejected, and the driver falls back to silence.
 
-Per buffer switch:
+Per buffer switch the reader streams exactly `bufferSize` frames, as one
+contiguous float stream, crossing ring-block boundaries wherever they fall:
 
-- The newest unconsumed block is deinterleaved into the ASIO input buffers.
-  The callback never blocks, never allocates and never throws.
-- No new block means silence, and the reader slot's `underruns` counter ticks.
-  The reader never rewinds.
-- Falling further behind than the ring holds means a jump to the newest block
-  and one `corrections` tick.
-- One reader slot is claimed (`active = 1`, `readBlockIndex`,
-  `corrections`, `underruns`), so the app can see a live reader.
+- The cursor is (block index, intra-block frame offset). It only moves forward,
+  it is anchored to the release-published `writeBlockIndex`, and it never waits
+  for a block boundary. A 512-frame host buffer on a 480-frame producer streams
+  indefinitely with no laps; the two sizes have no arithmetic relationship and
+  none is required. The callback never blocks, never allocates and never throws.
+- Silence is served only when the writer has not published the next block yet,
+  and the reader slot's `underruns` counter ticks **once for that callback**.
+- Falling further behind than the ring can hold (the cursor's block has been
+  overwritten) means a jump to the newest published block and one `corrections`
+  tick. That is the only correction path; block-boundary arithmetic never causes
+  one.
+- One reader slot is claimed (`active = 1`, `readBlockIndex`, `corrections`,
+  `underruns`), so the app can see a live reader.
+
+`readBlockIndex` is the block **currently being consumed**. The intra-block frame
+offset is not published, so across callbacks that fall inside one block the index
+stands still and then advances by one per whole block consumed. Reading it as
+"blocks consumed" still holds; it lags by the intra-block position, never by
+more than one block.
+
+On attach the reader joins the stream behind the writer instead of exactly at the
+newest block: `3 * bufferSize` frames, raised to at least three ring blocks and
+clamped to half the ring. The cushion is required, not cosmetic — the writer
+publishes in whole blocks, so a reader sitting one block behind is exactly at the
+writer's own block-quantisation amplitude and starves at every wrap.
 
 If the section is absent at `start()`, the driver serves silence and retries
 attaching at most **once per second** from the clock thread, never per callback.

@@ -23,6 +23,7 @@
 #include <cstdio>
 #include <cstring>
 #include <memory>
+#include <vector>
 #include <thread>
 
 namespace {
@@ -49,21 +50,27 @@ Captures* g_capture = nullptr;
 const float* g_inBuf[kBusChannels][2] = {};
 
 // Read-only attach mode: what the driver handed the host during a live run.
-constexpr int kLiveMaxFrames = 512;      // the app's block is 480; leave room
-constexpr long kLiveMaxCaptures = 600;   // ~6 s at 100 blocks/s
+constexpr int kLiveMaxFrames = 1024;     // largest host buffer the driver accepts
+constexpr long kLiveMaxCaptures = 1400;  // 3 s at 128 frames (375 callbacks/s)
 constexpr int kLiveMaxRefBlocks = 8;     // the ring's capacity: any block it can still hold
 
+// The served stream is checked at an absolute frame position, so this records
+// every frame the host was handed. A 512- or 1024-frame callback no longer lines
+// up with the 480-frame ring block, so comparing whole blocks per callback
+// cannot see anything but a false mismatch. Per callback it also snapshots the
+// blocks the ring still held: the ring is a moving target, so reading the payload
+// after the run would compare against blocks already overwritten.
 struct LiveCaptures {
     std::atomic<long> count{0};
-    int64_t writeIndex[kLiveMaxCaptures];
-    float left[kLiveMaxCaptures][kLiveMaxFrames];
-    float right[kLiveMaxCaptures][kLiveMaxFrames];
-    // The blocks the ring still held at this callback. Snapshotting here is what
-    // makes the comparison honest: the ring is a moving target, so reading the
-    // payload after the run would compare against blocks already overwritten.
-    // Every block the driver can still serve this callback is in this set.
-    int refCount[kLiveMaxCaptures];
-    float ref[kLiveMaxCaptures][kLiveMaxRefBlocks][kLiveMaxFrames * 2];
+    int frames = 0;        // host buffer size
+    int blockFrames = 0;   // ring block size
+    int channels = 0;
+    int capacity = 0;
+    std::vector<int64_t> writeIndex;
+    std::vector<float> left;    // [kLiveMaxCaptures][frames]
+    std::vector<float> right;   // [kLiveMaxCaptures][frames]
+    std::vector<int> refCount;  // blocks kept per callback
+    std::vector<float> ref;     // [kLiveMaxCaptures][kLiveMaxRefBlocks][blockFrames*channels]
 };
 
 LiveCaptures* g_live = nullptr;
@@ -71,7 +78,7 @@ std::atomic<int64_t>* g_liveWrite = nullptr;
 const uint8_t* g_livePayload = nullptr;
 int64_t g_liveBlockBytes = 0;
 int g_liveCapacity = 0;
-int g_liveFrames = 0;
+long g_liveRequestedFrames = 0;  // 0 = next power of two at or above the ring block
 
 // Every published block carries its own index in every sample, so a wrong
 // block, a stale block or a byte-level layout error is visible in the numbers.
@@ -88,10 +95,11 @@ void onBufferSwitch(long doubleBufferIndex, jb::asio::AsioBool directProcess) {
     if (live) {
         const long seq = live->count.load(std::memory_order_relaxed);
         if (seq < kLiveMaxCaptures) {
-            const int frames = g_liveFrames;
+            const int frames = live->frames;
+            const size_t at = static_cast<size_t>(seq) * static_cast<size_t>(frames);
             for (int ch = 0; ch < 2; ++ch) {
                 const float* src = g_inBuf[ch][doubleBufferIndex & 1];
-                float* dst = ch == 0 ? live->left[seq] : live->right[seq];
+                float* dst = (ch == 0 ? live->left.data() : live->right.data()) + at;
                 if (src)
                     memcpy(dst, src, sizeof(float) * frames);
                 else
@@ -101,12 +109,15 @@ void onBufferSwitch(long doubleBufferIndex, jb::asio::AsioBool directProcess) {
             live->writeIndex[seq] = w;
             const int span = g_liveCapacity < kLiveMaxRefBlocks ? g_liveCapacity
                                                                : kLiveMaxRefBlocks;
+            const int64_t blockFloats =
+                static_cast<int64_t>(live->blockFrames) * live->channels;
             int kept = 0;
             for (int k = 0; k < span; ++k) {
                 const int64_t idx = w - 1 - k;
                 if (idx < 0) break;
-                memcpy(live->ref[seq][k],
-                       g_livePayload + (idx % g_liveCapacity) * g_liveBlockBytes,
+                float* dst = live->ref.data() +
+                             (static_cast<size_t>(seq) * kLiveMaxRefBlocks + k) * blockFloats;
+                memcpy(dst, g_livePayload + (idx % g_liveCapacity) * g_liveBlockBytes,
                        size_t(g_liveBlockBytes));
                 kept++;
             }
@@ -362,24 +373,6 @@ struct LiveBus {
     }
 };
 
-bool liveBlockEquals(const float* payloadBlock, const float* left, const float* right,
-                     int frames, int channels) {
-    for (int c = 0; c < 2; ++c) {
-        const float* captured = c == 0 ? left : right;
-        for (int f = 0; f < frames; ++f) {
-            const float expected = payloadBlock[f * channels + c];
-            if (memcmp(&captured[f], &expected, sizeof(float)) != 0) return false;
-        }
-    }
-    return true;
-}
-
-bool liveBlockSilent(const float* left, const float* right, int frames) {
-    for (int f = 0; f < frames; ++f)
-        if (left[f] != 0.0f || right[f] != 0.0f) return false;
-    return true;
-}
-
 /// Read-only: drive the driver against the section the app is publishing and
 /// report bit-exactness and cadence. Never publishes a block of its own.
 int runAttachMode(const wchar_t* busNameW) {
@@ -438,13 +431,33 @@ int runAttachMode(const wchar_t* busNameW) {
         }
     }
 
-    // ASIO only accepts power-of-two buffer sizes, so the host buffer is the next
-    // power of two at or above the ring block (512 for the app's 480). The driver
-    // copies only what fits: the first ring.blockFrames samples are exactly one
-    // block, the tail is untouched. Compare that prefix, never the padding.
+    // The host buffer is an explicit size from the command line (128/256/512/1024)
+    // when one was given, so the same live run can be repeated at every ASIO
+    // buffer size, otherwise the next power of two at or above the ring block.
+    // The reader is sample-accurate, so the host buffer has no relation to the
+    // ring block and the whole buffer is real audio, not a block plus padding.
     long bufferSize = 1;
     while (bufferSize < live.blockFrames) bufferSize <<= 1;
-    g_liveFrames = live.blockFrames;
+    if (g_liveRequestedFrames > 0) bufferSize = g_liveRequestedFrames;
+    if (bufferSize > kLiveMaxFrames) {
+        wprintf(L"FATAL: host buffer %ld exceeds the harness capture (%d)\n",
+                bufferSize, kLiveMaxFrames);
+        live.close();
+        return 1;
+    }
+
+    const size_t slots = static_cast<size_t>(kLiveMaxCaptures);
+    captures->frames = static_cast<int>(bufferSize);
+    captures->blockFrames = live.blockFrames;
+    captures->channels = live.channels;
+    captures->capacity = live.capacity;
+    captures->writeIndex.assign(slots, 0);
+    captures->left.assign(slots * static_cast<size_t>(bufferSize), 0.0f);
+    captures->right.assign(slots * static_cast<size_t>(bufferSize), 0.0f);
+    captures->refCount.assign(slots, 0);
+    captures->ref.assign(slots * kLiveMaxRefBlocks *
+                            static_cast<size_t>(live.blockFrames) * live.channels,
+                        0.0f);
 
     jb::asio::AsioCallbacks callbacks = {onBufferSwitch, onSampleRateChanged,
                                          onAsioMessage, onBufferSwitchTimeInfo};
@@ -486,66 +499,147 @@ int runAttachMode(const wchar_t* busNameW) {
     driver->Release();
     g_live = nullptr;
 
-    const int frames = live.blockFrames;
-    long matched = 0, mismatched = 0, silent = 0;
-    int lag[9] = {};
-    for (long i = 0; i < captured; ++i) {
-        const float* left = captures->left[i];
-        const float* right = captures->right[i];
+    // Verify the served stream at absolute ring positions, not block by block.
+    // The reader streams `frames` frames per callback across ring blocks, so the
+    // only honest question is: are the frames the host was handed, concatenated,
+    // one contiguous run of the stream the app published, with nothing skipped
+    // and nothing repeated?
+    const int frames = captures->frames;
+    const int B = live.blockFrames;
+    const int CH = live.channels;
+    const size_t refStride = static_cast<size_t>(kLiveMaxRefBlocks) * B * CH;
 
-        if (liveBlockSilent(left, right, frames)) {
-            // A ring lap is served as silence by the driver, and is counted as
-            // such rather than as a differing block.
-            silent++;
+    // The copy of ring block `blk` snapshotted at callback i, or null if the ring
+    // had already dropped it. The snapshot holds the kLiveMaxRefBlocks newest
+    // blocks, i.e. indices w-1 down to w-kept.
+    auto refBlock = [&](long i, int64_t blk) -> const float* {
+        const int64_t w = captures->writeIndex[i];
+        const int64_t age = w - 1 - blk;
+        if (age < 0 || age >= captures->refCount[i]) return nullptr;
+        return captures->ref.data() + static_cast<size_t>(i) * refStride +
+               static_cast<size_t>(age) * B * CH;
+    };
+    auto framesEqual = [&](long i, int64_t blk, int off, int n, const float* left,
+                           const float* right) -> bool {
+        const float* rb = refBlock(i, blk);
+        if (!rb) return false;
+        for (int j = 0; j < n; ++j) {
+            if (rb[(off + j) * CH] != left[j]) return false;
+            if (CH > 1 && rb[(off + j) * CH + 1] != right[j]) return false;
+        }
+        return true;
+    };
+    // Where in the ring stream does this callback start? Searches the snapshot's
+    // blocks and every intra-block offset. The probe is long (up to 64 frames, two
+    // channels) so a repeated passage cannot be mistaken for the same audio.
+    auto locate = [&](long i, int realFrames, const float* left, const float* right) -> int64_t {
+        const int probe = realFrames < 64 ? realFrames : 64;
+        if (probe <= 0) return -1;
+        const int64_t w = captures->writeIndex[i];
+        for (int age = 0; age < captures->refCount[i]; ++age) {
+            const int64_t blk = w - 1 - age;
+            if (blk < 0) continue;
+            for (int off = 0; off + probe <= B; ++off)
+                if (framesEqual(i, blk, off, probe, left, right)) return blk * B + off;
+        }
+        return -1;
+    };
+
+    long matchedCb = 0, mismatchCb = 0, lapCb = 0, silentCb = 0;
+    long laps = 0;
+    long firstLapCb = -1;
+    long matchedFrames = 0, mismatchFrames = 0, silentFrames = 0;
+    int64_t pos = -1;  // global frame position of the next expected frame
+    for (long i = 0; i < captured; ++i) {
+        const float* left = captures->left.data() + static_cast<size_t>(i) * frames;
+        const float* right = captures->right.data() + static_cast<size_t>(i) * frames;
+
+        int last = -1;
+        for (int j = 0; j < frames; ++j)
+            if (left[j] != 0.0f || right[j] != 0.0f) last = j;
+        if (last < 0) {  // the writer had nothing: silence, not a mismatch
+            silentCb++;
+            silentFrames += frames;
+            pos = -1;
             continue;
         }
-        bool found = false;
-        for (int k = 0; k < captures->refCount[i]; ++k) {
-            if (liveBlockEquals(captures->ref[i][k], left, right, frames, live.channels)) {
-                lag[k + 1]++;
-                matched++;
-                found = true;
-                break;
+        const int real = last + 1;
+        silentFrames += frames - real;
+
+        if (pos < 0) pos = locate(i, real, left, right);
+
+        bool ok = pos >= 0;
+        int bad = 0;
+        if (ok) {
+            for (int j = 0; j < real; ++j) {
+                const int64_t p = pos + j;
+                const int64_t blk = p / B;
+                const int off = static_cast<int>(p % B);
+                const float* rb = refBlock(i, blk);
+                if (!rb || rb[off * CH] != left[j] || (CH > 1 && rb[off * CH + 1] != right[j]))
+                    bad++;
             }
+            ok = bad == 0;
         }
-        if (!found) mismatched++;
+
+        if (ok) {
+            matchedCb++;
+            matchedFrames += real;
+            pos += frames;
+            continue;
+        }
+
+        // Not where the stream should have been. If it can be found elsewhere,
+        // the reader jumped: that is a ring lap, not corrupt audio.
+        mismatchFrames += bad > 0 ? bad : real;
+        const int64_t elsewhere = locate(i, real, left, right);
+        if (elsewhere >= 0 && elsewhere != pos) {
+            lapCb++;
+            ++laps;
+            if (firstLapCb < 0) firstLapCb = i;
+            pos = elsewhere + frames;
+        } else {
+            mismatchCb++;
+            pos = -1;
+        }
     }
 
     const int64_t published = writeAfter - writeBefore;
     const double blockRate = live.sampleRate / double(live.blockFrames);
+    const double expectedCadence = live.sampleRate / double(bufferSize);
     const double callbacksPerSecond = captured / seconds;
     const double publishedPerSecond = published / seconds;
+    const long totalFrames = captured * frames;
+    const double nonSilentRatio = totalFrames ? double(totalFrames - silentFrames) / totalFrames : 0.0;
 
     wprintf(L"\n-- %.2f s watched while the app rendered --\n", seconds);
-    wprintf(L"buffer size       : %ld frames (first %d = one ring block; the rest is padding)\n",
-            bufferSize, frames);
+    wprintf(L"buffer size       : %ld frames (whole buffer is audio; ring block is %d)\n",
+            bufferSize, B);
     wprintf(L"blocks published  : %lld by the app (%.1f/s; block rate is %.0f/s)\n",
             static_cast<long long>(published), publishedPerSecond, blockRate);
-    wprintf(L"bufferSwitch      : %ld calls (%.1f/s)\n", captured, callbacksPerSecond);
-    wprintf(L"bit-exact blocks  : %ld/%ld matched, %ld mismatched\n", matched, captured,
-            mismatched);
-    wprintf(L"lag of matched    : 1=%d 2=%d 3=%d 4=%d 5=%d\n", lag[1], lag[2], lag[3],
-            lag[4], lag[5]);
-    wprintf(L"non-silent blocks : %ld/%ld\n", captured - silent, captured);
+    wprintf(L"bufferSwitch      : %ld calls (%.2f/s; expected %.2f/s)\n", captured,
+            callbacksPerSecond, expectedCadence);
+    wprintf(L"matched callbacks : %ld/%ld (%ld frames)\n", matchedCb, captured, matchedFrames);
+    wprintf(L"mismatched        : %ld callbacks (%ld frames)\n", mismatchCb, mismatchFrames);
+    wprintf(L"ring laps         : %ld\n", laps);
+    if (firstLapCb >= 0)
+        wprintf(L"first lap at      : callback %ld of %ld (%.0f ms in)\n", firstLapCb,
+                captured, 1000.0 * firstLapCb * frames / live.sampleRate);
+    wprintf(L"silent callbacks  : %ld (%ld frames, underrun)\n", silentCb, silentFrames);
+    wprintf(L"non-silent ratio  : %.4f\n", nonSilentRatio);
 
-    const bool cadenceOk = callbacksPerSecond > blockRate * 0.9 &&
-                           callbacksPerSecond < blockRate * 1.1;
+    const bool cadenceOk = callbacksPerSecond > expectedCadence * 0.98 &&
+                           callbacksPerSecond < expectedCadence * 1.02;
     const bool ringFed = publishedPerSecond > blockRate * 0.9;
-    // Silence is not a pass: an all-zero run would compare equal to an empty ring.
-    const bool signal = silent < captured;
-    // Every block the driver actually served must match; a lap it could not serve
-    // (the host buffer's cadence differs from the ring's) is counted as skipped.
-    const long served = captured - silent;
-    const bool exact = mismatched == 0 && served > 0 && matched == served;
-    const bool passed = exact && cadenceOk && ringFed && signal;
+    // The whole point of the fix: no lap and no mismatch at any buffer size.
+    const bool clean = laps == 0 && mismatchCb == 0 && mismatchFrames == 0 &&
+                       silentCb == 0 && nonSilentRatio > 0.999;
+    const bool passed = clean && cadenceOk && ringFed;
 
     wprintf(L"\nlive feed         : %s\n",
-            passed ? L"PASS (every served block bit-exact, paced, non-silent)"
-                   : (exact ? L"FAIL (bit-exact but the run is not a live feed)"
-                            : L"FAIL (served blocks differ)"));
-    if (silent > 0)
-        wprintf(L"note              : %ld callback(s) were ring laps (host buffer %.0f/s vs "
-                L"ring %.0f/s)\n", silent, callbacksPerSecond, blockRate);
+            passed ? L"PASS (zero laps, zero mismatches, cadence on target)"
+                   : (clean ? L"FAIL (stream clean but cadence or feed off)"
+                            : L"FAIL (laps or mismatched frames)"));
     live.close();
     return passed ? 0 : 1;
 }
@@ -858,11 +952,24 @@ int wmain(int argc, wchar_t** argv) {
         return 1;
     }
 
-    // --attach [busName]: read-only watch of the section a running app publishes.
-    // Never creates the section and never writes a block, so the numbers are the
-    // app's own output and not the harness's.
+    // --attach [busName] [hostFrames]: read-only watch of the section a running
+    // app publishes. Never creates the section and never writes a block, so the
+    // numbers are the app's own output and not the harness's. hostFrames picks
+    // the ASIO buffer size (128/256/512/1024) so one live run can be repeated at
+    // every size the driver accepts.
     if (argc > 2 && wcscmp(argv[2], L"--attach") == 0) {
         const wchar_t* busName = argc > 3 ? argv[3] : L"main";
+        if (argc > 4) {
+            wchar_t* end = nullptr;
+            const long n = wcstol(argv[4], &end, 10);
+            if (!end || *end != L'\0' || (n != 128 && n != 256 && n != 512 && n != 1024)) {
+                wprintf(L"FATAL: host frames must be 128, 256, 512 or 1024\n");
+                CoUninitialize();
+                unregisterInHkcu();
+                return 1;
+            }
+            g_liveRequestedFrames = n;
+        }
         const int rc = runAttachMode(busName);
         CoUninitialize();
         unregisterInHkcu();

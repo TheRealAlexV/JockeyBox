@@ -84,7 +84,12 @@ public:
     // leaving the reader detached, when the section is absent, the header does
     // not validate, or every slot is taken. Allocates: call it from start() or
     // from the once-a-second retry, never from the callback.
-    bool attach(const char* busName) noexcept {
+    // `prefillFrames` asks the reader to join the stream that many frames behind
+    // the writer instead of at the newest block. A host buffer that is not a
+    // multiple of the ring block (512 vs 480) needs that cushion: both sides
+    // average the same rate, but the writer publishes in whole blocks, so a
+    // zero-cushion reader starves at every block edge. 0 keeps "join at newest".
+    bool attach(const char* busName, int32_t prefillFrames = 0) noexcept {
         detach();
         if (!busName || !*busName) return false;
         if (::lstrlenA(busName) > 64) return false;
@@ -151,9 +156,24 @@ public:
         m_underruns = asI64(slotBase + kSlotUnderruns);
         m_slotActive = asI32(slotBase + kSlotActive);
 
-        // Join at the newest block: attaching mid-stream must not replay old
-        // audio into the host.
-        m_read->store(m_write->load(std::memory_order_acquire), std::memory_order_release);
+        // Join `prefillFrames` behind the writer, clamped to half the ring so a
+        // cushion can never crowd out the producer. 0 = newest block: attaching
+        // mid-stream must not replay old audio into the host. At least three
+        // blocks of cushion, because the writer publishes in whole blocks: a
+        // reader sitting one block behind is exactly at the writer's own
+        // block-quantisation amplitude and starves on every wrap.
+        int64_t joined = m_write->load(std::memory_order_acquire);
+        if (prefillFrames > 0) {
+            int64_t blocks = (static_cast<int64_t>(prefillFrames) + blockFrames - 1) / blockFrames;
+            if (blocks < 3) blocks = 3;
+            const int64_t cap = m_capacity > 1 ? m_capacity / 2 : 1;
+            if (blocks > cap) blocks = cap;
+            joined -= blocks;
+            if (joined < 0) joined = 0;
+        }
+        m_cursorBlock = joined;
+        m_cursorFrame = 0;
+        m_read->store(joined, std::memory_order_release);
         return true;
     }
 
@@ -167,12 +187,21 @@ public:
         m_slotActive = nullptr;
         m_write = m_read = m_corrections = m_underruns = nullptr;
         m_slot = -1;
+        m_cursorBlock = 0;
+        m_cursorFrame = 0;
     }
 
-    // Copies the next unconsumed block into `dst` as deinterleaved float32 and
-    // advances the slot. No data -> silence and one underruns tick. Falling
-    // further behind than the ring can hold -> jump to the newest block and one
-    // corrections tick; the reader never rewinds and never replays.
+    // Streams exactly `frames` frames into `dst` as deinterleaved float32,
+    // starting wherever the cursor stopped and crossing ring-block boundaries
+    // as needed. `frames` has no relation to the ring block size, so a 512-frame
+    // host buffer reads cleanly from a 480-frame producer.
+    //
+    // The cursor is (m_cursorBlock, m_cursorFrame): the block being consumed and
+    // the intra-block offset into it. It only ever moves forward. Silence is
+    // served only when the writer has not published the next block yet (one
+    // underruns tick per starved callback). A jump to the newest block and one
+    // corrections tick happen only when the cursor block has already been
+    // overwritten, i.e. the reader fell further behind than the ring holds.
     // Never blocks, never allocates, never throws.
     void read(float* const* dst, int dstChannels, int frames) noexcept {
         if (!dst || dstChannels <= 0 || frames <= 0) return;
@@ -181,34 +210,57 @@ public:
         if (!m_payload) return;
 
         const int64_t written = m_write->load(std::memory_order_acquire);
-        const int64_t read = m_read->load(std::memory_order_relaxed);
-
-        if (written <= read) {
+        if (written <= m_cursorBlock) {
             m_underruns->fetch_add(1, std::memory_order_relaxed);
+            m_read->store(m_cursorBlock, std::memory_order_release);
             return;
         }
-        if (written - read > m_capacity) {
-            m_read->store(written, std::memory_order_release);
+        if (written - m_cursorBlock > m_capacity) {
+            // Everything up to the newest published block is gone; resume at the
+            // newest one rather than replaying overwritten audio.
+            m_cursorBlock = written - 1;
+            m_cursorFrame = 0;
             m_corrections->fetch_add(1, std::memory_order_relaxed);
-            return;
         }
 
-        const auto* src = reinterpret_cast<const float*>(
-            m_payload + static_cast<int64_t>(read % m_capacity) * m_blockBytes);
-        const int n = frames < m_blockFrames ? frames : m_blockFrames;
-        const int ch = dstChannels < m_channels ? dstChannels : m_channels;
-        for (int c = 0; c < ch; ++c) {
-            float* d = dst[c];
-            if (!d) continue;
-            for (int i = 0; i < n; ++i) d[i] = src[i * m_channels + c];
+        const int32_t channels = m_channels;
+        const int32_t blockFrames = m_blockFrames;
+        const int ch = dstChannels < channels ? dstChannels : channels;
+        int produced = 0;
+        while (produced < frames && m_cursorBlock < written) {
+            const int32_t avail = blockFrames - m_cursorFrame;
+            int run = frames - produced;
+            if (run > avail) run = avail;
+
+            const auto* src = reinterpret_cast<const float*>(
+                m_payload + static_cast<int64_t>(m_cursorBlock % m_capacity) * m_blockBytes);
+            const int32_t base = m_cursorFrame * channels;
+            for (int c = 0; c < ch; ++c) {
+                float* d = dst[c];
+                if (!d) continue;
+                const float* s = src + base + c;
+                float* o = d + produced;
+                for (int i = 0; i < run; ++i) o[i] = s[i * channels];
+            }
+
+            produced += run;
+            m_cursorFrame += run;
+            if (m_cursorFrame >= blockFrames) {
+                m_cursorFrame = 0;
+                ++m_cursorBlock;
+            }
         }
 
-        m_read->store(read + 1, std::memory_order_release);
+        if (produced < frames) m_underruns->fetch_add(1, std::memory_order_relaxed);
+        m_read->store(m_cursorBlock, std::memory_order_release);
     }
 
     int32_t channels() const noexcept { return m_channels; }
     int32_t blockFrames() const noexcept { return m_blockFrames; }
     int slot() const noexcept { return m_slot; }
+    // The block currently being consumed. The frame offset inside it is not
+    // published: `readBlockIndex` advances by one per whole block consumed and
+    // may stand still across callbacks whose frames all fell inside one block.
     int64_t readBlockIndex() const noexcept {
         return m_read ? m_read->load(std::memory_order_acquire) : 0;
     }
@@ -241,6 +293,11 @@ private:
     int32_t m_blockFrames = 0;
     int32_t m_capacity = 0;
     int64_t m_blockBytes = 0;
+
+    // Fractional cursor: block currently being consumed and the frame offset
+    // into it. Forward-only; not atomic, because only the clock thread reads.
+    int64_t m_cursorBlock = 0;
+    int32_t m_cursorFrame = 0;
 
     std::atomic<int64_t>* m_write = nullptr;
     std::atomic<int64_t>* m_read = nullptr;

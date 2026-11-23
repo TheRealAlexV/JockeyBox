@@ -102,7 +102,12 @@ void VirtualAsioDriver::resolveBusName() noexcept {
 }
 
 void VirtualAsioDriver::attachBus() noexcept {
-    if (m_ring.attach(m_busName))
+    // Join three host buffers behind the writer. The ring block (480) is not a
+    // divisor of the host buffer (128/256/512/1024), so without a cushion the
+    // reader lands on the writer's block edge and starves. Three buffers covers
+    // one callback plus the writer's block quantisation and scheduler jitter.
+    const int32_t prefill = static_cast<int32_t>(3 * m_bufferSize);
+    if (m_ring.attach(m_busName, prefill))
         m_busState.store(kBusAttached, std::memory_order_relaxed);
     else
         m_busState.store(kBusAbsent, std::memory_order_relaxed);
@@ -246,7 +251,7 @@ AsioError JB_ASIO_CALL VirtualAsioDriver::getChannelInfo(AsioChannelInfo* info) 
 }
 
 bool VirtualAsioDriver::isAcceptableBufferSize(long size) {
-    return size == 128 || size == 256 || size == 512;
+    return size == 128 || size == 256 || size == 512 || size == 1024;
 }
 
 AsioError JB_ASIO_CALL VirtualAsioDriver::createBuffers(
