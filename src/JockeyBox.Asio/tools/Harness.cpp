@@ -1063,6 +1063,12 @@ struct SoakCell {
     long reportedLatency = 0;   // getLatencies() input, frames
     long actualLatency = 0;     // bufferSize + observed steady-state lag, frames
     bool latencyOk = false;
+    // Cumulative counters at the midpoint, for the first/second half comparison.
+    long long halfUnderruns = 0;
+    long long halfCorrections = 0;
+    long long halfTrims = 0;
+    long long halfLag = 0;
+    bool halfCaptured = false;
     bool ran = false;
     bool passed = false;
 };
@@ -1206,6 +1212,13 @@ bool runSoakCell(const wchar_t* label, int blockFrames, int capacity, int buffer
         lagFinal = lag;
         lagSum += lag;
         ++lagN;
+        if (!c.halfCaptured && qpcSeconds(qpcTicks() - t0) >= seconds * 0.5) {
+            c.halfUnderruns = bus.slotValue(slot, jb::asio::bus::kSlotUnderruns);
+            c.halfCorrections = bus.slotValue(slot, jb::asio::bus::kSlotCorrections);
+            c.halfTrims = bus.slotValue(slot, jb::asio::bus::kSlotTrims);
+            c.halfLag = lag;
+            c.halfCaptured = true;
+        }
     }
 
     c.callbacks = g_callbacks.load();
@@ -1223,15 +1236,15 @@ bool runSoakCell(const wchar_t* label, int blockFrames, int capacity, int buffer
     long repIn = 0, repOut = 0;
     driver->getLatencies(&repIn, &repOut);
     c.reportedLatency = repIn;
-    // Compare against the mean sampled lag, not the final sample: the lag
-    // sawtooths by whole blocks (and by ~2 blocks when the host buffer is not a
-    // multiple of the ring block), so one instantaneous sample is not the delay.
-    // Two blocks of tolerance is the reference's own resolution: the 100 ms
-    // sample of a block-quantised counter differs from the per-read mean by up
-    // to ~1.5 blocks. It still catches the 960-frame under-report this fixes.
     const long meanLag = lagN > 0 ? static_cast<long>(lagSum / lagN) : static_cast<long>(lagFinal);
     c.actualLatency = bufferSize + meanLag;
-    c.latencyOk = labs(repIn - c.actualLatency) <= 2 * blockFrames;
+    // Fixed 256-frame tolerance (~5.3 ms at 48 kHz), independent of block size,
+    // per the acceptance. Most cells sit within 171 frames of the sampled mean.
+    // At buffer 1024 with a 480-frame ring block the 100 ms reference aliases a
+    // +-960-frame lag sawtooth and can read up to ~278 off the per-read mean; that
+    // is the sampler's resolution, not a reporting error, so those cells are
+    // reported as a finding rather than hidden behind a wider tolerance.
+    c.latencyOk = labs(repIn - c.actualLatency) <= 256;
 
     // A matched cell must show no corrections, no underruns and no trims; a mixed
     // cell additionally proves the trim actually tracked (trims > 0) and kept the
@@ -1249,6 +1262,20 @@ bool runSoakCell(const wchar_t* label, int blockFrames, int capacity, int buffer
     driver->Release();
     bus.close();
     return true;
+}
+
+static void printCell(const SoakCell& c) {
+    wprintf(L"callbacks %ld  underruns %lld  corrections %lld  trims %lld\n",
+            c.callbacks, c.underruns, c.corrections, c.trims);
+    wprintf(L"first half   underruns %lld  corrections %lld  trims %lld  lag %lld\n",
+            c.halfUnderruns, c.halfCorrections, c.halfTrims, c.halfLag);
+    wprintf(L"second half  underruns %lld  corrections %lld  trims %lld\n",
+            c.underruns - c.halfUnderruns, c.corrections - c.halfCorrections,
+            c.trims - c.halfTrims);
+    wprintf(L"lag frames min/max/final %lld/%lld/%lld  target %lld  %ls\n",
+            c.lagMin, c.lagMax, c.lagFinal, c.lagTarget, c.passed ? L"PASS" : L"FAIL");
+    wprintf(L"latency reported %ld  actual(buffer+lag) %ld  %ls\n",
+            c.reportedLatency, c.actualLatency, c.latencyOk ? L"OK" : L"MISMATCH");
 }
 
 int runSoakMatrix(double seconds, int ppm) {
@@ -1282,14 +1309,7 @@ int runSoakMatrix(double seconds, int ppm) {
                     failures++;
                     continue;
                 }
-                wprintf(L"callbacks %ld  underruns %lld  corrections %lld  trims %lld\n",
-                        c.callbacks, c.underruns, c.corrections, c.trims);
-                wprintf(L"lag frames min/max/final %lld/%lld/%lld  target %lld  %ls\n",
-                        c.lagMin, c.lagMax, c.lagFinal, c.lagTarget,
-                        c.passed ? L"PASS" : L"FAIL");
-                wprintf(L"latency reported %ld  actual(buffer+lag) %ld  %ls\n",
-                        c.reportedLatency, c.actualLatency,
-                        c.latencyOk ? L"OK" : L"MISMATCH");
+                printCell(c);
                 if (!c.passed) failures++;
             }
         }
@@ -1298,6 +1318,29 @@ int runSoakMatrix(double seconds, int ppm) {
             failures == 0 ? L"PASS" : L"FAIL", failures);
     timeEndPeriod(1);
     return failures;
+}
+
+// One cell at the literal spec duration: --soak-one seconds ppm geom buffer cond
+// (geom 0 = harness 128x16, 1 = app 480x64; cond 0 = A, 1 = B).
+static int runSoakOne(double seconds, int ppm, int geom, int bufferSize, int cond) {
+    const int blockFrames = geom == 0 ? kBusFrames : 480;
+    const int capacity = geom == 0 ? kBusCapacity : 64;
+    const int cellPpm = cond == 0 ? 0 : ppm;
+    const wchar_t* label = cond == 0 ? L"A matched" : L"B mixed";
+    SoakCell c;
+    wprintf(L"\n== single soak cell: %.0f s at %d ppm ==\n", seconds, cellPpm);
+    wprintf(L"-- %ls | %ls | buffer %d | ring %d x %d --\n", label,
+            geom == 0 ? L"harness" : L"app", bufferSize, blockFrames, capacity);
+    timeBeginPeriod(1);
+    const bool ok = runSoakCell(label, blockFrames, capacity, bufferSize, cellPpm,
+                                seconds, c);
+    timeEndPeriod(1);
+    if (!ok) {
+        wprintf(L"FATAL: cell could not start\n");
+        return 1;
+    }
+    printCell(c);
+    return c.passed ? 0 : 2;
 }
 
 }  // namespace
@@ -1317,9 +1360,27 @@ static bool parseSoakArgs(int argc, wchar_t** argv, double& seconds, int& ppm) {
     return false;
 }
 
+static bool parseSoakOneArgs(int argc, wchar_t** argv, double& seconds, int& ppm,
+                             int& geom, int& buffer, int& cond) {
+    for (int i = 1; i < argc; ++i) {
+        if (wcscmp(argv[i], L"--soak-one") == 0) {
+            if (i + 5 < argc) {
+                seconds = _wtof(argv[i + 1]);
+                ppm = _wtoi(argv[i + 2]);
+                geom = _wtoi(argv[i + 3]);
+                buffer = _wtoi(argv[i + 4]);
+                cond = _wtoi(argv[i + 5]);
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
 int wmain(int argc, wchar_t** argv) {
     wchar_t dllPath[MAX_PATH] = {};
-    if (argc > 1 && wcscmp(argv[1], L"--soak") != 0) {
+    if (argc > 1 && wcscmp(argv[1], L"--soak") != 0 &&
+        wcscmp(argv[1], L"--soak-one") != 0) {
         wcscpy_s(dllPath, argv[1]);
     } else {
         GetModuleFileNameW(nullptr, dllPath, MAX_PATH);
@@ -1342,6 +1403,15 @@ int wmain(int argc, wchar_t** argv) {
 
     double soakSeconds = 0.0;
     int soakPpm = 0;
+    double oneSeconds = 0.0;
+    int onePpm = 0, oneGeom = 0, oneBuffer = 0, oneCond = 0;
+    if (parseSoakOneArgs(argc, argv, oneSeconds, onePpm, oneGeom, oneBuffer, oneCond)) {
+        const int failures = runSoakOne(oneSeconds, onePpm, oneGeom, oneBuffer, oneCond);
+        CoUninitialize();
+        unregisterInHkcu();
+        return failures;
+    }
+
     if (parseSoakArgs(argc, argv, soakSeconds, soakPpm)) {
         const int failures = runSoakMatrix(soakSeconds, soakPpm);
         CoUninitialize();
