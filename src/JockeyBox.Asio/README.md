@@ -62,6 +62,15 @@ residual instead of hiding it. Before the first span completes, or with no bus
 attached, it falls back to the cushion. The output path is a virtual sink the
 driver never writes, so it reports one buffer.
 
+Observed behaviour, not a defect: at an exact rate match the trim never slips the
+cursor, so the lag stays wherever attach and the first writer blocks put it
+rather than being pulled back to the nominal `3 * bufferSize` cushion. In the
+harness that means the matched-clock cells settle a block or two above the
+cushion (128 and 512 settled at 4 and 5 blocks). `getLatencies` follows the real
+lag, so a host still compensates correctly; it simply means the cushion is not
+enforced when the clocks already agree, because moving the cursor with nothing to
+correct would be an audible click.
+
 The reader also runs a one-frame rate trim. When a bus shares a route with a
 physical device the writer is paced by that device's WASAPI clock while the
 reader runs on QPC, so the two clocks differ by a fixed ppm. The trim measures

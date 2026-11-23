@@ -51,6 +51,27 @@ struct Captures {
 Captures* g_capture = nullptr;
 const float* g_inBuf[kBusChannels][2] = {};
 
+// --- soak marker reference --------------------------------------------------
+// The writer stamps every input frame with its absolute index (mod 65536), so
+// the delivered buffer names the exact input frame it carries. Pairing that with
+// the writer's own frame counter gives the ring delay in frames, independently
+// of the driver's lag arithmetic. Accumulated per driver span (4 s of frames) so
+// the comparison is the same window and the same statistic as getLatencies.
+std::atomic<bool> g_markerActive{false};
+std::atomic<int64_t>* g_markerWrite = nullptr;
+std::atomic<int> g_markerBlockFrames{0};
+std::atomic<int> g_markerFrames{0};
+std::atomic<int64_t> g_markerOut{0};
+std::atomic<int64_t> g_markerPeriod{0};
+std::atomic<int64_t> g_markerPeriodEnd{0};
+std::atomic<double> g_markerSum{0.0};
+std::atomic<long long> g_markerCount{0};
+std::atomic<double> g_markerSpanMean{-1.0};
+std::atomic<int64_t> g_markerLag{0};
+std::atomic<int64_t> g_markerMin{-1};
+std::atomic<int64_t> g_markerMax{0};
+std::atomic<int64_t> g_markerFinal{0};
+
 // Read-only attach mode: what the driver handed the host during a live run.
 constexpr int kLiveMaxFrames = 1024;     // largest host buffer the driver accepts
 constexpr long kLiveMaxCaptures = 1400;  // 3 s at 128 frames (375 callbacks/s)
@@ -92,6 +113,44 @@ void onBufferSwitch(long doubleBufferIndex, jb::asio::AsioBool directProcess) {
     (void)directProcess;
     g_lastIndex = doubleBufferIndex;
     g_callbacks.fetch_add(1, std::memory_order_relaxed);
+
+    if (g_markerActive.load(std::memory_order_relaxed) && g_markerWrite) {
+        const float* b = g_inBuf[0][doubleBufferIndex & 1];
+        const int frames = g_markerFrames.load(std::memory_order_relaxed);
+        const int bf = g_markerBlockFrames.load(std::memory_order_relaxed);
+        int64_t out = g_markerOut.fetch_add(frames, std::memory_order_relaxed) + frames;
+        bool chain = b != nullptr && frames > 0;
+        const long v0 = b ? static_cast<long>(b[0] + 0.5f) : 0;
+        for (int i = 1; chain && i < 4 && i < frames; ++i) {
+            const long vi = static_cast<long>(b[i] + 0.5f);
+            if (vi != (v0 + i) % 65536) chain = false;
+        }
+        if (chain && v0 >= 0 && v0 < 65536) {
+            const int64_t wFrames =
+                g_markerWrite->load(std::memory_order_acquire) * bf;
+            int64_t d = (wFrames - v0) % 65536;
+            if (d < 0) d += 65536;
+            g_markerLag.store(d, std::memory_order_relaxed);
+            g_markerFinal.store(d, std::memory_order_relaxed);
+            int64_t mn = g_markerMin.load(std::memory_order_relaxed);
+            if (mn < 0 || d < mn) g_markerMin.store(d, std::memory_order_relaxed);
+            if (d > g_markerMax.load(std::memory_order_relaxed))
+                g_markerMax.store(d, std::memory_order_relaxed);
+            g_markerSum.store(g_markerSum.load(std::memory_order_relaxed) + double(d),
+                              std::memory_order_relaxed);
+            g_markerCount.fetch_add(1, std::memory_order_relaxed);
+            if (out >= g_markerPeriodEnd.load(std::memory_order_relaxed)) {
+                const long long n = g_markerCount.load(std::memory_order_relaxed);
+                const double sum = g_markerSum.load(std::memory_order_relaxed);
+                if (n > 0) g_markerSpanMean.store(sum / double(n), std::memory_order_relaxed);
+                g_markerSum.store(0.0, std::memory_order_relaxed);
+                g_markerCount.store(0, std::memory_order_relaxed);
+                g_markerPeriodEnd.store(
+                    out + g_markerPeriod.load(std::memory_order_relaxed),
+                    std::memory_order_relaxed);
+            }
+        }
+    }
 
     LiveCaptures* live = g_live;
     if (live) {
@@ -233,12 +292,16 @@ struct TestBus {
         return true;
     }
 
+    bool marker = false;  // soak: write a per-frame delay marker instead of sampleFor
+
     void publish(int64_t block) {
         float* dst = reinterpret_cast<float*>(
             payload + (block % capacityBlocks) * blockBytes);
         for (int f = 0; f < blockFrames; ++f)
             for (int c = 0; c < kBusChannels; ++c)
-                dst[f * kBusChannels + c] = sampleFor(block, f, c);
+                dst[f * kBusChannels + c] =
+                    marker ? static_cast<float>((block * blockFrames + f) % 65536)
+                           : sampleFor(block, f, c);
         write->store(block + 1, std::memory_order_release);
     }
 
@@ -1157,6 +1220,25 @@ bool runSoakCell(const wchar_t* label, int blockFrames, int capacity, int buffer
         g_inBuf[ch][1] = static_cast<const float*>(infos[ch].buffers[1]);
     }
 
+    // Marker mode: every input frame carries its absolute index (mod 65536), so
+    // the delivered buffer names the exact input frame it holds. Delay is
+    // writerFrame - deliveredFrame, independent of the driver's lag arithmetic.
+    bus.marker = true;
+    g_markerActive.store(false);
+    g_markerWrite = bus.write;
+    g_markerBlockFrames.store(blockFrames);
+    g_markerFrames.store(bufferSize);
+    g_markerOut.store(0);
+    g_markerPeriod.store((4 * 48000 / blockFrames) * blockFrames);
+    g_markerPeriodEnd.store((4 * 48000 / blockFrames) * blockFrames);
+    g_markerSum.store(0.0);
+    g_markerCount.store(0);
+    g_markerSpanMean.store(-1.0);
+    g_markerLag.store(0);
+    g_markerMin.store(-1);
+    g_markerMax.store(0);
+    g_markerFinal.store(0);
+
     // Seed half a ring and start the writer *before* the driver, so the reader
     // attaches into a stream that is already running: no startup drain of the
     // cushion and no spurious underrun/correction in the first few callbacks.
@@ -1172,6 +1254,7 @@ bool runSoakCell(const wchar_t* label, int blockFrames, int capacity, int buffer
 
     g_capture = nullptr;
     g_callbacks.store(0);
+    g_markerActive.store(true);
     if (driver->start() != jb::asio::kAseOk) {
         wprintf(L"FATAL: soak start failed\n");
         writer.stop.store(true);
@@ -1200,21 +1283,10 @@ bool runSoakCell(const wchar_t* label, int blockFrames, int capacity, int buffer
     c.lagTarget = latIn - bufferSize;  // the ring cushion, in frames
 
     const long long t0 = qpcTicks();
-    long long lagMin = -1, lagMax = 0, lagFinal = 0;
-    long long lagSum = 0, lagN = 0;
     while (qpcSeconds(qpcTicks() - t0) < seconds) {
-        // Sample the driver's per-callback lag (the pre-consumption value
-        // getLatencies aggregates), not (write - readBlockIndex): the latter
-        // aliased the writer's publication phase against the sample clock and
-        // read a fraction of a block low at 1024.
+        // The marker callback publishes the frame-exact delay it measured.
         Sleep(10);
-        const long long lag = static_cast<long long>(
-            bus.slotValue(slot, jb::asio::bus::kSlotCurrentLagFrames));
-        if (lagMin < 0 || lag < lagMin) lagMin = lag;
-        if (lag > lagMax) lagMax = lag;
-        lagFinal = lag;
-        lagSum += lag;
-        ++lagN;
+        const long long lag = g_markerFinal.load(std::memory_order_relaxed);
         if (!c.halfCaptured && qpcSeconds(qpcTicks() - t0) >= seconds * 0.5) {
             c.halfUnderruns = bus.slotValue(slot, jb::asio::bus::kSlotUnderruns);
             c.halfCorrections = bus.slotValue(slot, jb::asio::bus::kSlotCorrections);
@@ -1228,23 +1300,25 @@ bool runSoakCell(const wchar_t* label, int blockFrames, int capacity, int buffer
     c.underruns = bus.slotValue(slot, jb::asio::bus::kSlotUnderruns);
     c.corrections = bus.slotValue(slot, jb::asio::bus::kSlotCorrections);
     c.trims = bus.slotValue(slot, jb::asio::bus::kSlotTrims);
-    c.lagMin = lagMin;
-    c.lagMax = lagMax;
-    c.lagFinal = lagFinal;
+    c.lagMin = g_markerMin.load();
+    c.lagMax = g_markerMax.load();
+    c.lagFinal = g_markerFinal.load();
     c.ran = true;
+    g_markerActive.store(false);
+    bus.marker = false;
 
-    // Gap 1 check: the host is told bufferSize + the lag the route actually
-    // settles at, not bufferSize + the cushion. Compares against the observed
-    // block-quantised lag, so a one-block tolerance is the sampling precision.
+    // Independent reference: the means are taken over the same 4 s frame span
+    // the driver reports on, so a wandering lag cancels instead of biasing one
+    // side. 16 frames is the target; the marker names the exact frame.
     long repIn = 0, repOut = 0;
     driver->getLatencies(&repIn, &repOut);
     c.reportedLatency = repIn;
-    const long meanLag = lagN > 0 ? static_cast<long>(lagSum / lagN) : static_cast<long>(lagFinal);
+    const double spanMean = g_markerSpanMean.load();
+    const long meanLag = spanMean >= 0
+                             ? static_cast<long>(spanMean + 0.5)
+                             : static_cast<long>(c.lagFinal);
     c.actualLatency = bufferSize + meanLag;
-    // The reference is the driver's per-callback lag, sampled at the same
-    // instant getLatencies() aggregates it, so there is no sampler phase left:
-    // 256 frames (~5.3 ms) has teeth at every geometry.
-    c.latencyOk = labs(repIn - c.actualLatency) <= 256;
+    c.latencyOk = labs((repIn - bufferSize) - meanLag) <= 16;
 
     // A matched cell must show no corrections, no underruns and no trims; a mixed
     // cell additionally proves the trim actually tracked (trims > 0) and kept the

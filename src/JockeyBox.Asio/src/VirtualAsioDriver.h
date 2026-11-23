@@ -43,10 +43,6 @@ public:
                                          long* preferredSize,
                                          long* granularity) override;
 
-    // Instantaneous ring lag at the start of the last read, in frames. The
-    // harness samples this as a phase-free reference for getLatencies().
-    int64_t currentLagFrames() const noexcept { return m_ring.currentLagFrames(); }
-
     AsioError JB_ASIO_CALL canSampleRate(AsioSampleRate sampleRate) override;
     AsioError JB_ASIO_CALL getSampleRate(AsioSampleRate* sampleRate) override;
     AsioError JB_ASIO_CALL setSampleRate(AsioSampleRate sampleRate) override;

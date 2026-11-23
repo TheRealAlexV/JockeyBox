@@ -54,10 +54,6 @@ constexpr int32_t kSlotActive = 24;
 // owns the trim and the app tree is out of scope; it is not part of the shared
 // contract and must not be treated as one.
 constexpr int32_t kSlotTrims = 32;
-// Native-only, same unused tail: instantaneous lag at the start of the last
-// read, in frames. The in-process harness reads it as a phase-free latency
-// reference; the app never reads it and it is not part of the shared contract.
-constexpr int32_t kSlotCurrentLagFrames = 40;
 
 // The section lives in the calling session, so an in-process host (obs-asio)
 // sees the same one the app created.
@@ -165,7 +161,6 @@ public:
         m_corrections = asI64(slotBase + kSlotCorrections);
         m_underruns = asI64(slotBase + kSlotUnderruns);
         m_slotActive = asI32(slotBase + kSlotActive);
-        m_slotCurrentLag = asI64(slotBase + kSlotCurrentLagFrames);
         m_trims = asI64(slotBase + kSlotTrims);
         m_trims->store(0, std::memory_order_release);
 
@@ -258,8 +253,6 @@ public:
         const int64_t written = m_write->load(std::memory_order_acquire);
         if (written <= m_cursorBlock) {
             m_underruns->fetch_add(1, std::memory_order_relaxed);
-            m_currentLagFrames.store(0, std::memory_order_relaxed);
-            if (m_slotCurrentLag) m_slotCurrentLag->store(0, std::memory_order_relaxed);
             m_read->store(m_cursorBlock, std::memory_order_release);
             return;
         }
@@ -279,13 +272,6 @@ public:
 
         const int32_t channels = m_channels;
         const int32_t blockFrames = m_blockFrames;
-
-        // The lag this callback is about to consume from, published so the
-        // harness can take a reference at the same instant getLatencies reports.
-        const int64_t lagNow =
-            (written - m_cursorBlock) * static_cast<int64_t>(blockFrames) - m_cursorFrame;
-        m_currentLagFrames.store(lagNow, std::memory_order_relaxed);
-        if (m_slotCurrentLag) m_slotCurrentLag->store(lagNow, std::memory_order_relaxed);
 
         // --- one-frame rate trim ------------------------------------------------
         // A mixed route paces the writer off the physical device's WASAPI clock
@@ -468,11 +454,6 @@ public:
 
     int32_t channels() const noexcept { return m_channels; }
     int32_t blockFrames() const noexcept { return m_blockFrames; }
-    // Lag at the start of the last read, in frames: the value getLatencies
-    // aggregates. Sampled by the harness as a phase-free latency reference.
-    int64_t currentLagFrames() const noexcept {
-        return m_currentLagFrames.load(std::memory_order_relaxed);
-    }
     // Whole-block cushion actually used by attach(), in frames. 0 until attached,
     // or when attached at the newest block. getLatencies() adds this to the host
     // buffer to report the real input delay.
@@ -544,15 +525,12 @@ private:
     double m_trimSlipAccum = 0.0;
     // Steady-state lag published for getLatencies(); -1 until the first span.
     std::atomic<int64_t> m_measuredLagFrames{-1};
-    // Instantaneous lag at the start of the last read (frames), for the harness.
-    std::atomic<int64_t> m_currentLagFrames{0};
 
     std::atomic<int64_t>* m_write = nullptr;
     std::atomic<int64_t>* m_read = nullptr;
     std::atomic<int64_t>* m_corrections = nullptr;
     std::atomic<int64_t>* m_underruns = nullptr;
     std::atomic<int32_t>* m_slotActive = nullptr;
-    std::atomic<int64_t>* m_slotCurrentLag = nullptr;
 };
 
 }  // namespace jb::asio::bus
