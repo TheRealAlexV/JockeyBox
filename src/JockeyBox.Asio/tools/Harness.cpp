@@ -191,12 +191,17 @@ struct TestBus {
     uint8_t* payload = nullptr;
     std::atomic<int64_t>* write = nullptr;
     int64_t blockBytes = 0;
+    int blockFrames = kBusFrames;
+    int capacityBlocks = kBusCapacity;
     wchar_t mapName[160] = {};
 
-    bool create(const wchar_t* busName) {
+    bool create(const wchar_t* busName, int framesPerBlock = kBusFrames,
+                int capacity = kBusCapacity) {
+        blockFrames = framesPerBlock;
+        capacityBlocks = capacity;
         swprintf_s(mapName, L"Local\\JockeyBox.Bus.%s", busName);
         const int64_t size = jb::asio::bus::kPayloadOffset +
-                             int64_t(kBusCapacity) * kBusFrames * kBusChannels * 4;
+                             int64_t(capacityBlocks) * blockFrames * kBusChannels * 4;
         map = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE,
                                  static_cast<DWORD>(size >> 32),
                                  static_cast<DWORD>(size & 0xffffffffu), mapName);
@@ -213,8 +218,8 @@ struct TestBus {
         put32(jb::asio::bus::kHeaderSizeOffset, jb::asio::bus::kHeaderSize);
         put32(jb::asio::bus::kSampleRateOffset, kBusSampleRate);
         put32(jb::asio::bus::kChannelsOffset, kBusChannels);
-        put32(jb::asio::bus::kBlockFramesOffset, kBusFrames);
-        put32(jb::asio::bus::kCapacityBlocksOffset, kBusCapacity);
+        put32(jb::asio::bus::kBlockFramesOffset, blockFrames);
+        put32(jb::asio::bus::kCapacityBlocksOffset, capacityBlocks);
         put32(jb::asio::bus::kReaderSlotCountFieldOffset, jb::asio::bus::kReaderSlotCount);
         put32(jb::asio::bus::kPayloadOffsetFieldOffset, jb::asio::bus::kPayloadOffset);
 
@@ -222,14 +227,14 @@ struct TestBus {
             base + jb::asio::bus::kWriteBlockIndexOffset);
         write->store(0, std::memory_order_release);
         payload = base + jb::asio::bus::kPayloadOffset;
-        blockBytes = int64_t(kBusFrames) * kBusChannels * 4;
+        blockBytes = int64_t(blockFrames) * kBusChannels * 4;
         return true;
     }
 
     void publish(int64_t block) {
         float* dst = reinterpret_cast<float*>(
-            payload + (block % kBusCapacity) * blockBytes);
-        for (int f = 0; f < kBusFrames; ++f)
+            payload + (block % capacityBlocks) * blockBytes);
+        for (int f = 0; f < blockFrames; ++f)
             for (int c = 0; c < kBusChannels; ++c)
                 dst[f * kBusChannels + c] = sampleFor(block, f, c);
         write->store(block + 1, std::memory_order_release);
@@ -680,6 +685,11 @@ struct AudioPathResult {
     long latencyInput = 0;
     long latencyExpectedInput = 0;
     long latencyOutput = 0;
+    // Strict no-op: at an exact rate match (the lockstep pass) the trim must not
+    // fire, or it would be a new click source. Asserted, not inferred.
+    long long trimsMatched = -1;
+    long long trimsFinal = -1;
+    bool trimNoOpPassed = false;
 };
 
 // Spawns the real C# VirtualBusWriter (BusWriterCli) so the contract is proven
@@ -795,6 +805,13 @@ AudioPathResult runAudioPathTests(const wchar_t* harnessDir) {
             lockstepTimeouts++;
     }
 
+    // Strict no-op assertion: the lockstep pass holds both sides at exactly the
+    // same rate, so the rate trim must not have slipped a single sample.
+    const long long trimsMatched =
+        claimedSlot >= 0 ? bus.slotValue(claimedSlot, jb::asio::bus::kSlotTrims) : -1;
+    r.trimsMatched = trimsMatched;
+    r.trimNoOpPassed = (trimsMatched == 0);
+
     // --- 2. gap: stop writing mid-run ----------------------------------------
     // The driver's clock keeps running with nothing to read: every later buffer
     // must be exactly zero, and the reader slot must tick once per callback.
@@ -864,6 +881,7 @@ AudioPathResult runAudioPathTests(const wchar_t* harnessDir) {
     r.callbacksPerSecond = cadenceSeconds > 0
         ? double(cadenceCallbacks) / cadenceSeconds
         : 0.0;
+    r.trimsFinal = claimedSlot >= 0 ? bus.slotValue(claimedSlot, jb::asio::bus::kSlotTrims) : -1;
 
     driver->disposeBuffers();
     driver->Release();
@@ -1018,11 +1036,251 @@ bool runExactCapacityLagTest() {
     return passed;
 }
 
+// ---- drift soak: matched vs mixed route, app geometry and harness ring ------
+//
+// A mixed route paces the writer off a physical device's WASAPI clock while the
+// driver's reader runs on QPC, so a fixed ppm offset between them is the defect.
+// The writer here publishes at 48 kHz * (1 + ppm/1e6) on QPC; the reader stays at
+// 48 kHz. Condition A is ppm 0 (matched), condition B is a real offset.
+
+struct SoakCell {
+    const wchar_t* label = L"";
+    int bufferSize = 0;
+    int blockFrames = 0;
+    int capacity = 0;
+    int ppm = 0;
+    double seconds = 0.0;
+    long callbacks = 0;
+    long long underruns = 0;
+    long long corrections = 0;
+    long long trims = 0;
+    long long lagMin = 0;
+    long long lagMax = 0;
+    long long lagFinal = 0;
+    long long lagTarget = 0;
+    bool ran = false;
+    bool passed = false;
+};
+
+struct DriftWriter {
+    TestBus* bus = nullptr;
+    double rate = 48000.0;
+    int64_t prePublished = 0;
+    std::atomic<bool> stop{false};
+    std::thread thread;
+
+    void start() { thread = std::thread([this] { run(); }); }
+    void join() { if (thread.joinable()) thread.join(); }
+
+    void run() noexcept {
+        const long long t0 = qpcTicks();
+        int64_t published = prePublished;
+        const double bf = double(bus->blockFrames);
+        while (!stop.load(std::memory_order_relaxed)) {
+            const double due = double(published - prePublished + 1) * bf / rate;
+            const double now = qpcSeconds(qpcTicks() - t0);
+            if (now >= due) {
+                bus->publish(published++);
+            } else if (due - now > 0.0015) {
+                Sleep(0);
+            } else {
+                YieldProcessor();
+            }
+        }
+    }
+};
+
+bool runSoakCell(const wchar_t* label, int blockFrames, int capacity, int bufferSize,
+                 int ppm, double seconds, SoakCell& c) {
+    c.label = label;
+    c.blockFrames = blockFrames;
+    c.capacity = capacity;
+    c.bufferSize = bufferSize;
+    c.ppm = ppm;
+    c.seconds = seconds;
+
+    wchar_t nameW[128];
+    char nameA[128];
+    swprintf_s(nameW, L"soak-%lu-%d-%d-%d-%d", GetCurrentProcessId(), blockFrames,
+               capacity, bufferSize, ppm);
+    sprintf_s(nameA, "soak-%lu-%d-%d-%d-%d", GetCurrentProcessId(), blockFrames,
+              capacity, bufferSize, ppm);
+
+    TestBus bus;
+    if (!bus.create(nameW, blockFrames, capacity)) {
+        wprintf(L"FATAL: soak could not create section %s\n", bus.mapName);
+        return false;
+    }
+
+    jb::asio::IASIO* driver = openDriver(nameA);
+    if (!driver) {
+        wprintf(L"FATAL: soak could not create the driver\n");
+        bus.close();
+        return false;
+    }
+
+    jb::asio::AsioCallbacks callbacks = {onBufferSwitch, onSampleRateChanged,
+                                         onAsioMessage, onBufferSwitchTimeInfo};
+    jb::asio::AsioBufferInfo infos[4] = {};
+    for (long i = 0; i < 2; ++i) {
+        infos[i].isInput = jb::asio::kAsioTrue;
+        infos[i].channelNum = i;
+        infos[2 + i].isInput = jb::asio::kAsioFalse;
+        infos[2 + i].channelNum = i;
+    }
+    if (driver->createBuffers(infos, 4, bufferSize, &callbacks) != jb::asio::kAseOk) {
+        wprintf(L"FATAL: soak createBuffers(%d) failed\n", bufferSize);
+        driver->Release();
+        bus.close();
+        return false;
+    }
+    for (int ch = 0; ch < kBusChannels; ++ch) {
+        g_inBuf[ch][0] = static_cast<const float*>(infos[ch].buffers[0]);
+        g_inBuf[ch][1] = static_cast<const float*>(infos[ch].buffers[1]);
+    }
+
+    // Seed half a ring and start the writer *before* the driver, so the reader
+    // attaches into a stream that is already running: no startup drain of the
+    // cushion and no spurious underrun/correction in the first few callbacks.
+    const int64_t pre = capacity / 2;
+    for (int64_t b = 0; b < pre; ++b) bus.publish(b);
+
+    DriftWriter writer;
+    writer.bus = &bus;
+    writer.rate = 48000.0 * (1.0 + double(ppm) / 1e6);
+    writer.prePublished = pre;
+    writer.start();
+    Sleep(50);
+
+    g_capture = nullptr;
+    g_callbacks.store(0);
+    if (driver->start() != jb::asio::kAseOk) {
+        wprintf(L"FATAL: soak start failed\n");
+        writer.stop.store(true);
+        writer.join();
+        driver->Release();
+        bus.close();
+        return false;
+    }
+
+    int slot = -1;
+    for (int i = 0; i < 200 && slot < 0; ++i) {
+        slot = bus.activeSlot();
+        if (slot < 0) Sleep(1);
+    }
+    if (slot < 0) {
+        wprintf(L"FATAL: soak has no reader slot\n");
+        driver->stop();
+        driver->disposeBuffers();
+        driver->Release();
+        bus.close();
+        return false;
+    }
+
+    long latIn = 0, latOut = 0;
+    driver->getLatencies(&latIn, &latOut);
+    c.lagTarget = latIn - bufferSize;  // the ring cushion, in frames
+
+    const long long t0 = qpcTicks();
+    long long lagMin = -1, lagMax = 0, lagFinal = 0;
+    while (qpcSeconds(qpcTicks() - t0) < seconds) {
+        Sleep(100);
+        const int64_t wb = bus.write->load(std::memory_order_acquire);
+        const int64_t rb = bus.slotValue(slot, jb::asio::bus::kSlotReadBlockIndex);
+        const long long lag = (wb - rb) * blockFrames;
+        if (lagMin < 0 || lag < lagMin) lagMin = lag;
+        if (lag > lagMax) lagMax = lag;
+        lagFinal = lag;
+    }
+
+    c.callbacks = g_callbacks.load();
+    c.underruns = bus.slotValue(slot, jb::asio::bus::kSlotUnderruns);
+    c.corrections = bus.slotValue(slot, jb::asio::bus::kSlotCorrections);
+    c.trims = bus.slotValue(slot, jb::asio::bus::kSlotTrims);
+    c.lagMin = lagMin;
+    c.lagMax = lagMax;
+    c.lagFinal = lagFinal;
+    c.ran = true;
+    // A matched cell must show no corrections, no underruns and no trims; a mixed
+    // cell additionally proves the trim actually tracked (trims > 0) and kept the
+    // lag inside the ring (never at capacity, never empty for long).
+    c.passed = (c.underruns == 0) && (c.corrections == 0) &&
+               (ppm == 0 ? c.trims == 0 : c.trims > 0) &&
+               c.lagMin >= 0 &&
+               c.lagMax <= (long long)capacity * blockFrames;
+
+    writer.stop.store(true);
+    writer.join();
+    driver->stop();
+    driver->disposeBuffers();
+    driver->Release();
+    bus.close();
+    return true;
+}
+
+int runSoakMatrix(double seconds, int ppm) {
+    const wchar_t* sizesLabel[4] = {L"128", L"256", L"512", L"1024"};
+    const int sizes[4] = {128, 256, 512, 1024};
+
+    wprintf(L"\n== drift soak: %.0f s per cell, mixed offset %d ppm ==\n", seconds, ppm);
+    wprintf(L"condition A is 0 ppm (matched); B is %d ppm. Harness ring = 128-frame "
+            L"blocks x 16; app ring = 480 x 64.\n", ppm);
+
+    int failures = 0;
+    for (int geom = 0; geom < 2; ++geom) {
+        const int blockFrames = geom == 0 ? kBusFrames : 480;
+        const int capacity = geom == 0 ? kBusCapacity : 64;
+        for (int cond = 0; cond < 2; ++cond) {
+            const int cellPpm = cond == 0 ? 0 : ppm;
+            for (int s = 0; s < 4; ++s) {
+                // The 16-block harness ring cannot hold a 512- or 1024-frame host
+                // plus its cushion (cushion is capped at capacity-3 blocks, so
+                // only 3 blocks of headroom = 384 frames). Those sizes run on the
+                // app's 64-block ring only; running them here would test the ring
+                // geometry, not the trim.
+                if (geom == 0 && sizes[s] > 256) continue;
+                SoakCell c;
+                const wchar_t* label = cond == 0 ? L"A matched" : L"B mixed";
+                wprintf(L"\n-- %ls | %ls | buffer %d | ring %d x %d --\n", label,
+                        geom == 0 ? L"harness" : L"app", sizes[s], blockFrames, capacity);
+                if (!runSoakCell(label, blockFrames, capacity, sizes[s], cellPpm, seconds, c)) {
+                    failures++;
+                    continue;
+                }
+                wprintf(L"callbacks %ld  underruns %lld  corrections %lld  trims %lld\n",
+                        c.callbacks, c.underruns, c.corrections, c.trims);
+                wprintf(L"lag frames min/max/final %lld/%lld/%lld  target %lld  %ls\n",
+                        c.lagMin, c.lagMax, c.lagFinal, c.lagTarget,
+                        c.passed ? L"PASS" : L"FAIL");
+                if (!c.passed) failures++;
+            }
+        }
+    }
+    wprintf(L"\nsoak result: %s (%d failing cells)\n",
+            failures == 0 ? L"PASS" : L"FAIL", failures);
+    return failures;
+}
+
 }  // namespace
+
+// --soak [seconds] [ppm]: the drift matrix, no normal suite. Seconds defaults to
+// 45 (shortened from the 1200 s spec; pass 1200 for the full run), ppm to 800.
+static bool parseSoakArgs(int argc, wchar_t** argv, double& seconds, int& ppm) {
+    seconds = 45.0;
+    ppm = 800;
+    for (int i = 1; i < argc; ++i) {
+        if (wcscmp(argv[i], L"--soak") == 0) {
+            if (i + 1 < argc) seconds = _wtof(argv[i + 1]);
+            if (i + 2 < argc) ppm = _wtoi(argv[i + 2]);
+            return true;
+        }
+    }
+    return false;
+}
 
 int wmain(int argc, wchar_t** argv) {
     wchar_t dllPath[MAX_PATH] = {};
-    if (argc > 1) {
+    if (argc > 1 && wcscmp(argv[1], L"--soak") != 0) {
         wcscpy_s(dllPath, argv[1]);
     } else {
         GetModuleFileNameW(nullptr, dllPath, MAX_PATH);
@@ -1041,6 +1299,15 @@ int wmain(int argc, wchar_t** argv) {
     if (FAILED(hr)) {
         wprintf(L"FATAL: CoInitializeEx 0x%08lX\n", static_cast<unsigned long>(hr));
         return 1;
+    }
+
+    double soakSeconds = 0.0;
+    int soakPpm = 0;
+    if (parseSoakArgs(argc, argv, soakSeconds, soakPpm)) {
+        const int failures = runSoakMatrix(soakSeconds, soakPpm);
+        CoUninitialize();
+        unregisterInHkcu();
+        return failures == 0 ? 0 : 2;
     }
 
     // --attach [busName] [hostFrames]: read-only watch of the section a running
@@ -1199,6 +1466,8 @@ int wmain(int argc, wchar_t** argv) {
     wprintf(L"reported latency  : in %ld (expected %ld), out %ld %s\n",
             audio.latencyInput, audio.latencyExpectedInput, audio.latencyOutput,
             audio.latencyPassed ? L"OK" : L"WRONG");
+    wprintf(L"rate trim         : matched %lld, final %lld (no-op at match: %s)\n",
+            audio.trimsMatched, audio.trimsFinal, audio.trimNoOpPassed ? L"yes" : L"NO");
     if (audio.crossLanguageRan) {
         wprintf(L"cross-language    : ran (%ld matched, %ld mismatched, %ld silence)\n",
                 audio.crossLanguageMatched, audio.crossLanguageMismatched,
@@ -1209,7 +1478,8 @@ int wmain(int argc, wchar_t** argv) {
     wprintf(L"exact-capacity    : %s\n", capacityLagPassed ? L"PASS" : L"FAIL");
 
     const bool audioPassed = audio.bitExactPassed && audio.gapPassed &&
-                             audio.latencyPassed && capacityLagPassed &&
+                             audio.latencyPassed && audio.trimNoOpPassed &&
+                             capacityLagPassed &&
                              audio.callbacksPerSecond > 350.0 &&
                              audio.callbacksPerSecond < 400.0 &&
                              (!audio.crossLanguageRan || audio.crossLanguagePassed);

@@ -48,6 +48,12 @@ constexpr int32_t kSlotReadBlockIndex = 0;
 constexpr int32_t kSlotCorrections = 8;
 constexpr int32_t kSlotUnderruns = 16;
 constexpr int32_t kSlotActive = 24;
+// Native-reader-private diagnostic, in the otherwise unused tail of the 64-byte
+// reader slot (32..63). BusLayout.cs defines 0/8/16/24 only, so the app never
+// reads this. It lives here rather than in BusLayout because the native tree
+// owns the trim and the app tree is out of scope; it is not part of the shared
+// contract and must not be treated as one.
+constexpr int32_t kSlotTrims = 32;
 
 // The section lives in the calling session, so an in-process host (obs-asio)
 // sees the same one the app created.
@@ -155,6 +161,8 @@ public:
         m_corrections = asI64(slotBase + kSlotCorrections);
         m_underruns = asI64(slotBase + kSlotUnderruns);
         m_slotActive = asI32(slotBase + kSlotActive);
+        m_trims = asI64(slotBase + kSlotTrims);
+        m_trims->store(0, std::memory_order_release);
 
         // Join `prefillFrames` behind the writer. 0 = newest block: attaching
         // mid-stream must not replay old audio into the host.
@@ -183,6 +191,20 @@ public:
         }
         m_cursorBlock = joined;
         m_cursorFrame = 0;
+        m_trimTarget = m_cushionFrames;
+        // 4 s span, kept a whole number of blocks so the sawtooth washes out.
+        m_trimPeriodFrames =
+            (blockFrames > 0 ? (4 * 48000 / blockFrames) * blockFrames : 4 * 48000);
+        m_trimPeriodEnd = m_trimPeriodFrames;
+        m_trimOutFrames = 0;
+        m_trimLagSum = 0.0;
+        m_trimLagCount = 0;
+        m_trimBaseMeanLag = 0.0;
+        m_trimFramesBase = 0;
+        m_trimSlipsSinceBase = 0;
+        m_trimBaseSet = false;
+        m_trimRate = 0.0;
+        m_trimSlipAccum = 0.0;
         m_read->store(joined, std::memory_order_release);
         return true;
     }
@@ -200,6 +222,11 @@ public:
         m_cursorBlock = 0;
         m_cursorFrame = 0;
         m_cushionFrames = 0;
+        m_trims = nullptr;
+        m_trimTarget = 0;
+        m_trimRate = 0.0;
+        m_trimSlipAccum = 0.0;
+        m_trimBaseSet = false;
     }
 
     // Streams exactly `frames` frames into `dst` as deinterleaved float32,
@@ -226,6 +253,7 @@ public:
             m_read->store(m_cursorBlock, std::memory_order_release);
             return;
         }
+        bool corrected = false;
         if (written - m_cursorBlock >= m_capacity) {
             // At exactly `capacity` blocks behind, `m_cursorBlock % capacity` is
             // the same payload slot as `written % capacity`: the slot the writer
@@ -236,15 +264,124 @@ public:
             m_cursorBlock = written - 1;
             m_cursorFrame = 0;
             m_corrections->fetch_add(1, std::memory_order_relaxed);
+            corrected = true;
         }
 
         const int32_t channels = m_channels;
         const int32_t blockFrames = m_blockFrames;
+
+        // --- one-frame rate trim ------------------------------------------------
+        // A mixed route paces the writer off the physical device's WASAPI clock
+        // while this reader runs on QPC at 48 kHz, so the cursor creeps toward
+        // empty (underrun) or toward capacity (a dropped block) as a periodic
+        // click. Track the writer by slipping the cursor one input sample, never
+        // more, so no discontinuity is ever larger than one sample.
+        //
+        // It is a *rate* trim, not a position jump. Over a span it measures the
+        // drift directly: the lag moved dLag blocks and `slips` samples were
+        // slipped, so the writer really moved dLag*blockFrames + slips frames
+        // more than the reader. When that exceeds 1.5 blocks it is a real rate
+        // difference, not the whole-block publication sawtooth, and the measured
+        // rate (drift / span) is added to a *persistent* slip rate. A persistent
+        // rate matters: a bang-bang trim stops when the lag returns and lets the
+        // drift push it out again, so the lag creeps. With the rate held, the lag
+        // stays flat and the residual is corrected on the next span.
+        //
+        // At an exact rate match dLag is 0 (or +-1 block from block quantisation),
+        // no samples are slipped, and |drift| stays below the 1.5-block deadband
+        // forever: strict no-op, so the trim cannot become a click source. A
+        // sample is slipped at most once per read, inaudible at 48 kHz.
+        //
+        // The count equals the drift volume: zero when the clocks agree, one per
+        // slipped frame when they do not (one slip cancels one frame of error). A
+        // count that climbs is *reporting* a real difference, not masking it. A
+        // difference too large for one slip per read (1/frames) is left to grow
+        // into a correction on purpose. Trims never touch the corrections counter:
+        // a trim is not a correction.
+        int trimDir = 0;  // +1 drop one input frame, -1 hold one input frame
+        if (m_trims) {
+            if (corrected) {
+                m_trimRate = 0.0;
+                m_trimSlipAccum = 0.0;
+                m_trimBaseSet = false;
+                m_trimLagSum = 0.0;
+                m_trimLagCount = 0;
+                m_trimFramesBase = m_trimOutFrames;
+                m_trimSlipsSinceBase = 0;
+            } else if (m_trimTarget > 0) {
+                // Mean lag over a span, not a block count: the sawtooth from
+                // whole-block publication averages out, so the drift estimate is
+                // sub-frame accurate. Quantising to whole blocks would turn a
+                // 0.6-block drift into a 1-block estimate (1.6x too fast).
+                const int64_t lagFrames =
+                    (written - m_cursorBlock) * static_cast<int64_t>(blockFrames) - m_cursorFrame;
+                m_trimLagSum += static_cast<double>(lagFrames);
+                ++m_trimLagCount;
+
+                m_trimSlipAccum += m_trimRate * static_cast<double>(frames);
+                if (m_trimSlipAccum >= 1.0) {
+                    trimDir = 1;
+                    m_trimSlipAccum -= 1.0;
+                    ++m_trimSlipsSinceBase;
+                    m_trims->fetch_add(1, std::memory_order_relaxed);
+                } else if (m_trimSlipAccum <= -1.0) {
+                    trimDir = -1;
+                    m_trimSlipAccum += 1.0;
+                    --m_trimSlipsSinceBase;
+                    m_trims->fetch_add(1, std::memory_order_relaxed);
+                }
+
+                m_trimOutFrames += frames;
+                if (m_trimOutFrames >= m_trimPeriodEnd && m_trimLagCount > 0) {
+                    const double mean = m_trimLagSum / static_cast<double>(m_trimLagCount);
+                    const double deadband = 0.5 * static_cast<double>(blockFrames);
+                    if (!m_trimBaseSet) {
+                        m_trimBaseMeanLag = mean;
+                        m_trimFramesBase = m_trimOutFrames;
+                        m_trimSlipsSinceBase = 0;
+                        m_trimBaseSet = true;
+                    } else {
+                        // Drift since the last correction: how far the mean lag
+                        // moved, plus the samples already slipped (a slip moves it
+                        // back by one). This is the writer's real excess in frames.
+                        const double drift =
+                            (mean - m_trimBaseMeanLag) + static_cast<double>(m_trimSlipsSinceBase);
+                        const int64_t span = m_trimOutFrames - m_trimFramesBase;
+                        if (span > 0 && (drift >= deadband || drift <= -deadband)) {
+                            // Re-estimate the *absolute* rate, not an increment:
+                            // `drift` already includes the samples slipped by the
+                            // current rate, so it is the writer's true excess over
+                            // the span. Adding it to the old rate compounds and
+                            // over-corrects; assigning keeps it exact.
+                            m_trimRate = drift / static_cast<double>(span);
+                            m_trimBaseMeanLag = mean;
+                            m_trimFramesBase = m_trimOutFrames;
+                            m_trimSlipsSinceBase = 0;
+                        }
+                    }
+                    m_trimLagSum = 0.0;
+                    m_trimLagCount = 0;
+                    m_trimPeriodEnd = m_trimOutFrames + m_trimPeriodFrames;
+                }
+            }
+        }
+        if (trimDir > 0) {
+            // Consume one frame with no output. A drop only fires after the lag
+            // measured past the deadband, so it cannot step into an unpublished
+            // block.
+            ++m_cursorFrame;
+            if (m_cursorFrame >= blockFrames) {
+                m_cursorFrame = 0;
+                ++m_cursorBlock;
+            }
+        }
+
         const int ch = dstChannels < channels ? dstChannels : channels;
+        const int toConsume = trimDir < 0 ? frames - 1 : frames;
         int produced = 0;
-        while (produced < frames && m_cursorBlock < written) {
+        while (produced < toConsume && m_cursorBlock < written) {
             const int32_t avail = blockFrames - m_cursorFrame;
-            int run = frames - produced;
+            int run = toConsume - produced;
             if (run > avail) run = avail;
 
             const auto* src = reinterpret_cast<const float*>(
@@ -264,6 +401,18 @@ public:
                 m_cursorFrame = 0;
                 ++m_cursorBlock;
             }
+        }
+
+        if (trimDir < 0 && produced == toConsume && produced > 0) {
+            // Hold the last input frame for the one output frame we did not read:
+            // a single-sample hold, never a jump.
+            for (int c = 0; c < ch; ++c) {
+                float* d = dst[c];
+                if (!d) continue;
+                const float hold = d[produced - 1];
+                for (int i = produced; i < frames; ++i) d[i] = hold;
+            }
+            produced = frames;
         }
 
         if (produced < frames) m_underruns->fetch_add(1, std::memory_order_relaxed);
@@ -318,6 +467,23 @@ private:
     int64_t m_cursorBlock = 0;
     int32_t m_cursorFrame = 0;
     int32_t m_cushionFrames = 0;
+    // Rate trim state. m_trimTarget is the cushion in frames (the anchor, and
+    // the enable gate). Drift is measured as the lag change plus the samples
+    // already slipped; when it exceeds 1.5 blocks the measured rate is folded
+    // into a persistent slip rate so the lag stops moving instead of creeping.
+    int64_t m_trimTarget = 0;
+    std::atomic<int64_t>* m_trims = nullptr;
+    int64_t m_trimPeriodFrames = 0;   // measurement span, output frames (4 s)
+    int64_t m_trimPeriodEnd = 0;
+    int64_t m_trimOutFrames = 0;
+    double m_trimLagSum = 0.0;        // lag frames summed over the span
+    int64_t m_trimLagCount = 0;
+    double m_trimBaseMeanLag = 0.0;   // mean lag at the last rate update
+    int64_t m_trimFramesBase = 0;
+    int64_t m_trimSlipsSinceBase = 0; // signed: +1 per drop, -1 per hold
+    bool m_trimBaseSet = false;
+    double m_trimRate = 0.0;          // persistent slip rate, frames per frame
+    double m_trimSlipAccum = 0.0;
 
     std::atomic<int64_t>* m_write = nullptr;
     std::atomic<int64_t>* m_read = nullptr;

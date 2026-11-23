@@ -59,6 +59,16 @@ wrap. The chosen cushion is logged once at attach (debug output).
 `RingReader::attach` used, so the number follows the cushion if it changes. The
 output path is a virtual sink the driver never writes, so it reports one buffer.
 
+The reader also runs a one-frame rate trim. When a bus shares a route with a
+physical device the writer is paced by that device's WASAPI clock while the
+reader runs on QPC, so the two clocks differ by a fixed ppm. The trim measures
+that difference from the mean lag over a span and slips the cursor by a single
+input sample (never more) at a persistent rate, so the lag stays bounded instead
+of creeping to empty or to a dropped block. At an exact rate match the measured
+drift stays inside half a block and the trim performs no slips at all. A separate
+`trims` counter in the reader slot reports the count; it is not a correction and
+does not touch the corrections counter.
+
 If the section is absent at `start()`, the driver serves silence and retries
 attaching at most **once per second** from the clock thread, never per callback.
 `getErrorMessage` reports which bus it is waiting for. A `JOCKEYBOX_ASIO_BUS`
