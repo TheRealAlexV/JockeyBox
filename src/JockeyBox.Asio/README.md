@@ -48,13 +48,23 @@ more than one block.
 
 On attach the reader joins the stream behind the writer instead of exactly at the
 newest block: `3 * bufferSize` frames, raised to at least three ring blocks and
-clamped to half the ring. The cushion is required, not cosmetic — the writer
-publishes in whole blocks, so a reader sitting one block behind is exactly at the
-writer's own block-quantisation amplitude and starves at every wrap.
+capped two blocks below the ring's capacity (so the cursor's slot can never be
+the slot the writer is about to `memcpy`). The cushion is required, not cosmetic
+— the writer publishes in whole blocks, so a reader sitting one block behind is
+exactly at the writer's own block-quantisation amplitude and starves at every
+wrap. The chosen cushion is logged once at attach (debug output).
+
+`getLatencies` reports that cushion honestly: input latency is
+`bufferSize + cushionFrames`, where `cushionFrames` is the effective value
+`RingReader::attach` used, so the number follows the cushion if it changes. The
+output path is a virtual sink the driver never writes, so it reports one buffer.
 
 If the section is absent at `start()`, the driver serves silence and retries
 attaching at most **once per second** from the clock thread, never per callback.
-`getErrorMessage` reports which bus it is waiting for.
+`getErrorMessage` reports which bus it is waiting for. A `JOCKEYBOX_ASIO_BUS`
+longer than the 63 characters the ring namespace accepts is reported distinctly
+(it never silently falls back to `main`), so the host can see why the bus will
+not attach.
 
 ## No SDK code
 

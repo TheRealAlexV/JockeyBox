@@ -156,18 +156,28 @@ public:
         m_underruns = asI64(slotBase + kSlotUnderruns);
         m_slotActive = asI32(slotBase + kSlotActive);
 
-        // Join `prefillFrames` behind the writer, clamped to half the ring so a
-        // cushion can never crowd out the producer. 0 = newest block: attaching
-        // mid-stream must not replay old audio into the host. At least three
-        // blocks of cushion, because the writer publishes in whole blocks: a
-        // reader sitting one block behind is exactly at the writer's own
-        // block-quantisation amplitude and starves on every wrap.
+        // Join `prefillFrames` behind the writer. 0 = newest block: attaching
+        // mid-stream must not replay old audio into the host.
+        //
+        // Floor the cushion at three blocks: the writer publishes in whole
+        // blocks, so a reader one block behind sits exactly at the writer's own
+        // block-quantisation amplitude and starves on every wrap. Cap it two
+        // whole blocks below the ring's capacity, not capacity/2: a host buffer
+        // as large as 1024 frames needs more than half a small ring to survive
+        // one late wake, and at lag == capacity the cursor's slot aliases the
+        // slot the writer is about to memcpy (the torn window read() guards).
+        // RingReader::attach records the effective cushion for getLatencies() so
+        // a dynamic choice is reported exactly, never as a hard-coded count.
         int64_t joined = m_write->load(std::memory_order_acquire);
         if (prefillFrames > 0) {
             int64_t blocks = (static_cast<int64_t>(prefillFrames) + blockFrames - 1) / blockFrames;
             if (blocks < 3) blocks = 3;
-            const int64_t cap = m_capacity > 1 ? m_capacity / 2 : 1;
+            int64_t cap = m_capacity > 3
+                              ? static_cast<int64_t>(m_capacity) - 2
+                              : (m_capacity > 1 ? static_cast<int64_t>(m_capacity) - 1 : 1);
+            if (cap < 1) cap = 1;
             if (blocks > cap) blocks = cap;
+            m_cushionFrames = static_cast<int32_t>(blocks * blockFrames);
             joined -= blocks;
             if (joined < 0) joined = 0;
         }
@@ -189,6 +199,7 @@ public:
         m_slot = -1;
         m_cursorBlock = 0;
         m_cursorFrame = 0;
+        m_cushionFrames = 0;
     }
 
     // Streams exactly `frames` frames into `dst` as deinterleaved float32,
@@ -215,9 +226,13 @@ public:
             m_read->store(m_cursorBlock, std::memory_order_release);
             return;
         }
-        if (written - m_cursorBlock > m_capacity) {
-            // Everything up to the newest published block is gone; resume at the
-            // newest one rather than replaying overwritten audio.
+        if (written - m_cursorBlock >= m_capacity) {
+            // At exactly `capacity` blocks behind, `m_cursorBlock % capacity` is
+            // the same payload slot as `written % capacity`: the slot the writer
+            // is about to memcpy (it advances lapped readers before CopyTo). The
+            // C# reader re-reads the published slot and is safe; matching it here
+            // means correcting at >= capacity, not just >. Resume at the newest
+            // published block rather than replaying overwritten audio.
             m_cursorBlock = written - 1;
             m_cursorFrame = 0;
             m_corrections->fetch_add(1, std::memory_order_relaxed);
@@ -257,6 +272,10 @@ public:
 
     int32_t channels() const noexcept { return m_channels; }
     int32_t blockFrames() const noexcept { return m_blockFrames; }
+    // Whole-block cushion actually used by attach(), in frames. 0 until attached,
+    // or when attached at the newest block. getLatencies() adds this to the host
+    // buffer to report the real input delay.
+    int32_t cushionFrames() const noexcept { return m_cushionFrames; }
     int slot() const noexcept { return m_slot; }
     // The block currently being consumed. The frame offset inside it is not
     // published: `readBlockIndex` advances by one per whole block consumed and
@@ -298,6 +317,7 @@ private:
     // into it. Forward-only; not atomic, because only the clock thread reads.
     int64_t m_cursorBlock = 0;
     int32_t m_cursorFrame = 0;
+    int32_t m_cushionFrames = 0;
 
     std::atomic<int64_t>* m_write = nullptr;
     std::atomic<int64_t>* m_read = nullptr;

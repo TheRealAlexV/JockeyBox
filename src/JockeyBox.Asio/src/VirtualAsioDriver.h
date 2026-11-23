@@ -107,8 +107,11 @@ private:
     // clock thread calls read()/attachBus(); start/stop own the lifetime.
     bus::RingReader m_ring;
     char m_busName[72] = {};
-    enum BusState : long { kBusAbsent = 0, kBusAttached = 1 };
+    enum BusState : long { kBusAbsent = 0, kBusAttached = 1, kBusNameInvalid = 2 };
     std::atomic<long> m_busState{kBusAbsent};
+    // Effective ring cushion in frames, published by attachBus() from the
+    // reader. getLatencies() reports it on top of one host buffer.
+    std::atomic<long> m_cushionFrames{0};
     long long m_lastBusAttempt = 0;  // QPC ticks, clock thread only
     LARGE_INTEGER m_qpcFreq{};
 };

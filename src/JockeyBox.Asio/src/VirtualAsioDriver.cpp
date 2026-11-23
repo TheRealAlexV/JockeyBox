@@ -30,6 +30,14 @@ double seconds(LARGE_INTEGER freq, long long ticks) {
     return double(ticks) / double(freq.QuadPart);
 }
 
+// One diagnostic line per event, to the debugger/debug log. The driver has no
+// console of its own and must never throw from the clock thread.
+void logOnce(const char* message) noexcept {
+    char line[256];
+    _snprintf_s(line, sizeof(line), _TRUNCATE, "JockeyBox ASIO: %s\n", message);
+    ::OutputDebugStringA(line);
+}
+
 }  // namespace
 
 VirtualAsioDriver::VirtualAsioDriver() = default;
@@ -81,20 +89,42 @@ long JB_ASIO_CALL VirtualAsioDriver::getDriverVersion() { return 1; }
 
 void JB_ASIO_CALL VirtualAsioDriver::getErrorMessage(char* text) {
     if (!text) return;
-    if (m_busState.load(std::memory_order_relaxed) == kBusAttached) {
-        _snprintf_s(text, 124, _TRUNCATE, "JockeyBox Virtual ASIO: reading bus '%s'", m_busName);
-    } else {
-        _snprintf_s(text, 124, _TRUNCATE,
-                    "JockeyBox Virtual ASIO: bus '%s' not attached; serving silence, "
-                    "retrying once a second", m_busName);
+    switch (m_busState.load(std::memory_order_relaxed)) {
+        case kBusAttached:
+            _snprintf_s(text, 124, _TRUNCATE,
+                        "JockeyBox Virtual ASIO: reading bus '%s'", m_busName);
+            break;
+        case kBusNameInvalid:
+            // Distinct from "not attached": retrying cannot help a name the ring
+            // namespace rejects, so tell the host why the bus never appears.
+            _snprintf_s(text, 124, _TRUNCATE,
+                        "JockeyBox Virtual ASIO: JOCKEYBOX_ASIO_BUS is longer than 63 "
+                        "characters; bus not attached, serving silence");
+            break;
+        default:
+            _snprintf_s(text, 124, _TRUNCATE,
+                        "JockeyBox Virtual ASIO: bus '%s' not attached; serving silence, "
+                        "retrying once a second",
+                        m_busName[0] ? m_busName : "main");
+            break;
     }
 }
 
 void VirtualAsioDriver::resolveBusName() noexcept {
     if (m_busName[0]) return;
+    if (m_busState.load(std::memory_order_relaxed) == kBusNameInvalid) return;
+    // GetEnvironmentVariableA returns the required size, including the NUL, when
+    // the buffer is too small. A result >= sizeof(value) means the configured
+    // name does not fit the 64-char limit RingReader::attach enforces. Do not
+    // fall back to "main": that silently attaches a bus the host never asked
+    // for. Record the distinct state so getErrorMessage can explain it.
     char value[64] = {};
     const DWORD n = GetEnvironmentVariableA("JOCKEYBOX_ASIO_BUS", value, sizeof(value));
-    if (n == 0 || n >= sizeof(value)) {
+    if (n >= sizeof(value)) {
+        m_busState.store(kBusNameInvalid, std::memory_order_relaxed);
+        return;
+    }
+    if (n == 0) {
         strcpy_s(m_busName, "main");
     } else {
         strcpy_s(m_busName, value);
@@ -102,15 +132,29 @@ void VirtualAsioDriver::resolveBusName() noexcept {
 }
 
 void VirtualAsioDriver::attachBus() noexcept {
-    // Join three host buffers behind the writer. The ring block (480) is not a
-    // divisor of the host buffer (128/256/512/1024), so without a cushion the
-    // reader lands on the writer's block edge and starves. Three buffers covers
-    // one callback plus the writer's block quantisation and scheduler jitter.
+    if (m_busState.load(std::memory_order_relaxed) == kBusNameInvalid) return;
+    // Join a cushion sized from the host buffer: `3 * bufferSize` frames, floored
+    // at three ring blocks and capped two blocks below capacity by
+    // RingReader::attach. Scaling with bufferSize keeps a 1024-frame host more
+    // than two callbacks of slack behind the writer; the old capacity/2 ceiling
+    // gave a default 8-block ring only 4 blocks and starved on one late wake.
     const int32_t prefill = static_cast<int32_t>(3 * m_bufferSize);
-    if (m_ring.attach(m_busName, prefill))
+    if (m_ring.attach(m_busName, prefill)) {
+        const int32_t cushion = m_ring.cushionFrames();
+        m_cushionFrames.store(cushion, std::memory_order_relaxed);
+        const int32_t blockFrames = m_ring.blockFrames();
+        char line[200];
+        _snprintf_s(line, sizeof(line), _TRUNCATE,
+                    "bus '%s' attached: cushion %ld frames (%ld blocks of %ld), "
+                    "host buffer %ld",
+                    m_busName, static_cast<long>(cushion),
+                    static_cast<long>(blockFrames > 0 ? cushion / blockFrames : 0),
+                    static_cast<long>(blockFrames), static_cast<long>(m_bufferSize));
+        logOnce(line);
         m_busState.store(kBusAttached, std::memory_order_relaxed);
-    else
+    } else {
         m_busState.store(kBusAbsent, std::memory_order_relaxed);
+    }
 }
 
 AsioError JB_ASIO_CALL VirtualAsioDriver::start() {
@@ -164,7 +208,15 @@ AsioError JB_ASIO_CALL VirtualAsioDriver::getChannels(long* numInputChannels,
 AsioError JB_ASIO_CALL VirtualAsioDriver::getLatencies(long* inputLatency,
                                                        long* outputLatency) {
     if (!inputLatency || !outputLatency) return kAseInvalidParameter;
-    *inputLatency = m_bufferSize;
+    // Input the host actually records:
+    //   inputLatency = bufferSize + cushionFrames
+    // One host buffer is the block currently being filled; cushionFrames is the
+    // effective ring cushion the reader joined behind the writer, read from the
+    // same value RingReader::attach used. Deriving it there means a dynamic
+    // cushion is reported as it changes, not as a literal 3 buffers. Without a
+    // bus (cushion 0) one buffer is the honest floor. The output path is a
+    // virtual sink this driver never writes, so one buffer stays honest.
+    *inputLatency = m_bufferSize + m_cushionFrames.load(std::memory_order_relaxed);
     *outputLatency = m_bufferSize;
     return kAseOk;
 }
@@ -346,6 +398,37 @@ void VirtualAsioDriver::clockLoop() {
     LARGE_INTEGER freq;
     QueryPerformanceFrequency(&freq);
 
+    // Raise this thread before the loop so a late wake cannot slip past a
+    // callback. Both escalations are best-effort: a host or policy that forbids
+    // them still gets a working clock, so failure is logged and swallowed,
+    // never thrown. The final spin below stays as the last-resort clock.
+    if (!::SetThreadPriority(::GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL))
+        logOnce("SetThreadPriority(THREAD_PRIORITY_TIME_CRITICAL) failed; clock still runs");
+
+    // MMCSS "Pro Audio" via avrt.dll, loaded dynamically so the DLL gains no
+    // link dependency. Tolerate a missing export (older/preview Windows).
+    using AvSetFn = HANDLE(WINAPI*)(LPCWSTR, LPDWORD);
+    using AvRevertFn = BOOL(WINAPI*)(HANDLE);
+    HMODULE avrt = ::LoadLibraryW(L"avrt.dll");
+    HANDLE mmcss = nullptr;
+    AvRevertFn mmcssRevert = nullptr;
+    if (avrt) {
+        FARPROC setProc = ::GetProcAddress(avrt, "AvSetMmThreadCharacteristicsW");
+        FARPROC revertProc = ::GetProcAddress(avrt, "AvRevertMmThreadCharacteristics");
+        AvSetFn mmcssSet = nullptr;
+        static_assert(sizeof(mmcssSet) == sizeof(setProc), "FARPROC and function pointer differ");
+        static_assert(sizeof(mmcssRevert) == sizeof(revertProc),
+                      "FARPROC and function pointer differ");
+        std::memcpy(&mmcssSet, &setProc, sizeof(mmcssSet));
+        std::memcpy(&mmcssRevert, &revertProc, sizeof(mmcssRevert));
+        if (mmcssSet) {
+            DWORD taskIndex = 0;
+            mmcss = mmcssSet(L"Pro Audio", &taskIndex);
+        }
+    }
+    if (!mmcss)
+        logOnce("MMCSS 'Pro Audio' unavailable; running on priority alone");
+
     const double period = double(m_bufferSize) / kSampleRate;
     const long long start = qpcNow(freq);
     double next = seconds(freq, start);
@@ -353,8 +436,10 @@ void VirtualAsioDriver::clockLoop() {
 
     while (m_running.load(std::memory_order_relaxed)) {
         // Reattach at most once a second: a missing section must not turn into
-        // per-callback work, and the retry allocates. Until then, silence.
-        if (!m_ring.attached()) {
+        // per-callback work, and the retry allocates. Until then, silence. An
+        // invalid name can never attach, so skip the loop entirely.
+        if (!m_ring.attached() &&
+            m_busState.load(std::memory_order_relaxed) != kBusNameInvalid) {
             const long long nowTicks = qpcNow(freq);
             if (nowTicks - m_lastBusAttempt >= freq.QuadPart) {
                 m_lastBusAttempt = nowTicks;
@@ -390,6 +475,9 @@ void VirtualAsioDriver::clockLoop() {
         const double after = seconds(freq, qpcNow(freq));
         if (after - next > 0.25) next = after + period;  // drop a backlog
     }
+
+    if (mmcss && mmcssRevert) mmcssRevert(mmcss);
+    if (avrt) ::FreeLibrary(avrt);
 }
 
 void VirtualAsioDriver::fire(long bufferIndex) {

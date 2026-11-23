@@ -673,6 +673,13 @@ struct AudioPathResult {
     long crossLanguageMatched = 0;
     long crossLanguageMismatched = 0;
     long crossLanguageSilent = 0;
+    // Reported input latency must equal bufferSize + the ring cushion the reader
+    // actually joined behind the writer (not a hard-coded buffer count).
+    bool latencyRan = false;
+    bool latencyPassed = false;
+    long latencyInput = 0;
+    long latencyExpectedInput = 0;
+    long latencyOutput = 0;
 };
 
 // Spawns the real C# VirtualBusWriter (BusWriterCli) so the contract is proven
@@ -741,6 +748,25 @@ AudioPathResult runAudioPathTests(const wchar_t* harnessDir) {
         driver->Release();
         bus.close();
         return r;
+    }
+
+    // --- 0. reported latency follows the cushion ------------------------------
+    // TestBus is 16 blocks of 128 frames and createBuffers asked for 128. The
+    // driver requests 3*128 frames of cushion; the reader floors that at three
+    // blocks, so input = 128 + 3*128 = 512 while the virtual output stays 128.
+    {
+        long inLat = 0, outLat = 0;
+        driver->getLatencies(&inLat, &outLat);
+        const long expectedCushion = 3 * kBusFrames;
+        const long expectedIn = kBusFrames + expectedCushion;
+        r.latencyRan = true;
+        r.latencyInput = inLat;
+        r.latencyExpectedInput = expectedIn;
+        r.latencyOutput = outLat;
+        r.latencyPassed = (inLat == expectedIn && outLat == kBusFrames);
+        wprintf(L"reported latency  : in %ld (expected %ld), out %ld (expected %ld) %s\n",
+                inLat, expectedIn, outLat, static_cast<long>(kBusFrames),
+                r.latencyPassed ? L"OK" : L"WRONG");
     }
 
     // --- 1. bit-exactness, in lockstep with the reader --------------------
@@ -927,6 +953,71 @@ AudioPathResult runAudioPathTests(const wchar_t* harnessDir) {
     return r;
 }
 
+// Pins the read guard at exactly `capacity` blocks of lag. At that distance the
+// cursor's payload slot is the same slot the writer is about to memcpy (the C#
+// writer advances lapped readers before CopyTo, i.e. while the index still names
+// the previous block). A reader that only corrects at `> capacity` would serve a
+// half-overwritten block, so this drives the writer's memcpy half-done and
+// asserts the served frames are the newest complete block or silence, never a
+// torn mix of the two blocks sharing that slot.
+bool runExactCapacityLagTest() {
+    wprintf(L"\n== torn-read guard at exactly capacity ==\n");
+    const wchar_t* nameW = L"torn-capacity";
+    const char* nameA = "torn-capacity";
+    TestBus bus;
+    if (!bus.create(nameW)) {
+        wprintf(L"exact-capacity  : FAIL (could not create section)\n");
+        return false;
+    }
+    for (int64_t b = 0; b < kBusCapacity; ++b) bus.publish(b);
+
+    jb::asio::bus::RingReader reader;
+    if (!reader.attach(nameA, 0)) {
+        wprintf(L"exact-capacity  : FAIL (reader attach)\n");
+        bus.close();
+        return false;
+    }
+    // Publish `capacity` more blocks with no read: lag is exactly capacity.
+    for (int64_t b = kBusCapacity; b < 2 * kBusCapacity; ++b) bus.publish(b);
+    const int64_t next = 2 * kBusCapacity;  // the writer's next publish
+    // Emulate that publish's payload memcpy in flight: first half of the new
+    // block lands in the slot the cursor points at, second half is the old block.
+    float* slot = reinterpret_cast<float*>(
+        bus.payload + (next % kBusCapacity) * bus.blockBytes);
+    const int half = kBusFrames / 2;
+    for (int f = 0; f < half; ++f)
+        for (int c = 0; c < kBusChannels; ++c)
+            slot[f * kBusChannels + c] = sampleFor(next, f, c);
+
+    float out[kBusChannels][kBusFrames] = {};
+    float* dst[kBusChannels] = {out[0], out[1]};
+    reader.read(dst, kBusChannels, kBusFrames);
+
+    // Newest complete block is next-1. Torn means a nonzero frame that is neither
+    // that block's sample nor zero; the in-progress block's samples must not leak.
+    bool torn = false, sawData = false;
+    for (int f = 0; f < kBusFrames && !torn; ++f) {
+        for (int c = 0; c < kBusChannels; ++c) {
+            const float v = out[c][f];
+            if (v == 0.0f) continue;
+            sawData = true;
+            if (v != sampleFor(next - 1, f, c)) {
+                torn = true;
+                break;
+            }
+        }
+    }
+    bus.close();
+    const bool passed = !torn;
+    wprintf(L"exact-capacity  : %s (lag %d blocks = capacity, %s)\n",
+            passed ? L"PASS" : L"FAIL",
+            kBusCapacity,
+            torn ? L"served a torn block"
+                 : (sawData ? L"served the newest complete block"
+                            : L"served silence"));
+    return passed;
+}
+
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
@@ -1096,6 +1187,7 @@ int wmain(int argc, wchar_t** argv) {
     wcscat_s(harnessDir, L"\\");
 
     const AudioPathResult audio = runAudioPathTests(harnessDir);
+    const bool capacityLagPassed = runExactCapacityLagTest();
 
     wprintf(L"\n== audio path summary ==\n");
     wprintf(L"bit-exact blocks  : %ld/%ld matched, %ld mismatched\n", audio.matched,
@@ -1104,6 +1196,9 @@ int wmain(int argc, wchar_t** argv) {
             audio.gapPassed ? L"yes" : L"NO",
             audio.underrunsBeforeGap, audio.underrunsAfterGap);
     wprintf(L"cadence streaming : %.1f callbacks/s\n", audio.callbacksPerSecond);
+    wprintf(L"reported latency  : in %ld (expected %ld), out %ld %s\n",
+            audio.latencyInput, audio.latencyExpectedInput, audio.latencyOutput,
+            audio.latencyPassed ? L"OK" : L"WRONG");
     if (audio.crossLanguageRan) {
         wprintf(L"cross-language    : ran (%ld matched, %ld mismatched, %ld silence)\n",
                 audio.crossLanguageMatched, audio.crossLanguageMismatched,
@@ -1111,8 +1206,10 @@ int wmain(int argc, wchar_t** argv) {
     } else {
         wprintf(L"cross-language    : not run\n");
     }
+    wprintf(L"exact-capacity    : %s\n", capacityLagPassed ? L"PASS" : L"FAIL");
 
     const bool audioPassed = audio.bitExactPassed && audio.gapPassed &&
+                             audio.latencyPassed && capacityLagPassed &&
                              audio.callbacksPerSecond > 350.0 &&
                              audio.callbacksPerSecond < 400.0 &&
                              (!audio.crossLanguageRan || audio.crossLanguagePassed);
@@ -1125,5 +1222,5 @@ int wmain(int argc, wchar_t** argv) {
         unregisterInHkcu();
         wprintf(L"\nHKCU registration removed.\n");
     }
-    return (calls > 0) ? 0 : 2;
+    return (calls > 0 && audioPassed) ? 0 : 2;
 }
