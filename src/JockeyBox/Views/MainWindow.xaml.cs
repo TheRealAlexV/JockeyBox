@@ -11,6 +11,7 @@ using JockeyBox.Activity;
 using JockeyBox.Library;
 using JockeyBox.Playback;
 using JockeyBox.Separation;
+using JockeyBox.Settings;
 using JockeyBox.Tools;
 using JockeyBox.ViewModels;
 
@@ -68,6 +69,7 @@ public partial class MainWindow : Window
         InitializeComponent();
         _vm = new MainViewModel();
         DataContext = _vm;
+        LoadVirtualLines();
 
         // Adopt the saved talk-over mic (device, gain, monitor) and start the
         // peak meter. The transport may not have an engine yet; this is a no-op
@@ -166,6 +168,7 @@ public partial class MainWindow : Window
         // Soundboard pad binding: while a pad is capturing, the next chord is
         // consumed here before any window/command binding can act on it.
         PreviewKeyDown += OnSoundboardHotkeyCapture;
+        PreviewKeyDown += OnShellEscape;
 
         Closed += (_, _) => CloseLyricsWindow();
         Closed += (_, _) => CloseViewModel();
@@ -201,30 +204,21 @@ public partial class MainWindow : Window
     /// </summary>
     private void OnShellLayoutChanged(object? sender, EventArgs e)
     {
-        var rows = ShellGrid.RowDefinitions;
-        if (rows.Count < 5) return;
+        // Two levels now matter: the shell's rows (header, body) and the centre
+        // column's rows (decks, waveforms, splitter, documents, dock). The elastic
+        // pair is still the waveform and the documents row; everything else is a
+        // height the documents cannot have, so the band is the viewport minus them.
+        var shellRows = ShellGrid.RowDefinitions;
+        var centreRows = CentreHost.RowDefinitions;
+        if (shellRows.Count < 2 || centreRows.Count < 5) return;
 
-        // Rows 2 (waveform) and 4 (browser) are the elastic pair, 1:3 in the XAML. The
-        // browser gets what the star split would give it: three quarters of the band, or
-        // the band minus the waveform's floor when that floor is the binding one. Every
-        // other row is a height the browser cannot have, so the band is the viewport
-        // minus them. Two px of slack keeps the content a hair under the viewport when
-        // it fits, so the scrollbar does not sit exactly on its threshold. The floor is
-        // what the browser keeps when the fixed rows have grown past the window: below
-        // it the shell scrolls, which is what the shell is for.
-        //
-        // Summed by skipping the elastic pair rather than by listing indices: the row
-        // list has changed twice (the footer and the soundboard header both became part
-        // of the bottom strip), and a list of indices went stale silently each time.
-        double fixedHeight = 0;
-        for (int i = 0; i < rows.Count; i++)
-        {
-            if (i == 2 || i == 4) continue;
-            fixedHeight += rows[i].ActualHeight;
-        }
+        double fixedHeight = shellRows[0].ActualHeight
+                             + centreRows[0].ActualHeight
+                             + centreRows[2].ActualHeight
+                             + centreRows[4].ActualHeight;
         double band = ShellScroll.ViewportHeight - fixedHeight - 2;
         double cap = Math.Max(200,
-            Math.Min(band * 0.75, band - rows[2].MinHeight));
+            Math.Min(band * 0.75, band - centreRows[1].MinHeight));
 
         if (Math.Abs(cap - _browserHeight) < 0.5) return;
         _browserHeight = cap;
@@ -401,9 +395,9 @@ public partial class MainWindow : Window
     /// </summary>
     private void RevealConsoleDownloads()
     {
-        ConsoleToggle.IsChecked = true;
-        ConsoleTabs.SelectedIndex = 1;
-        ConsoleToggle.Focus();
+        SetDockOpen(true);
+        DockTabJobs.IsChecked = true;
+        DockCollapseToggle.Focus();
     }
 
     /// <summary>
@@ -853,5 +847,209 @@ public partial class MainWindow : Window
         {
             deck.ActivateCommand.Execute(null);
         }
+    }
+
+    // ---- shell panes: rail, library, dock, flyout ---------------------------
+
+    /// <summary>Width the library pane takes when open. 300 px is one artist tree
+    /// plus the track table's narrowest readable column set; below 260 the album
+    /// titles ellipsise into each other.</summary>
+    private const double LibraryPaneWidth = 300;
+
+    /// <summary>Which rail toggle opened the flyout, so a second press closes it.</summary>
+    private ToggleButton? _flyoutToggle;
+
+    private void OnLibraryToggleClick(object sender, RoutedEventArgs e) => SetLibraryOpen(LibraryToggle.IsChecked == true);
+
+    /// <summary>Open or close the library pane. Public so the capture harness can show
+    /// a state a pointer would have to click through.</summary>
+    public void SetLibraryOpen(bool open)
+    {
+        LibraryToggle.IsChecked = open;
+        LibraryPane.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
+        ShellBody.ColumnDefinitions[1].Width = new GridLength(open ? LibraryPaneWidth : 0);
+    }
+
+    /// <summary>Open the dock on a named page: strips, soundboard, cues or jobs.</summary>
+    public void SelectDockPage(string page)
+    {
+        SetDockOpen(true);
+        (page switch
+        {
+            "soundboard" => DockTabSoundboard,
+            "cues" => DockTabCues,
+            "jobs" => DockTabJobs,
+            _ => DockTabMixer,
+        }).IsChecked = true;
+    }
+
+    /// <summary>Open the flyout on a named section: routing, sources, virtual or devices.</summary>
+    public void OpenFlyoutSection(string section)
+    {
+        switch (section)
+        {
+            case "routing": OnFlyoutRoutingClick(RailRoutingToggle, new RoutedEventArgs()); break;
+            case "sources": OnFlyoutSourcesClick(RailSourcesToggle, new RoutedEventArgs()); break;
+            case "virtual": OnFlyoutVirtualClick(RailVirtualToggle, new RoutedEventArgs()); break;
+            default: OnFlyoutDevicesClick(RailDevicesToggle, new RoutedEventArgs()); break;
+        }
+    }
+
+    private void OnDockToggleClick(object sender, RoutedEventArgs e) => SetDockOpen(DockToggle.IsChecked == true);
+
+    private void OnDockCollapseClick(object sender, RoutedEventArgs e) => SetDockOpen(DockCollapseToggle.IsChecked == true);
+
+    /// <summary>Open or close the mixer dock.</summary>
+    public void SetDockOpen(bool open)
+    {
+        DockCollapseToggle.IsChecked = open;
+        DockToggle.IsChecked = open;
+        DockBody.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void OnFlyoutRoutingClick(object sender, RoutedEventArgs e) => ShowFlyout(RailRoutingToggle, "ROUTING", FlyoutRoutingPanel);
+
+    private void OnFlyoutSourcesClick(object sender, RoutedEventArgs e) => ShowFlyout(RailSourcesToggle, "SOURCES", FlyoutSourcesPanel);
+
+    private void OnFlyoutVirtualClick(object sender, RoutedEventArgs e) => ShowFlyout(RailVirtualToggle, "VIRTUAL DEVICES", FlyoutVirtualPanel);
+
+    private void OnFlyoutDevicesClick(object sender, RoutedEventArgs e) => ShowFlyout(RailDevicesToggle, "DEVICES", FlyoutDevicesPanel);
+
+    /// <summary>
+    /// One flyout, four contents. Pressing the toggle of the section already showing
+    /// closes the region, so the rail is both the opener and the way back out.
+    /// </summary>
+    private void ShowFlyout(ToggleButton toggle, string title, FrameworkElement panel)
+    {
+        if (FlyoutPanel.Visibility == Visibility.Visible && ReferenceEquals(_flyoutToggle, toggle))
+        {
+            CloseFlyout();
+            return;
+        }
+
+        RailRoutingToggle.IsChecked = ReferenceEquals(toggle, RailRoutingToggle);
+        RailSourcesToggle.IsChecked = ReferenceEquals(toggle, RailSourcesToggle);
+        RailVirtualToggle.IsChecked = ReferenceEquals(toggle, RailVirtualToggle);
+        RailDevicesToggle.IsChecked = ReferenceEquals(toggle, RailDevicesToggle);
+
+        // The strip band's own fold-out toggle went with the band: it is always open
+        // in the panel, and the panel is the fold.
+        if (ReferenceEquals(panel, FlyoutSourcesPanel)) _vm.AreStripControlsOpen = true;
+
+        _flyoutToggle = toggle;
+        FlyoutTitle.Text = title;
+        FlyoutRoutingPanel.Visibility = ReferenceEquals(panel, FlyoutRoutingPanel) ? Visibility.Visible : Visibility.Collapsed;
+        FlyoutSourcesPanel.Visibility = ReferenceEquals(panel, FlyoutSourcesPanel) ? Visibility.Visible : Visibility.Collapsed;
+        FlyoutVirtualPanel.Visibility = ReferenceEquals(panel, FlyoutVirtualPanel) ? Visibility.Visible : Visibility.Collapsed;
+        FlyoutDevicesPanel.Visibility = ReferenceEquals(panel, FlyoutDevicesPanel) ? Visibility.Visible : Visibility.Collapsed;
+        FlyoutPanel.Visibility = Visibility.Visible;
+    }
+
+    private void OnFlyoutCloseClick(object sender, RoutedEventArgs e) => CloseFlyout();
+
+    private void CloseFlyout()
+    {
+        FlyoutPanel.Visibility = Visibility.Collapsed;
+        _flyoutToggle = null;
+        RailRoutingToggle.IsChecked = false;
+        RailSourcesToggle.IsChecked = false;
+        RailVirtualToggle.IsChecked = false;
+        RailDevicesToggle.IsChecked = false;
+    }
+
+    /// <summary>
+    /// Escape is the flyout's own exit. It is handled before anything else in the
+    /// window can claim the key, and it never touches focus: the deck the operator
+    /// was on keeps it.
+    /// </summary>
+    private void OnShellEscape(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Escape) return;
+        if (FlyoutPanel.Visibility != Visibility.Visible) return;
+        CloseFlyout();
+        e.Handled = true;
+    }
+
+    // ---- virtual device lines ----------------------------------------------
+    // The five flags and the ring name live here and nowhere else. They used to
+    // be a wrap panel of checkboxes in Settings as well; two editors over one flag
+    // is how the two ends up disagreeing, so the Settings copy was deleted.
+
+    private bool _virtualLinesLoading;
+
+    private void LoadVirtualLines()
+    {
+        var settings = _vm.SettingsRef;
+        _virtualLinesLoading = true;
+        try
+        {
+            VirtualLineDeckA.IsChecked = settings.VirtualAsioDeckA;
+            VirtualLineDeckB.IsChecked = settings.VirtualAsioDeckB;
+            VirtualLineRecording.IsChecked = settings.VirtualAsioRecording;
+            VirtualLineSoundboard.IsChecked = settings.VirtualAsioSoundboard;
+            VirtualLineMonitor.IsChecked = settings.VirtualAsioMonitor;
+            VirtualLineBusName.Text = settings.VirtualAsioBusName;
+        }
+        finally { _virtualLinesLoading = false; }
+    }
+
+    /// <summary>
+    /// A line is a checkbox only because the ring has one section: ticking a second
+    /// line releases the first instead of refusing the change in a dialog, which is
+    /// not something to be doing mid-show.
+    /// </summary>
+    private void OnVirtualLineChanged(object sender, RoutedEventArgs e)
+    {
+        if (_virtualLinesLoading) return;
+
+        var box = (CheckBox)sender;
+        _virtualLinesLoading = true;
+        try
+        {
+            if (box.IsChecked == true)
+            {
+                foreach (var other in new[]
+                         {
+                             VirtualLineDeckA, VirtualLineDeckB, VirtualLineRecording,
+                             VirtualLineSoundboard, VirtualLineMonitor,
+                         })
+                {
+                    if (!ReferenceEquals(other, box)) other.IsChecked = false;
+                }
+            }
+
+            var settings = _vm.SettingsRef;
+            settings.VirtualAsioDeckA = VirtualLineDeckA.IsChecked == true;
+            settings.VirtualAsioDeckB = VirtualLineDeckB.IsChecked == true;
+            settings.VirtualAsioRecording = VirtualLineRecording.IsChecked == true;
+            settings.VirtualAsioSoundboard = VirtualLineSoundboard.IsChecked == true;
+            settings.VirtualAsioMonitor = VirtualLineMonitor.IsChecked == true;
+            settings.Save();
+        }
+        finally { _virtualLinesLoading = false; }
+    }
+
+    /// <summary>
+    /// The ring name is validated here with the same rule the save path uses, so a
+    /// typo cannot make the native writer fail at route time, where the operator
+    /// would only hear silence.
+    /// </summary>
+    private void OnVirtualLineNameChanged(object sender, RoutedEventArgs e)
+    {
+        if (_virtualLinesLoading) return;
+
+        var settings = _vm.SettingsRef;
+        string name = VirtualLineBusName.Text.Trim();
+        if (name.Length == 0) name = "main";
+        if (AppSettings.ValidateVirtualAsioBusName(name) is not null)
+        {
+            VirtualLineBusName.Text = settings.VirtualAsioBusName;
+            return;
+        }
+
+        if (string.Equals(name, settings.VirtualAsioBusName, StringComparison.Ordinal)) return;
+        settings.VirtualAsioBusName = name;
+        VirtualLineBusName.Text = name;
+        settings.Save();
     }
 }

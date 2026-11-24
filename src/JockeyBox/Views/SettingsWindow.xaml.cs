@@ -113,12 +113,6 @@ public partial class SettingsWindow : Window
 
         SoundboardFollowsMainCheck.IsChecked = settings.SoundboardFollowsMain;
 
-        VirtualAsioDeckACheck.IsChecked = settings.VirtualAsioDeckA;
-        VirtualAsioDeckBCheck.IsChecked = settings.VirtualAsioDeckB;
-        VirtualAsioRecordingCheck.IsChecked = settings.VirtualAsioRecording;
-        VirtualAsioSoundboardCheck.IsChecked = settings.VirtualAsioSoundboard;
-        VirtualAsioMonitorCheck.IsChecked = settings.VirtualAsioMonitor;
-        VirtualAsioBusNameBox.Text = settings.VirtualAsioBusName;
 
         LoadMicDevices(settings);
 
@@ -1060,40 +1054,8 @@ public partial class SettingsWindow : Window
         RememberDeviceDelay(_settings, _settings.MonitorOutputDeviceId, MonitorOutputDelayBox);
         _settings.SoundboardFollowsMain = SoundboardFollowsMainCheck.IsChecked == true;
 
-        // Virtual ASIO ring: additive keys, default off. The name is validated
-        // against the bus-name rules here so a typo cannot make the writer fail at
-        // route time (where the operator would only see silence).
-        int ringBuses = (VirtualAsioDeckACheck.IsChecked == true ? 1 : 0) +
-                        (VirtualAsioDeckBCheck.IsChecked == true ? 1 : 0) +
-                        (VirtualAsioRecordingCheck.IsChecked == true ? 1 : 0) +
-                        (VirtualAsioSoundboardCheck.IsChecked == true ? 1 : 0) +
-                        (VirtualAsioMonitorCheck.IsChecked == true ? 1 : 0);
-        if (ringBuses > 1)
-        {
-            MessageBox.Show(this,
-                "Only one bus can publish to the virtual ASIO ring. Untick all but one " +
-                "(the ring has a single section, so a second bus could only be dropped).",
-                "One ring bus", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
-
-        var ringName = VirtualAsioBusNameBox.Text.Trim();
-        if (ringName.Length == 0) ringName = "main";
-        var ringNameError = AppSettings.ValidateVirtualAsioBusName(ringName);
-        if (ringNameError != null)
-        {
-            MessageBox.Show(this,
-                $"The virtual ASIO ring name is not valid: {ringNameError}.",
-                "Invalid ring name", MessageBoxButton.OK, MessageBoxImage.Warning);
-            return;
-        }
-
-        _settings.VirtualAsioDeckA = VirtualAsioDeckACheck.IsChecked == true;
-        _settings.VirtualAsioDeckB = VirtualAsioDeckBCheck.IsChecked == true;
-        _settings.VirtualAsioRecording = VirtualAsioRecordingCheck.IsChecked == true;
-        _settings.VirtualAsioSoundboard = VirtualAsioSoundboardCheck.IsChecked == true;
-        _settings.VirtualAsioMonitor = VirtualAsioMonitorCheck.IsChecked == true;
-        _settings.VirtualAsioBusName = ringName;
+        // The virtual ASIO ring lines are edited in the main window's side panel;
+        // this dialog no longer writes them, so there is one description of them.
 
         // Recording devices: the rows ARE the list. An enabled row is the whole
         // MicDeviceSettings record, so a save can never resurrect a device the

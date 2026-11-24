@@ -149,6 +149,11 @@
             <StackPanel x:Name="PageContent">
 
                 <!-- ================= AUDIO ROUTING ================= -->
+                <!-- ===== section: AUDIO DEVICES (PHYSICAL) ===== -->
+                <TextBlock Text="AUDIO DEVICES (PHYSICAL)" FontSize="13" FontWeight="Bold" Margin="0,20,0,2"
+                           Foreground="{StaticResource AccentABrush}"/>
+                <TextBlock Text="Which physical endpoint each bus plays on, which microphones are open, and the delay that lines them up." TextWrapping="Wrap" FontSize="10" Margin="0,0,0,8"
+                           Foreground="{StaticResource TextDimBrush}"/>
                 <TextBlock Text="AUDIO ROUTING" FontWeight="Bold"
                            Foreground="{StaticResource AccentABrush}" Margin="0,0,0,10"/>
 
@@ -279,43 +284,9 @@
                            Margin="150,0,0,14"
                            Text="Device delay shifts that device's whole output (every bus feeding it) by 0–2000 ms. Use it on the early, wired output so the Bluetooth headset lands in sync; the monitoring output can be delayed too. It adds to the global output delay and to a deck's own output delay. Every output can be set to None. Two outputs on one device are summed into one session for that device."/>
 
-                <!-- ============= VIRTUAL ASIO DRIVER ============= -->
-                <!-- Additive on the settings schema: the flags default to off, so an
-                     install that never opens this box keeps playing exactly as today. -->
-                <TextBlock Text="VIRTUAL ASIO DRIVER" FontWeight="Bold"
-                           Foreground="{StaticResource AccentABrush}" Margin="0,0,0,6"/>
-
-                <StackPanel Margin="0,0,0,2">
-                    <WrapPanel>
-                        <CheckBox x:Name="VirtualAsioDeckACheck" Content="Deck A"
-                                  AutomationProperties.Name="Send Deck A to the virtual ASIO ring"
-                                  Margin="0,0,18,4" VerticalAlignment="Center"/>
-                        <CheckBox x:Name="VirtualAsioDeckBCheck" Content="Deck B"
-                                  AutomationProperties.Name="Send Deck B to the virtual ASIO ring"
-                                  Margin="0,0,18,4" VerticalAlignment="Center"/>
-                        <CheckBox x:Name="VirtualAsioRecordingCheck" Content="Recording"
-                                  AutomationProperties.Name="Send the recording bus to the virtual ASIO ring"
-                                  Margin="0,0,18,4" VerticalAlignment="Center"/>
-                        <CheckBox x:Name="VirtualAsioSoundboardCheck" Content="Soundboard"
-                                  AutomationProperties.Name="Send the soundboard bus to the virtual ASIO ring"
-                                  Margin="0,0,18,4" VerticalAlignment="Center"/>
-                        <CheckBox x:Name="VirtualAsioMonitorCheck" Content="Monitoring"
-                                  AutomationProperties.Name="Send the monitoring bus to the virtual ASIO ring"
-                                  Margin="0,0,18,4" VerticalAlignment="Center"/>
-                    </WrapPanel>
-                    <StackPanel Orientation="Horizontal" Margin="0,2,0,0">
-                        <TextBlock Text="Ring name" VerticalAlignment="Center" Width="150"/>
-                        <TextBox x:Name="VirtualAsioBusNameBox" Width="120" MaxLength="64"
-                                 AutomationProperties.Name="Virtual ASIO ring name"
-                                 AutomationProperties.AutomationId="VirtualAsioBusNameBox"
-                                 ToolTip="Must match the driver's JOCKEYBOX_ASIO_BUS (default: main). At most 64 characters: letters, digits, '_', '-' and '.'."/>
-                    </StackPanel>
-                </StackPanel>
-
-                <TextBlock TextWrapping="Wrap" Foreground="{StaticResource TextDimBrush}"
-                           Margin="0,2,0,14"
-                           Text="The flagged bus is also published to the native ASIO driver, which serves it as its inputs. This does not replace the device above: a bus can feed both. One ring exists per name, so with several buses flagged the first in routing order publishes and the log names the rest."/>
-
+                <!-- Virtual ASIO lines moved out of this dialog: the right-hand panel in
+                     the main window is the only editor for them now, so a saved flag cannot
+                     be described two ways. -->
                 <!-- ========== MICROPHONES / RECORDING DEVICES ========== -->
                 <TextBlock Text="MICROPHONES / RECORDING DEVICES" FontWeight="Bold"
                            Foreground="{StaticResource AccentABrush}" Margin="0,0,0,2"/>
@@ -357,6 +328,16 @@
                            Text="Delays program audio to line up with camera video in OBS. The monitor output and the on-screen lyrics are not delayed."/>
 
                 <!-- ================= TEMPO ================= -->
+                <!-- ===== section: PERFORMANCE ===== -->
+                <!-- ===== section: VIRTUAL DEVICES ===== -->
+                <TextBlock Text="VIRTUAL DEVICES" FontSize="13" FontWeight="Bold" Margin="0,20,0,2"
+                           Foreground="{StaticResource AccentABrush}"/>
+                <TextBlock Text="The five ring lines that feed the native ASIO driver are published from the right-hand panel in the main window - VIRT on the rail. They are not repeated here, so the two cannot disagree." TextWrapping="Wrap" FontSize="10" Margin="0,0,0,8"
+                           Foreground="{StaticResource TextDimBrush}"/>
+                <TextBlock Text="PERFORMANCE" FontSize="13" FontWeight="Bold" Margin="0,20,0,2"
+                           Foreground="{StaticResource AccentABrush}"/>
+                <TextBlock Text="Tempo range, auto-mix behaviour and how a queued track takes over." TextWrapping="Wrap" FontSize="10" Margin="0,0,0,8"
+                           Foreground="{StaticResource TextDimBrush}"/>
                 <TextBlock Text="TEMPO" FontWeight="Bold"
                            Foreground="{StaticResource AccentABrush}" Margin="0,0,0,10"/>
 
@@ -407,6 +388,11 @@
                            Text="Applied when a queued track takes over. Auto-mix needs a beat grid for both tracks, and falls back to a crossfade when the tempos are too far apart."/>
 
                 <!-- ================= LIBRARY FOLDERS ================= -->
+                <!-- ===== section: LIBRARY AND STORAGE ===== -->
+                <TextBlock Text="LIBRARY AND STORAGE" FontSize="13" FontWeight="Bold" Margin="0,20,0,2"
+                           Foreground="{StaticResource AccentABrush}"/>
+                <TextBlock Text="Where tracks, karaoke takes, lyrics and downloads live, and how they are read." TextWrapping="Wrap" FontSize="10" Margin="0,0,0,8"
+                           Foreground="{StaticResource TextDimBrush}"/>
                 <TextBlock Text="LIBRARY FOLDERS" FontWeight="Bold"
                            Foreground="{StaticResource AccentABrush}" Margin="0,0,0,10"/>
 
@@ -656,6 +642,11 @@
                 <Border BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0"
                         Margin="0,0,0,14"/>
 
+                <!-- ===== section: ADVANCED ===== -->
+                <TextBlock Text="ADVANCED" FontSize="13" FontWeight="Bold" Margin="0,20,0,2"
+                           Foreground="{StaticResource AccentABrush}"/>
+                <TextBlock Text="Download engine, caches and the tools that never change during a set." TextWrapping="Wrap" FontSize="10" Margin="0,0,0,8"
+                           Foreground="{StaticResource TextDimBrush}"/>
                 <TextBlock Text="LIBRARY TOOLS" FontSize="11" FontWeight="Bold"
                            Foreground="{StaticResource AccentABrush}" Margin="0,0,0,8"/>
 

@@ -160,11 +160,22 @@ internal static class UiShot
         window.ShowInTaskbar = false;
         window.ShowActivated = false;
 
-        // Opt-in: the console starts collapsed, so its job rows are never laid out
-        // and a capture (or the text dump) cannot show them. Expanding it before
-        // the pump makes those rows part of the layout the settle then covers.
+        // Opt-in: the mixer dock starts on its strips page and the jobs rows are only
+        // laid out when their page is showing, so a capture (or the text dump) cannot
+        // show them. Selecting the jobs page before the pump makes those rows part of
+        // the layout the settle then covers.
         if (Harness.Flag(args, "--uishot-console") != null && window is MainWindow mainWindow)
-            mainWindow.ConsoleToggle.IsChecked = true;
+            mainWindow.DockTabJobs.IsChecked = true;
+
+        // Shell panes: the rail is a pointer surface, so a capture that has to show a
+        // pane asks for it by name instead. Each flag is the same call the rail makes.
+        if (window is MainWindow panes)
+        {
+            if (Harness.Flag(args, "--uishot-library") != null) panes.SetLibraryOpen(true);
+            if (Harness.Flag(args, "--uishot-dock") is { } dockPage) panes.SelectDockPage(dockPage.ToLowerInvariant());
+            if (Harness.Flag(args, "--uishot-flyout") is { } flyoutSection)
+                panes.OpenFlyoutSection(flyoutSection.ToLowerInvariant());
+        }
 
 
 
