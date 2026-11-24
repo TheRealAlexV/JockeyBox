@@ -123,6 +123,7 @@ public partial class App : Application
             UiShot.Requested(e.Args) || PerfProbe.Requested(e.Args) ||
             PreviewCheck.Requested(e.Args) || LingerCheck.Requested(e.Args) ||
             LyricsProbe.Requested(e.Args) || LyricAlignCli.Requested(e.Args) ||
+            PopupProbe.Requested(e.Args) ||
             AudioTrace.Requested(e.Args) ||
             AsioProbe.Requested(e.Args);
 
@@ -326,6 +327,29 @@ public partial class App : Application
             Console.Error.Flush();
             Tools.Log.Flush();
             Environment.Exit(shotExit);
+            return;
+        }
+
+        // --popup-probe: open and close a real ToolTip and Popup, then print
+        // POPUP OK / POPUP FAILED. The field crash was Accessibility failing to load
+        // from PopupSecurityHelper.ForceMsaaToUiaBridge the moment a ToolTip opened,
+        // and no screenshot can reach that path (see Selftest/PopupProbe.cs).
+        if (PopupProbe.Requested(e.Args))
+        {
+            int popupExit = PopupProbe.FailureExitCode;
+            try
+            {
+                popupExit = PopupProbe.Run();
+            }
+            catch (Exception ex)
+            {
+                Console.Out.WriteLine($"POPUP FAILED: {ex.GetType().FullName}: {ex.Message}");
+            }
+            Console.Out.Flush();
+            Console.Error.Flush();
+            // Exit, don't Shutdown: the exit code is the verdict, and a shutdown path
+            // that hangs would turn a failure into a timeout with no line printed.
+            Environment.Exit(popupExit);
             return;
         }
 

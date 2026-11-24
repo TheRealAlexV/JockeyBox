@@ -80,8 +80,11 @@
     <ProjectReference Include="..\JockeyBox.Ipc\JockeyBox.Ipc.csproj" />
   </ItemGroup>
 
-  <!-- Ensure Accessibility.dll is copied to publish/output for WPF ToolTip/Popup MSAA bridge -->
-  <Target Name="CopyAccessibilityDll" AfterTargets="ResolveReferences">
+  <!-- Ensure Accessibility.dll is copied to publish/output for WPF ToolTip/Popup MSAA bridge.
+       SkipAccessibilityCopy=true is the negative control for the popup probe: a probe that also
+       passes with the copy removed would not prove the copy is what fixes the popup. -->
+  <Target Name="CopyAccessibilityDll" AfterTargets="ResolveReferences"
+          Condition="'$(SkipAccessibilityCopy)' != 'true'">
     <ItemGroup>
       <ReferenceCopyLocalPaths Include="@(ReferencePath)" Condition="'%(FileName)' == 'Accessibility'" />
     </ItemGroup>
