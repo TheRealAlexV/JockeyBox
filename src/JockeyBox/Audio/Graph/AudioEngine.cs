@@ -739,19 +739,16 @@ public sealed class AudioEngine : IDisposable
         }).ConfigureAwait(false);
 
         List<DeviceOutput> old;
-        IDisposable? oldVirtual;
+        VirtualBusSink? oldVirtual;
         lock (_sinkLock)
         {
             old = new List<DeviceOutput>(_outputs);
             _outputs.Clear();
 
             // The ring is not a device: one producer per route, publishing the tap
-            // table built from the line list (or the legacy pair). Created here,
-            // never per block.
-            oldVirtual = _virtualSink;
-            var publish = OpenVirtualBus(route);
-            _virtualSink = publish?.Sink;
-            Volatile.Write(ref _virtualPublish, publish);
+            // table built from the line list (or the legacy pair). Created here, never
+            // per block. A refused open keeps the producer already publishing.
+            oldVirtual = ReplaceVirtualBusLocked(route);
 
             foreach (var output in built.Outputs)
             {
@@ -864,8 +861,8 @@ public sealed class AudioEngine : IDisposable
     }
 
     /// <summary>
-    /// Open the virtual ring producer for a route, or null when nothing feeds it.
-    /// Device sessions are plural; the ring is one section.
+    /// Point the ring producer at <paramref name="route"/>, on the sink lock, and
+    /// return the sink the caller must dispose once it is off the lock (or null).
     ///
     /// <para><b>Geometry.</b> A non-empty line list is the source of truth: the ring
     /// opens as wide as the lines sum to, and each line's source binding is resolved
@@ -873,61 +870,128 @@ public sealed class AudioEngine : IDisposable
     /// which case the first flagged bus publishes the stereo pair exactly as before
     /// (with several flagged, the first in routing order publishes and the rest are
     /// named in the log).</para>
+    ///
+    /// <para><b>Ordering.</b> A failed open must not cost a ring that works, so the new
+    /// writer is opened while the old one is still in place and the old sink is only
+    /// retired once a new one exists. Disposing first would be simpler, but the open can
+    /// fail for the single-writer claim (another process, a driver restart), and then
+    /// the old producer is gone too - the failure this method exists to prevent. The one
+    /// case that cannot open first is a re-apply naming the section and width already in
+    /// use: our own claim is the refusal, so no open is needed - that writer is already
+    /// publishing there and only the tap plan moves.</para>
     /// </summary>
-    private VirtualPublish? OpenVirtualBus(AudioRoute route)
+    private VirtualBusSink? ReplaceVirtualBusLocked(AudioRoute route)
     {
+        var previous = _virtualSink;
+        bool haveWorkingRing = previous is { HasFailed: false };
+
         var lines = route.VirtualLines;
         var hasLines = lines is { Count: > 0 };
 
-        if (!hasLines && (route.VirtualBuses == null || route.VirtualBuses.Count == 0))
+        // Nothing feeds the ring. That is "off", not a failure, and it is the only path
+        // allowed to publish a null plan.
+        if (!hasLines && route.VirtualBuses is not { Count: > 0 })
         {
+            _virtualSink = null;
+            Volatile.Write(ref _virtualPublish, null);
             Volatile.Write(ref _virtualRingFailed, 0);
-            return null;
+            return previous;
         }
 
+        // Build the plan before opening anything: it fixes the ring's width, and the
+        // width decides whether the live ring can take this change without a rebuild.
         VirtualTapTable taps;
+        var legacyBus = _virtualBus;
         if (hasLines)
         {
             taps = VirtualTapTable.FromLines(lines!, WarnUnknownVirtualSource);
         }
         else
         {
-            _virtualBus = route.VirtualBuses[0];
+            legacyBus = route.VirtualBuses![0];
             if (route.VirtualBuses.Count > 1)
                 Log.Warn($"virtual ASIO ring: {route.VirtualBuses.Count} buses are flagged for " +
-                         $"'{route.VirtualBusName}'; publishing {_virtualBus} only " +
+                         $"'{route.VirtualBusName}'; publishing {legacyBus} only " +
                          $"({string.Join(", ", route.VirtualBuses.Skip(1))} ignored)");
-            taps = VirtualTapTable.Legacy(_virtualBus);
+            taps = VirtualTapTable.Legacy(legacyBus);
         }
+
+        var subject = hasLines ? $"virtual device ({lines!.Count} lines)" : $"bus {legacyBus}";
+
+        // Same section, same width, live: keep the writer and swap only the tap table.
+        // Reopening would be refused by our own claim, and tearing it down would glitch
+        // a host reading the ring. A width change cannot ride along - the driver sized
+        // its reader from the file at init() - so it falls through to a real reopen.
+        if (haveWorkingRing
+            && string.Equals(previous!.SectionName, route.VirtualBusName,
+                             StringComparison.OrdinalIgnoreCase)
+            && previous.Channels == taps.Channels
+            && Volatile.Read(ref _virtualPublish) is { } current)
+        {
+            _virtualBus = legacyBus;
+            Volatile.Write(ref _virtualPublish, current with { Taps = taps });
+            Volatile.Write(ref _virtualRingFailed, 0);
+            return null;
+        }
+
+        var opened = OpenVirtualBus(route.VirtualBusName, taps.Channels, subject, out var failure);
+        if (opened != null)
+        {
+            _virtualBus = legacyBus;
+            _virtualSink = opened;
+            Volatile.Write(ref _virtualPublish,
+                new VirtualPublish(opened, taps, new float[BlockFrames * taps.Channels]));
+            Volatile.Write(ref _virtualRingFailed, 0);
+            if (hasLines)
+                Log.Info($"virtual ASIO ring: {lines!.Count} line(s) = {taps.Channels} channels " +
+                         $"({taps.TapArray.Length} tap(s))");
+            return previous;
+        }
+
+        if (failure != null && haveWorkingRing)
+        {
+            // The route could not be re-pointed. That is recoverable on the next attempt;
+            // losing a live ring is silence nobody gets told about. Keep the producer and
+            // its plan, leave the ring-failed flag clear, and say why exactly once.
+            Volatile.Write(ref _virtualRingFailed, 0);
+            Log.Warn($"{failure}; keeping the ring on bus {_virtualBus} " +
+                     $"('{previous!.SectionName}')");
+            return null;
+        }
+
+        _virtualSink = null;
+        Volatile.Write(ref _virtualPublish, null);
+        Volatile.Write(ref _virtualRingFailed, failure == null ? 0 : 1);
+        if (failure != null) Log.Warn(failure);
+        return previous;
+    }
+
+    /// <summary>
+    /// Open one ring producer <paramref name="channels"/> wide, or null and why not.
+    /// State-free on purpose: the caller owns the ring-failed flag, the publish plan and
+    /// the single failure line, because only it knows whether an old producer survived
+    /// this attempt.
+    /// </summary>
+    private VirtualBusSink? OpenVirtualBus(string sectionName, int channels, string subject,
+        out string? failure)
+    {
+        failure = null;
 
         // Refuse a name the driver can never attach to before the writer is opened:
         // the generic "not opened" line would hide which bus and which rule failed.
-        var subject = hasLines ? $"virtual device ({lines!.Count} lines)" : $"bus {_virtualBus}";
-        var nameError = AppSettings.ValidateVirtualAsioBusName(route.VirtualBusName);
+        var nameError = AppSettings.ValidateVirtualAsioBusName(sectionName);
         if (nameError != null)
         {
-            Volatile.Write(ref _virtualRingFailed, 1);
-            Log.Warn($"virtual ASIO ring: {subject} cannot publish to " +
-                     $"'{route.VirtualBusName}': {nameError}");
+            failure = $"virtual ASIO ring: {subject} cannot publish to '{sectionName}': {nameError}";
             return null;
         }
 
-        var sink = VirtualBusSink.TryOpen(route.VirtualBusName, Rate, taps.Channels, BlockFrames,
-            out var error);
+        // logFailure: false - the one line in ReplaceVirtualBusLocked is the log, not two.
+        var sink = VirtualBusSink.TryOpen(sectionName, Rate, channels, BlockFrames,
+            out var error, logFailure: false);
         if (sink == null)
-        {
-            Volatile.Write(ref _virtualRingFailed, 1);
-            Log.Warn($"virtual ASIO ring: {subject} could not publish to " +
-                     $"'{route.VirtualBusName}': {error}");
-            return null;
-        }
-
-        if (hasLines)
-            Log.Info($"virtual ASIO ring: {lines!.Count} line(s) = {taps.Channels} channels " +
-                     $"({taps.TapArray.Length} tap(s))");
-
-        Volatile.Write(ref _virtualRingFailed, 0);
-        return new VirtualPublish(sink, taps, new float[BlockFrames * taps.Channels]);
+            failure = $"virtual ASIO ring: {subject} could not publish to '{sectionName}': {error}";
+        return sink;
     }
 
     /// <summary>Once per unresolvable source, on the control thread that built the table.</summary>
@@ -961,6 +1025,10 @@ public sealed class AudioEngine : IDisposable
             }
 
             var taps = VirtualTapTable.FromLines(lines, WarnUnknownVirtualSource);
+            // Carry the edit into the route as well: a later re-apply of the same route
+            // (unplug, device change) rebuilds the table from VirtualLines, and a stale
+            // list here would silently revert what the operator just saved.
+            _route = _route with { VirtualLines = lines };
             Volatile.Write(ref _virtualPublish, publish with { Taps = taps });
             return null;
         }
@@ -1448,8 +1516,14 @@ public sealed class AudioEngine : IDisposable
         {
             _firstSink = pacer;
             _virtualSink = virtualSink;
-            Volatile.Write(ref _virtualRing,
-                virtualSink is null ? null : new VirtualRing(virtualSink, BusKind.Monitor));
+            // The seam has no line list, so it publishes the legacy pair exactly as a
+            // route with no lines would: same plan, same mixer, one immutable snapshot.
+            var taps = VirtualTapTable.Legacy(BusKind.Monitor);
+            Volatile.Write(ref _virtualPublish,
+                virtualSink is null
+                    ? null
+                    : new VirtualPublish(virtualSink, taps,
+                        new float[BlockFrames * taps.Channels]));
         }
     }
 

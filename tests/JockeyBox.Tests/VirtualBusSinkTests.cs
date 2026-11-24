@@ -35,6 +35,28 @@ public sealed class VirtualBusSinkTests
     }
 
     [Fact]
+    public void With_No_Driver_Section_It_Still_Creates_The_Local_Ring()
+    {
+        string name = NewName();
+        Assert.False(BusLayout.GlobalSectionExists(name));
+
+        using var sink = VirtualBusSink.TryOpen(name, Rate, Channels, Block, out string? error);
+        Assert.Null(error);
+        Assert.NotNull(sink);
+
+        using var reader = VirtualBusReader.Open(name, maxLagBlocks: VirtualBusSink.DefaultCapacityBlocks);
+        Assert.Equal(Channels, reader.Channels);
+        Assert.Equal(Block, reader.BlockFrames);
+
+        var expected = BlockFor(1);
+        var received = new float[Block * Channels];
+        sink!.Write(expected, 0, Block);
+
+        Assert.Equal(VirtualBusStatus.Data, reader.Read(received));
+        Assert.Equal(expected, received);
+    }
+
+    [Fact]
     public void Blocks_arrive_in_the_ring_bit_exact()
     {
         string name = NewName();

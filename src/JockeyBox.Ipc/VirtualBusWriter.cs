@@ -94,8 +94,22 @@ public sealed unsafe class VirtualBusWriter : IDisposable
     /// existing region on Linux. Validates the header, then continues publishing from the
     /// creator's cursor. It never initialises or re-initialises a header field.
     /// </summary>
-    /// <exception cref="VirtualBusException">No such region, or its header is not a valid ring.</exception>
-    public static VirtualBusWriter Attach(string name, BusScope scope = BusScope.Local)
+    /// <param name="channels">
+    /// The channel count the configured device expects. When given, a header declaring a
+    /// different count is refused instead of adopted.
+    /// </param>
+    /// <param name="blockFrames">Expected block frames; refused when the header differs.</param>
+    /// <param name="capacityBlocks">Expected ring capacity; refused when the header differs.</param>
+    /// <exception cref="VirtualBusException">
+    /// No such region, its header is not a valid ring, or its geometry differs from the
+    /// expectations given.
+    /// </exception>
+    public static VirtualBusWriter Attach(
+        string name,
+        BusScope scope = BusScope.Local,
+        int? channels = null,
+        int? blockFrames = null,
+        int? capacityBlocks = null)
     {
         MemoryMappedFile? map = null;
         MemoryMappedViewAccessor? view = null;
@@ -104,6 +118,8 @@ public sealed unsafe class VirtualBusWriter : IDisposable
             map = BusLayout.OpenExisting(name, scope);
             view = map.CreateViewAccessor(0, 0, MemoryMappedFileAccess.ReadWrite);
             var geometry = BusLayout.ReadHeader(view, name);
+            BusLayout.RequireGeometry(name, geometry.Channels, geometry.BlockFrames,
+                geometry.CapacityBlocks, channels, blockFrames, capacityBlocks);
             return new VirtualBusWriter(
                 name,
                 geometry.SampleRate,

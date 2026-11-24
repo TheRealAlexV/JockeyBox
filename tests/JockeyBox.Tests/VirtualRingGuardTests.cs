@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Concurrent;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using JockeyBox.Audio.Endpoints;
 using JockeyBox.Audio.Graph;
+using JockeyBox.Ipc;
 using JockeyBox.Settings;
 using JockeyBox.Tools;
 using Xunit;
@@ -206,5 +208,152 @@ public sealed class VirtualRingGuardTests
         }
 
         Assert.Contains(lines, line => line.Contains("cannot hold the driver's"));
+    }
+
+    // ------------------------------------------------------- re-apply: ring kept or swapped
+
+    /// <summary>
+    /// A route re-apply whose new bus cannot be opened (here: its one-writer claim is
+    /// already held, which is what a second instance or a driver restart looks like)
+    /// used to null the sink and flag the ring dead while the old writer was still
+    /// publishing. The producer must survive the refused re-apply and keep writing.
+    /// </summary>
+    [Fact]
+    public async Task A_route_reapply_whose_new_bus_is_already_held_keeps_the_old_ring_publishing()
+    {
+        using var engine = new AudioEngine();
+        var lines = new ConcurrentQueue<string>();
+        void Handler(string line) => lines.Enqueue(line);
+        Log.LineWritten += Handler;
+        try
+        {
+            string live = NewName();
+            string busy = NewName();
+
+            await engine.SetRouteAsync(new AudioRoute
+            {
+                VirtualBuses = new[] { BusKind.Monitor },
+                VirtualBusName = live,
+            });
+            engine.Start();
+            Assert.True(engine.IsRunning);
+            var first = engine.Ring;
+            Assert.NotNull(first);
+            Assert.True(SpinWait.SpinUntil(() => first!.Sink.BlocksPublished > 0,
+                    TimeSpan.FromSeconds(5)),
+                "the ring was not publishing before the re-apply");
+
+            long before;
+            using (VirtualBusWriter.Open(busy, Rate, Channels, Block,
+                       VirtualBusSink.DefaultCapacityBlocks))
+            {
+                before = first!.Sink.BlocksPublished;
+                await engine.SetRouteAsync(new AudioRoute
+                {
+                    VirtualBuses = new[] { BusKind.DeckA },
+                    VirtualBusName = busy,
+                });
+
+                var after = engine.Ring;
+                Assert.NotNull(after);
+                Assert.Same(first.Sink, after!.Sink);
+                Assert.Equal(live, after.Sink.SectionName);
+                Assert.Equal(BusKind.Monitor, after.Bus);
+                Assert.False(engine.VirtualRingFailed);
+
+                Assert.True(SpinWait.SpinUntil(() => first.Sink.BlocksPublished > before,
+                        TimeSpan.FromSeconds(5)),
+                    "the ring stopped publishing after the refused re-apply");
+            }
+
+            var named = lines.Where(line => line.Contains(busy)).ToList();
+            Assert.Single(named);
+            Assert.Contains("keeping the ring", named[0]);
+        }
+        finally
+        {
+            Log.LineWritten -= Handler;
+        }
+    }
+
+    /// <summary>
+    /// The success path still swaps: a re-apply that names a different, free bus
+    /// installs the new producer, disposes the old one exactly once, and leaves the
+    /// old section claimable again (a live writer would still hold it).
+    /// </summary>
+    [Fact]
+    public async Task A_route_reapply_that_opens_a_new_bus_swaps_the_sink_and_disposes_the_old_one_once()
+    {
+        using var engine = new AudioEngine();
+        string first = NewName();
+        string second = NewName();
+
+        await engine.SetRouteAsync(new AudioRoute
+        {
+            VirtualBuses = new[] { BusKind.Monitor },
+            VirtualBusName = first,
+        });
+        engine.Start();
+        Assert.True(engine.IsRunning);
+        var before = engine.Ring;
+        Assert.NotNull(before);
+        Assert.Equal(0, before!.Sink.DisposeCount);
+
+        await engine.SetRouteAsync(new AudioRoute
+        {
+            VirtualBuses = new[] { BusKind.DeckA },
+            VirtualBusName = second,
+        });
+
+        var after = engine.Ring;
+        Assert.NotNull(after);
+        Assert.NotSame(before.Sink, after!.Sink);
+        Assert.Equal(second, after.Sink.SectionName);
+        Assert.Equal(BusKind.DeckA, after.Bus);
+        Assert.Equal(1, before.Sink.DisposeCount);
+        Assert.Equal(0, after.Sink.DisposeCount);
+
+        // The disposed producer stops writing, and its one-writer claim is released.
+        long frozen = before.Sink.BlocksPublished;
+        Thread.Sleep(100);
+        Assert.Equal(frozen, before.Sink.BlocksPublished);
+        using var reclaimed = VirtualBusWriter.Open(first, Rate, Channels, Block,
+            VirtualBusSink.DefaultCapacityBlocks);
+        Assert.True(SpinWait.SpinUntil(() => after.Sink.BlocksPublished > 0,
+                TimeSpan.FromSeconds(5)),
+            "the new ring never published after the swap");
+    }
+
+    /// <summary>
+    /// A re-apply that names the bus already in use needs no open: one writer per
+    /// bus means the open would be refused by our own claim, and the writer in
+    /// place already publishes to exactly that section. It must keep it, not churn.
+    /// </summary>
+    [Fact]
+    public async Task A_route_reapply_on_the_bus_already_publishing_keeps_its_writer()
+    {
+        using var engine = new AudioEngine();
+        string name = NewName();
+
+        await engine.SetRouteAsync(new AudioRoute
+        {
+            VirtualBuses = new[] { BusKind.Monitor },
+            VirtualBusName = name,
+        });
+        var first = engine.Ring;
+        Assert.NotNull(first);
+
+        await engine.SetRouteAsync(new AudioRoute
+        {
+            VirtualBuses = new[] { BusKind.DeckA },
+            VirtualBusName = name,
+        });
+
+        var second = engine.Ring;
+        Assert.NotNull(second);
+        Assert.Same(first!.Sink, second!.Sink);
+        Assert.Equal(BusKind.DeckA, second.Bus);
+        Assert.Equal(0, first.Sink.DisposeCount);
+        Assert.False(engine.VirtualRingFailed);
     }
 }

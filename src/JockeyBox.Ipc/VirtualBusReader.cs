@@ -119,14 +119,40 @@ public sealed unsafe class VirtualBusReader : IDisposable
     /// existing region on Linux. Validates the header and never initialises it, so a live
     /// writer's cursor stays exactly where it is.
     /// </summary>
-    public static VirtualBusReader Attach(string name, int maxLagBlocks = 0, BusScope scope = BusScope.Local)
-        => Join(name, slot: -1, maxLagBlocks, scope);
+    /// <param name="channels">
+    /// The channel count this consumer expects. When given, a header declaring a different
+    /// count is refused instead of adopted.
+    /// </param>
+    /// <param name="blockFrames">Expected block frames; refused when the header differs.</param>
+    /// <param name="capacityBlocks">Expected ring capacity; refused when the header differs.</param>
+    public static VirtualBusReader Attach(
+        string name,
+        int maxLagBlocks = 0,
+        BusScope scope = BusScope.Local,
+        int? channels = null,
+        int? blockFrames = null,
+        int? capacityBlocks = null)
+        => Join(name, slot: -1, maxLagBlocks, scope, channels, blockFrames, capacityBlocks);
 
     /// <summary>Attaches to a specific reader slot (0..7).</summary>
-    public static VirtualBusReader Attach(string name, int slot, int maxLagBlocks, BusScope scope = BusScope.Local)
-        => Join(name, slot, maxLagBlocks, scope);
+    public static VirtualBusReader Attach(
+        string name,
+        int slot,
+        int maxLagBlocks,
+        BusScope scope = BusScope.Local,
+        int? channels = null,
+        int? blockFrames = null,
+        int? capacityBlocks = null)
+        => Join(name, slot, maxLagBlocks, scope, channels, blockFrames, capacityBlocks);
 
-    private static VirtualBusReader Join(string name, int slot, int maxLagBlocks, BusScope scope)
+    private static VirtualBusReader Join(
+        string name,
+        int slot,
+        int maxLagBlocks,
+        BusScope scope,
+        int? expectedChannels = null,
+        int? expectedBlockFrames = null,
+        int? expectedCapacityBlocks = null)
     {
         BusLayout.ValidateName(name);
         if (maxLagBlocks < 0)
@@ -148,6 +174,11 @@ public sealed unsafe class VirtualBusReader : IDisposable
             int channels = geometry.Channels;
             int blockFrames = geometry.BlockFrames;
             int capacityBlocks = geometry.CapacityBlocks;
+
+            // Refuse before claiming a slot: a header that does not match this consumer's
+            // geometry would be read with the wrong stride.
+            BusLayout.RequireGeometry(name, channels, blockFrames, capacityBlocks,
+                expectedChannels, expectedBlockFrames, expectedCapacityBlocks);
 
             int chosen;
             if (slot >= 0)

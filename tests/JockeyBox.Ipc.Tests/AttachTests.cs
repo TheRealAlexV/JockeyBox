@@ -124,6 +124,101 @@ public sealed class AttachTests
     }
 
     [Fact]
+    public void Attach_Refuses_A_Channel_Width_The_Device_Does_Not_Match()
+    {
+        string name = NewBus("attach-width");
+        using var creator = VirtualBusWriter.Open(name, 48000, channels: 2, blockFrames: 480, capacityBlocks: 64);
+
+        var writerError = Assert.Throws<VirtualBusException>(() =>
+            VirtualBusWriter.Attach(name, channels: 8, blockFrames: 480, capacityBlocks: 64));
+        var readerError = Assert.Throws<VirtualBusException>(() =>
+            VirtualBusReader.Attach(name, maxLagBlocks: 0, scope: BusScope.Local,
+                channels: 8, blockFrames: 480, capacityBlocks: 64));
+
+        foreach (string message in new[] { writerError.Message, readerError.Message })
+        {
+            Assert.Contains("configured for 8 channels", message);
+            Assert.Contains("declares 2 channels", message);
+        }
+
+        // A refused attach leaves the ring untouched: the creator still owns the cursor.
+        Assert.Equal(0, creator.BlocksWritten);
+    }
+
+    [Fact]
+    public void Attach_Refuses_Block_Frames_And_Capacity_The_Device_Does_Not_Match()
+    {
+        string name = NewBus("attach-geometry");
+        using var creator = VirtualBusWriter.Open(name, 48000, channels: 2, blockFrames: 512, capacityBlocks: 32);
+
+        var framesError = Assert.Throws<VirtualBusException>(() =>
+            VirtualBusWriter.Attach(name, channels: 2, blockFrames: 480, capacityBlocks: 32));
+        Assert.Contains("configured for 480 block frames", framesError.Message);
+        Assert.Contains("declares 512 block frames", framesError.Message);
+
+        var capacityError = Assert.Throws<VirtualBusException>(() =>
+            VirtualBusReader.Attach(name, maxLagBlocks: 0, scope: BusScope.Local,
+                channels: 2, blockFrames: 512, capacityBlocks: 64));
+        Assert.Contains("configured for 64 blocks", capacityError.Message);
+        Assert.Contains("declares 32 blocks", capacityError.Message);
+    }
+
+    [Fact]
+    public void Attach_To_A_Matching_Section_Adopts_It_And_Leaves_Every_Header_Byte_Alone()
+    {
+        const int BlockFrames = 480;
+        const int Channels = 2;
+        const int Capacity = 64;
+        string name = NewBus("attach-header");
+
+        using var creator = VirtualBusWriter.Open(name, 48000, Channels, BlockFrames, Capacity);
+        var block = new float[BlockFrames * Channels];
+        for (int i = 0; i < 5; i++)
+        {
+            TestSignal.Fill(block, i + 1);
+            creator.Write(block);
+        }
+
+        byte[] before = ReadHeader(name);
+        using var attached = VirtualBusWriter.Attach(name, BusScope.Local,
+            channels: Channels, blockFrames: BlockFrames, capacityBlocks: Capacity);
+        byte[] after = ReadHeader(name);
+
+        Assert.Equal(Channels, attached.Channels);
+        Assert.Equal(BlockFrames, attached.BlockFrames);
+        Assert.Equal(Capacity, attached.CapacityBlocks);
+        Assert.Equal(5, attached.BlocksWritten);
+
+        Assert.Equal(BusLayout.HeaderSize, before.Length);
+        for (int i = 0; i < before.Length; i++)
+            Assert.True(before[i] == after[i],
+                $"header byte {i} changed across the attach: 0x{before[i]:X2} -> 0x{after[i]:X2}");
+
+        // And the attach actually carries audio: the reader joins at the newest block.
+        using var reader = VirtualBusReader.Attach(name, maxLagBlocks: 0, scope: BusScope.Local,
+            channels: Channels, blockFrames: BlockFrames, capacityBlocks: Capacity);
+        TestSignal.Fill(block, 6);
+        attached.Write(block);
+
+        var rx = new float[BlockFrames * Channels];
+        Assert.Equal(VirtualBusStatus.Data, reader.Read(rx));
+        Assert.True(TestSignal.BitEqual(block, rx), TestSignal.FirstDifference(block, rx));
+    }
+
+    /// <summary>The full 1024-byte header, read without touching a header field.</summary>
+    private static byte[] ReadHeader(string name)
+    {
+        using var map = OperatingSystem.IsWindows()
+            ? MemoryMappedFile.OpenExisting(BusLayout.MapNameFor(name, BusScope.Local), MemoryMappedFileRights.Read)
+            : MemoryMappedFile.CreateFromFile(BusLayout.PathFor(name), FileMode.Open, null, 0,
+                MemoryMappedFileAccess.Read);
+        using var view = map.CreateViewAccessor(0, BusLayout.HeaderSize, MemoryMappedFileAccess.Read);
+        var bytes = new byte[BusLayout.HeaderSize];
+        view.ReadArray(0, bytes, 0, bytes.Length);
+        return bytes;
+    }
+
+    [Fact]
     public void MapNameFor_Is_Pinned_For_Both_Scopes()
     {
         Assert.Equal(@"Local\JockeyBox.Bus.main", BusLayout.MapNameFor("main", BusScope.Local));
