@@ -146,9 +146,21 @@ out\AsioHostHarness.exe <dll> --keep
 
 The line-model geometry (three Stereo Lines plus two Mono Lines = 8 channels) is
 verified against the same fixture the app's writer test pins byte for byte. The
-fixture pin and the hostile config cases (byte limits, BOM, duplicate keys, torn
-tail, zero-byte and unreadable files) run in the **default** harness run above, so
-a reader/writer drift fails the normal suite. The live audio gate stays opt-in:
+fixture pin, the hostile config cases (byte limits, BOM, duplicate keys, torn
+tail, zero-byte and unreadable files) and the live rewrite cases run in the
+**default** harness run above, so a reader/writer drift or a live-edit regression
+fails the normal suite. The live cases drive a real running driver:
+
+- a width change under an attached bus (8 -> 10 channels) goes silent, reports
+  "config now declares 10 channels; restart the host to apply", and never
+  re-attaches however many ticks pass;
+- a torn rewrite and a zero-byte rewrite while attached leave the agreed stream
+  bit-exact (the ring never moves), report the refusal, and latch nothing;
+  restoring the file clears the refusal with no gap;
+- a same-width rewrite with a changed name changes nothing: no detach, no latch,
+  no silence.
+
+The end-to-end live audio gate stays opt-in:
 
 ```
 out\AsioHostHarness.exe --config-test ..\..\JockeyBox\Audio\Virtual\virtual-device.golden.json
