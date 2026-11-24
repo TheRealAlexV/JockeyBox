@@ -219,6 +219,13 @@ public sealed class LyricAlignmentService : IDisposable
                 RedirectStandardError = true,
             };
 
+            // The whisper model is ~150 MB and huggingface_hub would otherwise drop it
+            // in the user profile; keep it under the app home so a sandboxed or
+            // portable install carries its own model cache.
+            var hfHome = Path.Combine(AppPaths.Home, "huggingface");
+            psi.Environment["HF_HOME"] = hfHome;
+            psi.Environment["HUGGINGFACE_HUB_CACHE"] = Path.Combine(hfHome, "hub");
+
             using var proc = new Process { StartInfo = psi };
             proc.Start();
 
