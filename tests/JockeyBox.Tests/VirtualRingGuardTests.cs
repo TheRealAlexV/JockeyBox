@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Concurrent;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -9,6 +10,7 @@ using JockeyBox.Ipc;
 using JockeyBox.Settings;
 using JockeyBox.Tools;
 using Xunit;
+using Xunit.Abstractions;
 
 namespace JockeyBox.Tests;
 
@@ -24,6 +26,10 @@ public sealed class VirtualRingGuardTests
     private const int Rate = 48_000;
     private const int Block = 480;
     private const int Channels = 2;
+
+    private readonly ITestOutputHelper _output;
+
+    public VirtualRingGuardTests(ITestOutputHelper output) => _output = output;
 
     private static string NewName() => "guard" + Guid.NewGuid().ToString("N")[..12];
 
@@ -248,6 +254,24 @@ public sealed class VirtualRingGuardTests
                        VirtualBusSink.DefaultCapacityBlocks))
             {
                 before = first!.Sink.BlocksPublished;
+
+                // Diagnostics only (no assertion, no timing): is 'busy' claimed right
+                // now, and does the sink's Global check see anything for it?
+                var claimPath = BusLayout.LockPathFor(busy);
+                _output.WriteLine($"busy='{busy}' local={BusLayout.MapNameFor(busy, BusScope.Local)} " +
+                                  $"globalExists={BusLayout.GlobalSectionExists(busy)}");
+                _output.WriteLine($"claim file '{claimPath}' exists={File.Exists(claimPath)}");
+                try
+                {
+                    using var probe = new FileStream(claimPath, FileMode.Open, FileAccess.Read,
+                        FileShare.ReadWrite | FileShare.Delete);
+                    _output.WriteLine("claim probe: OPENED - no exclusive claim is held on 'busy'");
+                }
+                catch (Exception ex)
+                {
+                    _output.WriteLine($"claim probe: REFUSED {ex.GetType().Name}: {ex.Message}");
+                }
+
                 await engine.SetRouteAsync(new AudioRoute
                 {
                     VirtualBuses = new[] { BusKind.DeckA },
@@ -255,6 +279,13 @@ public sealed class VirtualRingGuardTests
                 });
 
                 var after = engine.Ring;
+                _output.WriteLine($"after: ring={(after is null ? "null" : "not null")}" +
+                                  (after is null
+                                      ? ""
+                                      : $" section='{after.Sink.SectionName}' dev='{after.Sink.DeviceName}' " +
+                                        $"ch={after.Sink.Channels} sameAsFirst={ReferenceEquals(first.Sink, after.Sink)} " +
+                                        $"taps0={(after.Taps.Taps.Count > 0 ? after.Taps.Taps[0].Bus.ToString() : "none")}"));
+                foreach (var line in lines) _output.WriteLine("log: " + line);
                 Assert.NotNull(after);
                 Assert.Same(first.Sink, after!.Sink);
                 Assert.Equal(live, after.Sink.SectionName);
