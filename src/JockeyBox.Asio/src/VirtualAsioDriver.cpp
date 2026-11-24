@@ -85,6 +85,7 @@ AsioBool JB_ASIO_CALL VirtualAsioDriver::init(void* sysHandle) {
     m_configErrorLogged = false;
     m_geometryMismatchLogged = false;
     m_restartRequiredLogged = false;
+    publishConfig(m_device.error, 0);
     if (m_device.error[0]) {
         char line[256];
         _snprintf_s(line, sizeof(line), _TRUNCATE,
@@ -106,8 +107,43 @@ void JB_ASIO_CALL VirtualAsioDriver::getDriverName(char* name) {
 
 long JB_ASIO_CALL VirtualAsioDriver::getDriverVersion() { return 1; }
 
+bool VirtualAsioDriver::publishConfig(const char* error, long declared) noexcept {
+    if (!TryAcquireSRWLockExclusive(&m_configLock)) return false;
+    _snprintf_s(m_configError, sizeof(m_configError), _TRUNCATE, "%s", error);
+    m_declaredChannels = declared;
+    ReleaseSRWLockExclusive(&m_configLock);
+    return true;
+}
+
+void VirtualAsioDriver::readConfig(char* error, size_t cap, long& declared) noexcept {
+    AcquireSRWLockShared(&m_configLock);
+    _snprintf_s(error, cap, _TRUNCATE, "%s", m_configError);
+    declared = m_declaredChannels;
+    ReleaseSRWLockShared(&m_configLock);
+}
+
 void JB_ASIO_CALL VirtualAsioDriver::getErrorMessage(char* text) {
     if (!text) return;
+    // The config refusal is what the operator must see. A bus that keeps running a
+    // geometry the file no longer declares, or a file this driver cannot parse, is
+    // silence with a healthy-looking driver unless it is said out loud here.
+    long declared = 0;
+    char reason[160] = {};
+    readConfig(reason, sizeof(reason), declared);
+    if (declared > 0) {
+        _snprintf_s(text, 124, _TRUNCATE,
+                    "JockeyBox Virtual ASIO: config now declares %ld channels; restart "
+                    "the host to apply, serving silence",
+                    declared);
+        return;
+    }
+    if (reason[0]) {
+        _snprintf_s(text, 124, _TRUNCATE,
+                    "JockeyBox Virtual ASIO: virtual-device.json refused (%s); serving "
+                    "silence",
+                    reason);
+        return;
+    }
     switch (m_busState.load(std::memory_order_relaxed)) {
         case kBusAttached:
             _snprintf_s(text, 124, _TRUNCATE,
@@ -163,13 +199,22 @@ void VirtualAsioDriver::resolveBusName() noexcept {
 
 void VirtualAsioDriver::attachBus() noexcept {
     if (m_busState.load(std::memory_order_relaxed) == kBusNameInvalid) return;
+    // A latched restart owns the decision until init() runs again: attaching a new
+    // width here would hand the host a geometry it never negotiated.
+    if (m_declaredChannels > 0) return;
 
     // Re-read the line list on every attempt, not only in init(): the retry runs
     // once a second and is the only place a driver that started before the app can
     // learn the geometry. A malformed file never becomes audio.
     config::Device latest;
     config::loadForHost(latest);
+
     if (latest.error[0]) {
+        // No geometry can be trusted from this file. Never downgrade a working
+        // attachment on a bad read (the app's writer is not atomic): report the
+        // refusal and keep the ring that was agreed, or stay silent when there is
+        // nothing attached to keep.
+        publishConfig(latest.error, 0);
         if (!m_configErrorLogged) {
             char line[256];
             _snprintf_s(line, sizeof(line), _TRUNCATE,
@@ -179,26 +224,56 @@ void VirtualAsioDriver::attachBus() noexcept {
             logOnce(line);
             m_configErrorLogged = true;
         }
-        m_busState.store(kBusAbsent, std::memory_order_relaxed);
+        if (!m_ring.attached()) m_busState.store(kBusAbsent, std::memory_order_relaxed);
+        return;
+    }
+    publishConfig("", 0);
+    m_configErrorLogged = false;
+
+    // Live geometry check, run every tick whether or not a bus is attached. The
+    // attached ring's width is what this driver is actually reading; a file that
+    // now declares another width means the app stopped writing ours, so detach and
+    // demand a restart instead of streaming from a ring nobody fills.
+    if (m_ring.attached() && latest.channels != m_ring.channels()) {
+        char line[256];
+        _snprintf_s(line, sizeof(line), _TRUNCATE,
+                    "virtual-device.json now declares %d channels but the attached bus "
+                    "is %ld; restart OBS to apply, serving silence",
+                    latest.channels, static_cast<long>(m_ring.channels()));
+        if (!m_restartRequiredLogged) {
+            logOnce(line);
+            m_restartRequiredLogged = true;
+        }
+        // Publish before detaching: if the host thread holds the lock this tick,
+        // leave the ring alone and try again next second.
+        if (publishConfig("", latest.channels)) {
+            m_ring.detach();
+            m_busState.store(kBusRestartRequired, std::memory_order_relaxed);
+        }
         return;
     }
 
     // Once the host has been told a channel count, a different config can only be
     // applied by restarting it. Say so instead of swapping bytes underneath it.
     if (m_negotiatedChannels > 0 && latest.channels != m_negotiatedChannels) {
+        char line[256];
+        _snprintf_s(line, sizeof(line), _TRUNCATE,
+                    "virtual-device.json now asks for %d channels but the host opened "
+                    "%ld; restart OBS to apply, serving silence",
+                    latest.channels, m_negotiatedChannels);
         if (!m_restartRequiredLogged) {
-            char line[256];
-            _snprintf_s(line, sizeof(line), _TRUNCATE,
-                        "virtual-device.json now asks for %d channels but the host opened "
-                        "%ld; restart OBS to apply, serving silence",
-                        latest.channels, m_negotiatedChannels);
             logOnce(line);
             m_restartRequiredLogged = true;
         }
-        m_ring.detach();
-        m_busState.store(kBusGeometryMismatch, std::memory_order_relaxed);
+        if (publishConfig("", latest.channels)) {
+            m_ring.detach();
+            m_busState.store(kBusRestartRequired, std::memory_order_relaxed);
+        }
         return;
     }
+
+    // Same width as the ring already being read: nothing to do.
+    if (m_ring.attached()) return;
 
     m_device = latest;
     m_channels = latest.channels;
@@ -302,8 +377,9 @@ AsioError JB_ASIO_CALL VirtualAsioDriver::getLatencies(long* inputLatency,
     // the mean buffered frames the reader's trim measured over its last 4 s span,
     // i.e. what the mixed route actually settles at; the trim can settle a few
     // blocks above the cushion, and reporting the cushion there would under-state
-    // the delay by exactly that residual. Before the first span completes (or when
-    // no bus is attached) it falls back to the cushion, then to one buffer.
+    // the delay by exactly that residual. Before the first span completes it falls
+    // back to the cushion, and with no bus attached the cushion is zero: the report
+    // is then one host buffer with no lag behind it, not a guessed extra block.
     const int64_t measured = m_ring.measuredLagFrames();
     const long lag = measured >= 0
                          ? static_cast<long>(measured)
@@ -535,11 +611,11 @@ void VirtualAsioDriver::clockLoop() {
     long index = 0;
 
     while (m_running.load(std::memory_order_relaxed)) {
-        // Reattach at most once a second: a missing section must not turn into
-        // per-callback work, and the retry allocates. Until then, silence. An
-        // invalid name can never attach, so skip the loop entirely.
-        if (!m_ring.attached() &&
-            m_busState.load(std::memory_order_relaxed) != kBusNameInvalid) {
+        // Re-read the config at most once a second, attached or not: a live edit
+        // that changes the width must be noticed, not left to underrun into silence
+        // against a ring the app stopped filling. The retry allocates, so it never
+        // becomes per-callback work. An invalid name can never attach, so skip it.
+        if (m_busState.load(std::memory_order_relaxed) != kBusNameInvalid) {
             const long long nowTicks = qpcNow(freq);
             if (nowTicks - m_lastBusAttempt >= freq.QuadPart) {
                 m_lastBusAttempt = nowTicks;

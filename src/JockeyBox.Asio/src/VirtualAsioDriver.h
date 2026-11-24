@@ -121,6 +121,20 @@ private:
     bool m_geometryMismatchLogged = false;
     bool m_restartRequiredLogged = false;
 
+    // Latest refusal text from config::load, copied out of the throwaway Device the
+    // once-a-second re-read uses, so getErrorMessage can report the same reason the
+    // debug log got. Empty means the last read was clean or absent (stereo default).
+    // The clock thread publishes, the host thread reads; the clock never blocks (it
+    // retries on the next tick) so a diagnostic can never stall audio.
+    bool publishConfig(const char* error, long declared) noexcept;
+    void readConfig(char* error, size_t cap, long& declared) noexcept;
+    SRWLOCK m_configLock = SRWLOCK_INIT;
+    char m_configError[160] = {};
+    // Channel count the file declared when the restart was demanded. Non-zero latches
+    // it: the driver never attaches a different width under a host that already opened
+    // buffers, so it goes silent and says why until the host restarts.
+    long m_declaredChannels = 0;
+
     float* inputChannel(long channel) noexcept {
         return m_in.get() + channel * 2 * kMaxBufferSize;
     }
@@ -137,6 +151,10 @@ private:
         kBusAttached = 1,
         kBusNameInvalid = 2,
         kBusGeometryMismatch = 3,
+        // The file now declares a different width than the open host/ring. Latched
+        // for the life of the object: a new geometry cannot be applied under a host
+        // that already negotiated buffers, so never re-attach after this.
+        kBusRestartRequired = 4,
     };
     std::atomic<long> m_busState{kBusAbsent};
     // Effective ring cushion in frames, published by attachBus() from the

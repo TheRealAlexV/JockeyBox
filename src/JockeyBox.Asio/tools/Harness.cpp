@@ -1776,6 +1776,661 @@ int runChannelGeometryTest(const wchar_t* configPath) {
     return failures;
 }
 
+// ---- config reader: fixture pin and hostile inputs --------------------------
+// Part of the default run, not an opt-in step: a reader/writer drift that would
+// present on air as silence has to fail the normal suite. Needs no driver and no
+// host, so it costs milliseconds.
+namespace {
+
+bool writeConfigFile(const wchar_t* path, const char* text, size_t length) {
+    HANDLE file = CreateFileW(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                              FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return false;
+    DWORD written = 0;
+    const bool ok = length == 0 ||
+                    (WriteFile(file, text, static_cast<DWORD>(length), &written, nullptr) &&
+                     written == static_cast<DWORD>(length));
+    CloseHandle(file);
+    return ok;
+}
+
+}  // namespace
+
+static int runConfigReaderTests(const wchar_t* goldenPath) {
+    using jb::asio::config::Device;
+    int failures = 0;
+    int cases = 0;
+    wprintf(L"\n== config reader: fixture pin and hostile inputs ==\n");
+
+    // Parses one buffer and checks acceptance plus, on refusal, that the reason
+    // names what the operator has to fix.
+    const auto expectBuffer = [&](const char* label, const char* text, size_t length,
+                                  bool wantOk, const char* mention) {
+        Device device;
+        const bool ok = jb::asio::config::parse(text, length, device);
+        const bool named = mention == nullptr || std::strstr(device.error, mention) != nullptr;
+        const bool passed = ok == wantOk && named;
+        ++cases;
+        wprintf(L"%-24hs : %hs", label, ok ? "accepted" : "refused");
+        if (!ok) wprintf(L" [%hs]", device.error);
+        wprintf(L" %s\n", passed ? L"OK" : L"WRONG");
+        if (!passed) ++failures;
+    };
+
+    // The committed fixture is the pin between this reader and the C# writer:
+    // 3 stereo + 2 mono lines, 8 channels, in the app's own key order.
+    {
+        Device device;
+        const bool loaded = jb::asio::config::load(goldenPath, device);
+        const bool shape = loaded && device.lineCount == 5 && device.channels == 8 &&
+                           std::strcmp(device.lines[0].id, "deck-a") == 0 &&
+                           std::strcmp(device.lines[0].name, "Deck A") == 0 &&
+                           std::strcmp(device.lines[0].source, "deck:a") == 0 &&
+                           device.lines[0].channels == 2 && device.lines[1].channels == 2 &&
+                           device.lines[2].channels == 2 && device.lines[3].channels == 1 &&
+                           device.lines[4].channels == 1;
+        ++cases;
+        wprintf(L"%-24hs : %d lines, %d channels %s\n", "golden fixture", device.lineCount,
+                device.channels, shape ? L"OK" : L"WRONG");
+        if (!shape) {
+            wprintf(L"  %hs\n", loaded ? "wrong shape" : device.error);
+            ++failures;
+        }
+    }
+
+    char text[4096] = {};
+    char field[192] = {};
+
+    // Byte limits: id 63, name 63, source 127. 63 fits, 64 does not, and the
+    // refusal names the field and the count so the app side can match it.
+    std::memset(field, 'n', 63);
+    field[63] = '\0';
+    _snprintf_s(text, sizeof(text), _TRUNCATE,
+                "{\"version\":1,\"lines\":[{\"id\":\"l1\",\"name\":\"%s\",\"type\":"
+                "\"stereo\",\"source\":\"s\",\"gain\":1,\"mute\":false}]}",
+                field);
+    expectBuffer("name at 63 bytes", text, std::strlen(text), true, nullptr);
+
+    std::memset(field, 'n', 64);
+    field[64] = '\0';
+    _snprintf_s(text, sizeof(text), _TRUNCATE,
+                "{\"version\":1,\"lines\":[{\"id\":\"l1\",\"name\":\"%s\",\"type\":"
+                "\"stereo\",\"source\":\"s\",\"gain\":1,\"mute\":false}]}",
+                field);
+    expectBuffer("name at 64 bytes", text, std::strlen(text), false, "name is 64 bytes");
+
+    // The review's case: 40 accented characters are 80 UTF-8 bytes, which is over
+    // the 63-byte cap even though it is 40 "characters". 31 fit, 32 do not.
+    {
+        char accented[192] = {};
+        for (int i = 0; i < 31; ++i) std::memcpy(accented + i * 2, "\xC3\xA9", 2);
+        _snprintf_s(text, sizeof(text), _TRUNCATE,
+                    "{\"version\":1,\"lines\":[{\"id\":\"l1\",\"name\":\"%s\",\"type\":"
+                    "\"stereo\",\"source\":\"s\",\"gain\":1,\"mute\":false}]}",
+                    accented);
+        expectBuffer("31 accented chars", text, std::strlen(text), true, nullptr);
+
+        for (int i = 0; i < 32; ++i) std::memcpy(accented + i * 2, "\xC3\xA9", 2);
+        _snprintf_s(text, sizeof(text), _TRUNCATE,
+                    "{\"version\":1,\"lines\":[{\"id\":\"l1\",\"name\":\"%s\",\"type\":"
+                    "\"stereo\",\"source\":\"s\",\"gain\":1,\"mute\":false}]}",
+                    accented);
+        expectBuffer("32 accented chars", text, std::strlen(text), false, "name is 64 bytes");
+    }
+
+    std::memset(field, 'o', 64);
+    field[64] = '\0';
+    _snprintf_s(text, sizeof(text), _TRUNCATE,
+                "{\"version\":1,\"lines\":[{\"id\":\"%s\",\"name\":\"n\",\"type\":"
+                "\"stereo\",\"source\":\"s\",\"gain\":1,\"mute\":false}]}",
+                field);
+    expectBuffer("id at 64 bytes", text, std::strlen(text), false, "id is 64 bytes");
+
+    std::memset(field, 's', 128);
+    field[128] = '\0';
+    _snprintf_s(text, sizeof(text), _TRUNCATE,
+                "{\"version\":1,\"lines\":[{\"id\":\"l1\",\"name\":\"n\",\"type\":"
+                "\"stereo\",\"source\":\"%s\",\"gain\":1,\"mute\":false}]}",
+                field);
+    expectBuffer("source at 128 bytes", text, std::strlen(text), false, "source is 128 bytes");
+
+    // A UTF-8 BOM is legal on disk and must not read as "root is not an object".
+    {
+        const char body[] =
+            "{\"version\":1,\"lines\":[{\"id\":\"l1\",\"name\":\"n\",\"type\":\"stereo\","
+            "\"source\":\"s\",\"gain\":1,\"mute\":false}]}";
+        char bom[sizeof(body) + 3] = {};
+        std::memcpy(bom, "\xEF\xBB\xBF", 3);
+        std::memcpy(bom + 3, body, sizeof(body) - 1);
+        expectBuffer("UTF-8 BOM", bom, sizeof(body) - 1 + 3, true, nullptr);
+    }
+
+    // Duplicate keys: the writer never emits one, and merging a second "lines"
+    // would silently change the channel count.
+    {
+        const char dupRoot[] =
+            "{\"version\":1,\"lines\":[],\"lines\":[{\"id\":\"l1\",\"name\":\"n\","
+            "\"type\":\"stereo\",\"source\":\"s\",\"gain\":1,\"mute\":false}]}";
+        expectBuffer("duplicate 'lines'", dupRoot, sizeof(dupRoot) - 1, false,
+                     "duplicate 'lines'");
+        const char dupMember[] =
+            "{\"version\":1,\"lines\":[{\"id\":\"l1\",\"name\":\"n\",\"name\":\"m\","
+            "\"type\":\"stereo\",\"source\":\"s\",\"gain\":1,\"mute\":false}]}";
+        expectBuffer("duplicate 'name'", dupMember, sizeof(dupMember) - 1, false,
+                     "duplicate 'name'");
+    }
+
+    // version is an integer in the writer; 1.0 and 1e0 are different JSON values.
+    {
+        const char vFloat[] =
+            "{\"version\":1.0,\"lines\":[{\"id\":\"l1\",\"name\":\"n\",\"type\":\"stereo\","
+            "\"source\":\"s\",\"gain\":1,\"mute\":false}]}";
+        expectBuffer("version 1.0", vFloat, sizeof(vFloat) - 1, false, "expected an integer");
+        const char vExp[] =
+            "{\"version\":1e0,\"lines\":[{\"id\":\"l1\",\"name\":\"n\",\"type\":\"stereo\","
+            "\"source\":\"s\",\"gain\":1,\"mute\":false}]}";
+        expectBuffer("version 1e0", vExp, sizeof(vExp) - 1, false, "expected an integer");
+    }
+
+    // Strict JSON numbers: a leading zero is rejected, and a 64-character literal
+    // fails exactly where the app's System.Text.Json fails.
+    {
+        const char leadingZero[] =
+            "{\"version\":1,\"lines\":[{\"id\":\"l1\",\"name\":\"n\",\"type\":\"stereo\","
+            "\"source\":\"s\",\"gain\":01.5,\"mute\":false}]}";
+        expectBuffer("gain 01.5", leadingZero, sizeof(leadingZero) - 1, false, "leading zero");
+
+        char longNumber[256] = {};
+        longNumber[0] = '1';
+        std::memset(longNumber + 1, '0', 63);
+        const char* prefix =
+            "{\"version\":1,\"lines\":[{\"id\":\"l1\",\"name\":\"n\",\"type\":\"stereo\","
+            "\"source\":\"s\",\"gain\":";
+        const char* suffix = ",\"mute\":false}]}";
+        _snprintf_s(text, sizeof(text), _TRUNCATE, "%s%s%s", prefix, longNumber, suffix);
+        expectBuffer("64-char number", text, std::strlen(text), false, "longer than 63");
+
+        const char okGain[] =
+            "{\"version\":1,\"lines\":[{\"id\":\"l1\",\"name\":\"n\",\"type\":\"stereo\","
+            "\"source\":\"s\",\"gain\":0.5,\"mute\":false}]}";
+        expectBuffer("gain 0.5", okGain, sizeof(okGain) - 1, true, nullptr);
+    }
+
+    // The writer always emits name and source; a missing one is a torn or edited
+    // file, not a shorter form to be guessed at.
+    {
+        const char noName[] =
+            "{\"version\":1,\"lines\":[{\"id\":\"l1\",\"type\":\"stereo\",\"source\":\"s\","
+            "\"gain\":1,\"mute\":false}]}";
+        expectBuffer("missing name", noName, sizeof(noName) - 1, false, "line has no name");
+        const char noSource[] =
+            "{\"version\":1,\"lines\":[{\"id\":\"l1\",\"name\":\"n\",\"type\":\"stereo\","
+            "\"gain\":1,\"mute\":false}]}";
+        expectBuffer("missing source", noSource, sizeof(noSource) - 1, false,
+                     "line has no source");
+    }
+
+    // File-level cases: absence is the stereo default, everything else refuses.
+    {
+        wchar_t temp[MAX_PATH] = {};
+        wchar_t scratch[MAX_PATH] = {};
+        wchar_t absent[MAX_PATH] = {};
+        wchar_t directory[MAX_PATH] = {};
+        GetTempPathW(MAX_PATH, temp);
+        swprintf_s(scratch, L"%sjb-config-%lu.json", temp, GetCurrentProcessId());
+        swprintf_s(absent, L"%sjb-config-absent-%lu.json", temp, GetCurrentProcessId());
+        swprintf_s(directory, L"%sjb-config-dir-%lu", temp, GetCurrentProcessId());
+        DeleteFileW(absent);
+
+        const char truncated[] =
+            "{\"version\":1,\"lines\":[{\"id\":\"deck-a\",\"name\":\"Deck A\",\"type\":"
+            "\"stereo\",\"source\":\"deck:a\",\"gain\":1,\"mut";
+        // A writer caught mid-file leaves a torn tail: refuse, never guess.
+        {
+            Device device;
+            bool ok = writeConfigFile(scratch, truncated, sizeof(truncated) - 1);
+            const bool loaded = ok && jb::asio::config::load(scratch, device);
+            const bool passed = ok && !loaded && device.error[0] != '\0';
+            ++cases;
+            wprintf(L"%-24hs : %hs [%hs] %s\n", "torn tail",
+                    loaded ? "accepted" : "refused", device.error, passed ? L"OK" : L"WRONG");
+            if (!passed) ++failures;
+            DeleteFileW(scratch);
+        }
+        // Zero bytes is a file whose content is unknown, not "unconfigured".
+        {
+            Device device;
+            const bool wrote = writeConfigFile(scratch, "", 0);
+            const bool loaded = wrote && jb::asio::config::load(scratch, device);
+            const bool passed = wrote && !loaded && std::strstr(device.error, "empty") != nullptr;
+            ++cases;
+            wprintf(L"%-24hs : %hs [%hs] %s\n", "zero-byte file",
+                    loaded ? "accepted" : "refused", device.error, passed ? L"OK" : L"WRONG");
+            if (!passed) ++failures;
+            DeleteFileW(scratch);
+        }
+        // A genuinely absent file is the legacy stereo default: no error text.
+        {
+            Device device;
+            const bool loaded = jb::asio::config::load(absent, device);
+            const bool passed = !loaded && device.error[0] == '\0' && !device.loaded &&
+                                device.channels == jb::asio::config::kMinChannels;
+            ++cases;
+            wprintf(L"%-24hs : %s %s\n", "absent file", passed ? L"stereo default" : L"WRONG",
+                    passed ? L"OK" : L"");
+            if (!passed) ++failures;
+        }
+        // Access denied (a directory here) is a refusal that names the Windows
+        // error, not a silent two-channel device.
+        {
+            Device device;
+            const bool made = CreateDirectoryW(directory, nullptr) != FALSE;
+            const bool loaded = made && jb::asio::config::load(directory, device);
+            const bool passed = made && !loaded &&
+                                std::strstr(device.error, "Windows error") != nullptr;
+            ++cases;
+            wprintf(L"%-24hs : %hs [%hs] %s\n", "unreadable file",
+                    loaded ? "accepted" : "refused", device.error, passed ? L"OK" : L"WRONG");
+            if (!passed) ++failures;
+            RemoveDirectoryW(directory);
+        }
+    }
+
+    wprintf(L"config limits     : id %zu B, name %zu B, source %zu B, number %zu chars\n",
+            jb::asio::config::kIdBytes, jb::asio::config::kNameBytes,
+            jb::asio::config::kSourceBytes, jb::asio::config::kMaxNumberChars);
+    wprintf(L"config reader     : %s (%d cases, %d failing)\n",
+            failures == 0 ? L"PASS" : L"FAIL", cases, failures);
+    return failures;
+}
+
+// ---- live config: rewrite the line list under a running driver --------------
+// The three claims a static read cannot prove: a width change must go silent and
+// demand a restart, a torn or empty rewrite must not disturb the agreed stream,
+// and a same-width edit must be a no-op. Each case drives a real driver on a real
+// bus and rewrites the file the once-a-second tick reads.
+namespace {
+
+// Canonical form for `stereo` stereo lines plus two mono lines (3 = 8 channels,
+// 4 = 10), in the writer's key order, with the first name swappable so a
+// same-width edit still changes the bytes.
+int buildLineConfig(char* out, size_t cap, int stereo, const char* firstName) {
+    int used = _snprintf_s(out, cap, _TRUNCATE, "{\"version\":1,\"lines\":[");
+    for (int i = 0; i < stereo + 2; ++i) {
+        const bool isStereo = i < stereo;
+        char name[64] = {};
+        _snprintf_s(name, sizeof(name), _TRUNCATE, "%s %d", i == 0 ? firstName : (isStereo ? "Deck" : "Mic"), i);
+        used += _snprintf_s(out + used, cap - used, _TRUNCATE,
+                            "%s{\"id\":\"l%d\",\"name\":\"%s\",\"type\":\"%s\",\"source\":\"s%d\","
+                            "\"gain\":1,\"mute\":false}",
+                            i ? "," : "", i, name, isStereo ? "stereo" : "mono", i);
+    }
+    used += _snprintf_s(out + used, cap - used, _TRUNCATE, "]}");
+    return used;
+}
+
+bool captureSilent(const float (*block)[kBusFrames]) {
+    for (int ch = 0; ch < kGeometryChannels; ++ch)
+        for (int f = 0; f < kBusFrames; ++f)
+            if (block[ch][f] != 0.0f) return false;
+    return true;
+}
+
+bool captureMatchesTone(const float (*block)[kBusFrames], int64_t index) {
+    for (int ch = 0; ch < kGeometryChannels; ++ch)
+        for (int f = 0; f < kBusFrames; ++f)
+            if (block[ch][f] != toneFor(index, f, ch)) return false;
+    return true;
+}
+
+struct CaptureRun {
+    long leadIn = -1;
+    long matched = 0;
+    long silent = 0;      // a gap after the stream started: a glitch, not lead-in
+    long mismatched = 0;
+    long firstSilent = -1;
+    long firstMismatch = -1;
+};
+
+// Pairs captures [from, to) with the block each should carry. The first
+// non-silent capture names the block the reader starts on (the writer prefills,
+// so it is not necessarily 0); a silent callback does not consume a block (the
+// reader repeats its position until new data arrives), so the expected index only
+// advances on delivered content. Any later silent callback is a gap.
+CaptureRun checkCaptureRun(const GeometryCaptures& caps, long from, long to) {
+    CaptureRun run;
+    int64_t expect = -1;
+    for (long i = from; i < to; ++i) {
+        if (expect < 0) {
+            if (captureSilent(caps.block[i])) continue;
+            run.leadIn = i;
+            // Which block does the first delivered callback carry? Search the
+            // prefill window (a few blocks) rather than assuming block 0.
+            for (int64_t k = 0; k < 128; ++k) {
+                if (captureMatchesTone(caps.block[i], k)) {
+                    expect = k;
+                    break;
+                }
+            }
+            if (expect < 0) {
+                ++run.mismatched;
+                if (run.firstMismatch < 0) run.firstMismatch = i;
+                continue;
+            }
+        }
+        if (captureSilent(caps.block[i])) {
+            ++run.silent;
+            if (run.firstSilent < 0) run.firstSilent = i;
+            continue;
+        }
+        if (captureMatchesTone(caps.block[i], expect)) {
+            ++run.matched;
+        } else {
+            ++run.mismatched;
+            if (run.firstMismatch < 0) run.firstMismatch = i;
+        }
+        ++expect;
+    }
+    return run;
+}
+
+// The live cases need a cushion deep enough that a stalled harness thread or an
+// antivirus scan on the config rewrite cannot empty the ring under them.
+constexpr int kLiveCapacity = 64;
+
+struct LiveCase {
+    TestBus bus;
+    std::unique_ptr<GeometryCaptures> caps;
+    jb::asio::IASIO* driver = nullptr;
+    jb::asio::AsioBufferInfo infos[16] = {};
+    int64_t next = 0;
+    long channels = 0;
+};
+
+}  // namespace
+
+static int runLiveConfigTests() {
+    int failures = 0;
+    wprintf(L"\n== live config: rewrite under a running driver ==\n");
+
+    // The writer below paces itself with Sleep(1). Without the 1 ms timer this
+    // process would sleep ~15 ms and starve a 16-block ring: measure the driver,
+    // not the harness's timer granularity.
+    timeBeginPeriod(1);
+
+    wchar_t temp[MAX_PATH] = {};
+    GetTempPathW(MAX_PATH, temp);
+    const unsigned long pid = GetCurrentProcessId();
+    wchar_t cfg[MAX_PATH] = {};
+    swprintf_s(cfg, L"%sjb-live-%lu.json", temp, pid);
+
+    // wmain points the driver at a missing file so the machine's own config cannot
+    // change the geometry of the other passes; these cases need their own path and
+    // must put that back on the way out.
+    wchar_t previousOverride[1024] = {};
+    const DWORD previousLength =
+        GetEnvironmentVariableW(jb::asio::config::kEnvOverride, previousOverride, 1024);
+
+    jb::asio::AsioCallbacks callbacks = {onBufferSwitch, onSampleRateChanged,
+                                         onAsioMessage, onBufferSwitchTimeInfo};
+
+    // Opens one driver on a fresh bus of `channels`, pre-publishes the cushion and
+    // starts the clock so the captures are what the host actually received.
+    const auto startLive = [&](LiveCase& c, const char* busNameA, const wchar_t* busName,
+                               long channels) {
+        if (!c.bus.create(busName, kBusFrames, kLiveCapacity, channels)) return false;
+        c.bus.sampler = &toneFor;
+        c.caps.reset(new GeometryCaptures());
+        c.driver = openDriver(busNameA);
+        if (!c.driver) return false;
+        long in = 0, out = 0;
+        if (c.driver->getChannels(&in, &out) != jb::asio::kAseOk || in != channels ||
+            out != channels)
+            return false;
+        for (long i = 0; i < channels; ++i) {
+            c.infos[i].isInput = jb::asio::kAsioTrue;
+            c.infos[i].channelNum = i;
+            c.infos[channels + i].isInput = jb::asio::kAsioFalse;
+            c.infos[channels + i].channelNum = i;
+        }
+        if (c.driver->createBuffers(c.infos, channels * 2, kBusFrames, &callbacks) !=
+            jb::asio::kAseOk)
+            return false;
+        for (long ch = 0; ch < channels; ++ch) {
+            g_inBuf[ch][0] = static_cast<const float*>(c.infos[ch].buffers[0]);
+            g_inBuf[ch][1] = static_cast<const float*>(c.infos[ch].buffers[1]);
+        }
+        for (int b = 0; b < 40; ++b) c.bus.publish(c.next++);
+        g_geometry = c.caps.get();
+        if (c.driver->start() != jb::asio::kAseOk) return false;
+        c.channels = channels;
+        return true;
+    };
+
+    // Keeps the writer `ahead` blocks in front of the reader: the pace is the
+    // reader's clock, and the cushion absorbs a descheduled harness thread or a
+    // file-scan stall on the rewrite (forty blocks is 107 ms). The ring is created
+    // with 64 blocks so the writer can hold that cushion without lapping the reader.
+    // When the driver has detached, nobody advances, so fall back to the app's own
+    // cadence: an app that has not noticed the edit.
+    constexpr long long ahead = 40;
+    LARGE_INTEGER freq;
+    QueryPerformanceFrequency(&freq);
+    const auto feed = [&](LiveCase& c, int blocks) {
+        for (int i = 0; i < blocks; ++i) {
+            const int slot = c.bus.activeSlot();
+            if (slot < 0) {
+                c.bus.publish(c.next++);
+                Sleep(3);
+                continue;
+            }
+            const long long limit = qpcTicks() + freq.QuadPart / 5;  // 200 ms
+            while (c.next - c.bus.slotValue(slot, jb::asio::bus::kSlotReadBlockIndex) >= ahead &&
+                   qpcTicks() < limit)
+                Sleep(0);
+            c.bus.publish(c.next++);
+        }
+    };
+
+    const auto finish = [&](LiveCase& c) {
+        if (c.driver) {
+            c.driver->stop();
+            c.driver->disposeBuffers();
+            c.driver->Release();
+            c.driver = nullptr;
+        }
+        g_geometry = nullptr;
+        for (int ch = 0; ch < kGeometryChannels; ++ch) g_inBuf[ch][0] = g_inBuf[ch][1] = nullptr;
+        c.bus.close();
+    };
+
+    // Ring counters from the reader's own slot, read before stop() releases it.
+    const auto counters = [&](LiveCase& c, long long& underruns, long long& trims,
+                              long long& corrections) {
+        const int slot = c.bus.activeSlot();
+        underruns = slot >= 0 ? c.bus.slotValue(slot, jb::asio::bus::kSlotUnderruns) : -1;
+        trims = slot >= 0 ? c.bus.slotValue(slot, jb::asio::bus::kSlotTrims) : -1;
+        corrections = slot >= 0 ? c.bus.slotValue(slot, jb::asio::bus::kSlotCorrections) : -1;
+    };
+
+
+    char text[2048] = {};
+
+    // --- Case A: width change mid-stream ---------------------------------------
+    {
+        wchar_t busName[64] = {};
+        char busNameA[64] = {};
+        swprintf_s(busName, L"live-a-%lu", pid);
+        sprintf_s(busNameA, "live-a-%lu", pid);
+        writeConfigFile(cfg, text, buildLineConfig(text, sizeof(text), 3, "Deck"));  // 8
+        SetEnvironmentVariableW(jb::asio::config::kEnvOverride, cfg);
+
+        LiveCase c;
+        if (!startLive(c, busNameA, busName, 8)) {
+            wprintf(L"width change mid  : WRONG (could not start the 8-channel driver)\n");
+            ++failures;
+            finish(c);
+        } else {
+            feed(c, 200);  // ~0.5 s of real stream
+            const long atRewrite = c.caps->count.load();
+            writeConfigFile(cfg, text, buildLineConfig(text, sizeof(text), 4, "Deck"));  // 10
+            feed(c, 700);  // ~1.9 s: past the 1 s tick, still feeding the 8-channel ring
+            const long afterTick = c.caps->count.load();
+
+            char error[124] = {};
+            c.driver->getErrorMessage(error);
+            const CaptureRun healthy = checkCaptureRun(*c.caps, 0, atRewrite);
+            long silentAfter = 0, loudAfter = 0;
+            for (long i = afterTick > 100 ? afterTick - 100 : 0; i < afterTick; ++i) {
+                if (captureSilent(c.caps->block[i])) ++silentAfter; else ++loudAfter;
+            }
+            const bool restartNamed = std::strstr(error, "restart the host to apply") != nullptr &&
+                                      std::strstr(error, "10 channels") != nullptr;
+
+            // Another 1.3 s of ticks and fresh ring content: still silent, still
+            // restart-required, so nothing re-attached under the open host.
+            feed(c, 600);
+            const long later = c.caps->count.load();
+            long loudLater = 0;
+            for (long i = later > 100 ? later - 100 : 0; i < later; ++i)
+                if (!captureSilent(c.caps->block[i])) ++loudLater;
+            char errorLater[124] = {};
+            c.driver->getErrorMessage(errorLater);
+            const bool stillRestart =
+                std::strstr(errorLater, "restart the host to apply") != nullptr;
+
+            const bool passed = healthy.matched > 50 && healthy.mismatched == 0 &&
+                                healthy.silent == 0 && loudAfter == 0 && silentAfter >= 90 &&
+                                restartNamed && loudLater == 0 && stillRestart;
+            wprintf(L"width change mid  : 8 ch streamed %ld blocks, then 10 ch -> %ld/%ld "
+                    L"callbacks silent, error '%hs', 1.3 s later %ld loud %s\n",
+                    healthy.matched, silentAfter, silentAfter + loudAfter, error, loudLater,
+                    passed ? L"OK" : L"WRONG");
+            if (!passed) ++failures;
+            finish(c);
+        }
+        DeleteFileW(cfg);
+    }
+
+    // --- Case B: torn, then empty, then restored while attached -----------------
+    {
+        wchar_t busName[64] = {};
+        char busNameA[64] = {};
+        swprintf_s(busName, L"live-b-%lu", pid);
+        sprintf_s(busNameA, "live-b-%lu", pid);
+        writeConfigFile(cfg, text, buildLineConfig(text, sizeof(text), 3, "Deck"));  // 8
+        SetEnvironmentVariableW(jb::asio::config::kEnvOverride, cfg);
+
+        LiveCase c;
+        if (!startLive(c, busNameA, busName, 8)) {
+            wprintf(L"torn rewrite      : WRONG (could not start the driver)\n");
+            ++failures;
+            finish(c);
+        } else {
+            feed(c, 200);
+            char errorTorn[124] = {};
+            char errorEmpty[124] = {};
+            char errorBack[124] = {};
+
+            // A writer caught mid-file: the agreed stream must not move.
+            const char torn[] =
+                "{\"version\":1,\"lines\":[{\"id\":\"l1\",\"name\":\"Deck 0\",\"type\":";
+            writeConfigFile(cfg, torn, sizeof(torn) - 1);
+            feed(c, 600);  // ~1.6 s: past the 1 s tick, still streaming
+            c.driver->getErrorMessage(errorTorn);
+
+            // Zero bytes: unknown content, still not a reason to drop audio.
+            writeConfigFile(cfg, "", 0);
+            feed(c, 600);
+            c.driver->getErrorMessage(errorEmpty);
+
+            // Restore: the refusal clears and the stream is still the same stream.
+            writeConfigFile(cfg, text, buildLineConfig(text, sizeof(text), 3, "Deck"));
+            feed(c, 600);
+            long long underruns = 0, trims = 0, corrections = 0;
+            counters(c, underruns, trims, corrections);
+            // Join the clock first: captures taken while the analysis runs would be
+            // the drained ring after the last publish, not a glitch.
+            c.driver->stop();
+            c.driver->getErrorMessage(errorBack);
+
+            // The last few callbacks after the final publish are the cushion
+            // draining because the test stopped writing; they are not the stream.
+            const long total = c.caps->count.load();
+            const long end = total > 4 ? total - 4 : total;
+            const CaptureRun run = checkCaptureRun(*c.caps, 0, end);
+            const bool refusedTorn = std::strstr(errorTorn, "refused") != nullptr;
+            const bool refusedEmpty = std::strstr(errorEmpty, "refused") != nullptr &&
+                                      std::strstr(errorEmpty, "empty") != nullptr;
+            const bool noLatch = std::strstr(errorTorn, "restart") == nullptr &&
+                                 std::strstr(errorEmpty, "restart") == nullptr;
+            const bool recovered = std::strstr(errorBack, "refused") == nullptr &&
+                                   std::strstr(errorBack, "restart") == nullptr;
+            const bool passed = run.matched > 500 && run.mismatched == 0 && run.silent == 0 &&
+                                refusedTorn && refusedEmpty && noLatch && recovered;
+            wprintf(L"torn rewrite      : %ld blocks bit-exact, %ld silent, %ld mismatched, ring "
+                    L"u%lld t%lld c%lld; torn '%hs' empty '%hs' back '%hs' %s\n",
+                    run.matched, run.silent, run.mismatched, underruns, trims, corrections,
+                    errorTorn, errorEmpty, errorBack, passed ? L"OK" : L"WRONG");
+            if (!passed) ++failures;
+            finish(c);
+        }
+        DeleteFileW(cfg);
+    }
+
+    // --- Case C: same width, different bytes ------------------------------------
+    {
+        wchar_t busName[64] = {};
+        char busNameA[64] = {};
+        swprintf_s(busName, L"live-c-%lu", pid);
+        sprintf_s(busNameA, "live-c-%lu", pid);
+        writeConfigFile(cfg, text, buildLineConfig(text, sizeof(text), 3, "Deck"));  // 8
+        SetEnvironmentVariableW(jb::asio::config::kEnvOverride, cfg);
+
+        LiveCase c;
+        if (!startLive(c, busNameA, busName, 8)) {
+            wprintf(L"same width edit   : WRONG (could not start the driver)\n");
+            ++failures;
+            finish(c);
+        } else {
+            feed(c, 200);
+            const long atEdit = c.caps->count.load();
+            writeConfigFile(cfg, text, buildLineConfig(text, sizeof(text), 3, "Room"));  // still 8
+            feed(c, 600);
+            char error[124] = {};
+            c.driver->getErrorMessage(error);  // before stop(): the attached text
+            c.driver->stop();                  // the capture array is final before it is judged
+            const long afterEdit = c.caps->count.load();
+            const long end = afterEdit > 4 ? afterEdit - 4 : afterEdit;
+
+            const CaptureRun run = checkCaptureRun(*c.caps, 0, end);
+            long loudAfter = 0;
+            for (long i = atEdit; i < end; ++i)
+                if (!captureSilent(c.caps->block[i])) ++loudAfter;
+            const bool untouched = std::strstr(error, "restart") == nullptr &&
+                                   std::strstr(error, "refused") == nullptr &&
+                                   std::strstr(error, "reading bus") != nullptr;
+            const bool passed = run.matched > 400 && run.mismatched == 0 && run.silent == 0 &&
+                                loudAfter == end - atEdit && untouched;
+            wprintf(L"same width edit   : %ld blocks bit-exact, %ld/%ld loud after the edit, "
+                    L"error '%hs' %s\n",
+                    run.matched, loudAfter, end - atEdit, error, passed ? L"OK" : L"WRONG");
+            if (!passed) ++failures;
+            finish(c);
+        }
+        DeleteFileW(cfg);
+    }
+
+    // Put back whatever wmain set, so the audio-path passes still see no config.
+    if (previousLength > 0 && previousLength < 1024)
+        SetEnvironmentVariableW(jb::asio::config::kEnvOverride, previousOverride);
+    else
+        SetEnvironmentVariableW(jb::asio::config::kEnvOverride, nullptr);
+    timeEndPeriod(1);
+    wprintf(L"live config       : %s\n", failures == 0 ? L"PASS" : L"FAIL");
+    return failures;
+}
+
 int wmain(int argc, wchar_t** argv) {
     wchar_t dllPath[MAX_PATH] = {};
     if (argc > 1 && wcscmp(argv[1], L"--soak") != 0 &&
@@ -1980,6 +2635,16 @@ int wmain(int argc, wchar_t** argv) {
     if (wchar_t* slash = wcsrchr(harnessDir, L'\\')) *slash = L'\0';
     wcscat_s(harnessDir, L"\\");
 
+    // ---- config reader: the fixture pin and the hostile inputs ------------
+    // Runs every time: the DLL is compiled from the same tree as the reader, so a
+    // drift between the app's writer and this parser must fail the normal suite,
+    // not wait for someone to remember --config-test.
+    wchar_t goldenPath[MAX_PATH] = {};
+    swprintf_s(goldenPath, L"%s..\\..\\JockeyBox\\Audio\\Virtual\\virtual-device.golden.json",
+               harnessDir);
+    const int configFailures = runConfigReaderTests(goldenPath);
+    const int liveFailures = runLiveConfigTests();
+
     const AudioPathResult audio = runAudioPathTests(harnessDir);
     const bool capacityLagPassed = runExactCapacityLagTest();
 
@@ -2003,6 +2668,8 @@ int wmain(int argc, wchar_t** argv) {
         wprintf(L"cross-language    : not run\n");
     }
     wprintf(L"exact-capacity    : %s\n", capacityLagPassed ? L"PASS" : L"FAIL");
+    wprintf(L"config reader     : %s\n", configFailures == 0 ? L"PASS" : L"FAIL");
+    wprintf(L"live config       : %s\n", liveFailures == 0 ? L"PASS" : L"FAIL");
 
     const bool audioPassed = audio.bitExactPassed && audio.gapPassed &&
                              audio.latencyPassed && audio.trimNoOpPassed &&
@@ -2019,5 +2686,5 @@ int wmain(int argc, wchar_t** argv) {
         unregisterInHkcu();
         wprintf(L"\nHKCU registration removed.\n");
     }
-    return (calls > 0 && audioPassed) ? 0 : 2;
+    return (calls > 0 && audioPassed && configFailures == 0 && liveFailures == 0) ? 0 : 2;
 }
