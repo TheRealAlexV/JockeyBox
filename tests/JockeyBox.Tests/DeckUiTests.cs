@@ -525,7 +525,18 @@ public sealed class DeckUiTests
         }
         finally
         {
-            try { Directory.Delete(Path.GetDirectoryName(music)!, recursive: true); } catch { }
+            // Only the four files this test owns. It used to delete
+            // Path.GetDirectoryName(music) recursively, which since the fixtures
+            // moved is the shared per-process fixture directory: that removed
+            // every other concurrently running test's fixtures and left them
+            // failing with DirectoryNotFoundException on a file they had just
+            // written. Caught by holding a FileShare.None canary in that
+            // directory: "DELETE FAILED ... canary.lock ... being used by another
+            // process", 35 ms after the attempt.
+            TestAudio.TryDelete(music);
+            TestAudio.TryDelete(karaoke);
+            TestAudio.TryDelete(backing);
+            TestAudio.TryDelete(vocals);
         }
     }
 
