@@ -18,9 +18,23 @@ a `.cat`, and its stream object satisfies the WaveRT contract.
   `SECTION_QUERY | SECTION_MAP_READ | SECTION_MAP_WRITE | READ_CONTROL`.
 - Header written by the driver matches `src/JockeyBox.Ipc/BusLayout.cs` field for
   field: magic `0x5355424A`, version 1, header size 1024, sample rate 48000,
-  channels 2, block frames 480, capacity 8 blocks, `writeBlockIndex` 0,
+  channels 2, block frames 480, capacity 64 blocks, `writeBlockIndex` 0,
   `overrunCount` 0, 8 reader slots at 64, payload at 1024 (float32 interleaved,
-  30 720 bytes). No second header format.
+  245 760 bytes, region 246 784 bytes). No second header format.
+- Geometry, and why the numbers are what they are:
+  - **channels = 2.** A pair is stereo by construction: two conductors, stereo in
+    and stereo out. The app's N-channel model (`VirtualDeviceConfig`, up to 32
+    channels summed over lines) is the ASIO device surface, not the pair.
+  - **capacityBlocks = 64.** This is the app's own default
+    (`VirtualBusSink.DefaultCapacityBlocks = 64`, `src/JockeyBox/Endpoints/VirtualBusSink.cs:40`).
+    The app refuses a ring shorter than it needs for the driver's cushion:
+    `CapacityForCushion(480) = max(16, ceil(6 * 4096 / 480)) = 52` blocks
+    (`VirtualBusSink.cs:44-47`). A 64-block ring holds 30 720 frames, above that
+    floor; the eight-block ring this replaced held 3 840 frames, less than a
+    sixth of the cushion, so the app would have raised it on every open.
+  - **blockFrames = 480.** The engine's 10 ms block at 48 kHz, identical to
+    `AudioEngine.BlockFrames`.
+  - Region = 1024 + 64 * 480 * 2 * 4 = 246 784 bytes per pair.
 - Name publication: the INF writes `SectionName` (`Global\JockeyBox.Bus.Pair1`)
   under the service key, so the app reads the name instead of hardcoding it.
 - Attach state: the reader claims one of the eight 64-byte reader slots

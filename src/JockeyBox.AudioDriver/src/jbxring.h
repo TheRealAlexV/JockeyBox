@@ -40,9 +40,15 @@ static const ULONG JBX_RING_SLOT_UNDERRUNS = 16;
 static const ULONG JBX_RING_SLOT_ACTIVE = 24;
 static const ULONG JBX_RING_SLOT_RATE_TRIMS = 32;
 
-// Geometry chosen for the pair: 10 ms blocks, eight blocks of slack.
+// Geometry of the pair: 10 ms blocks, 64 blocks of slack.
+//
+// A pair is stereo by construction (a cable pair is two conductors), so channels
+// stays 2. Capacity is the app's own default (VirtualBusSink.DefaultCapacityBlocks
+// = 64); the app refuses anything shorter than CapacityForCushion, which for 480
+// frame blocks is max(16, ceil(6 * 4096 / 480)) = 52 blocks. A ring of 64 blocks
+// is 30,720 frames; the eight-block ring this replaced was 3,840 frames.
 static const ULONG JBX_RING_BLOCK_FRAMES = 480;
-static const ULONG JBX_RING_CAPACITY_BLOCKS = 8;
+static const ULONG JBX_RING_CAPACITY_BLOCKS = 64;
 static const ULONG JBX_RING_CHANNELS = 2;
 
 class CJbxRing
