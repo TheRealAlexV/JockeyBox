@@ -1004,7 +1004,10 @@ public sealed class AudioEngine : IDisposable
     /// keeps its width. A width change cannot be applied to a live ring - the driver
     /// derived its own geometry from the file at <c>init()</c> - so it is saved and
     /// <see cref="VirtualDeviceConfig.RestartRequiredMessage"/> is returned instead.
-    /// Returns null when the change took effect immediately.
+    /// Returns null when the change took effect immediately, and
+    /// <see cref="VirtualDeviceConfig.SaveFailedMessage"/> when it did not land at all:
+    /// the file was not written, so nothing is published and the caller must not report
+    /// the edit as applied.
     /// </summary>
     public string? ApplyVirtualLines(IReadOnlyList<VirtualLine> lines)
     {
@@ -1012,8 +1015,10 @@ public sealed class AudioEngine : IDisposable
 
         // Persist before publishing: a crash between the two leaves the file and the
         // next launch agreeing, which a restart would fix, rather than a live device
-        // that disagrees with its own file.
-        VirtualDeviceConfig.TrySaveEffective(lines);
+        // that disagrees with its own file. A failed write stops here: publishing would
+        // hand the operator a device the next launch does not match.
+        if (!VirtualDeviceConfig.TrySaveEffective(lines))
+            return VirtualDeviceConfig.SaveFailedMessage;
 
         lock (_sinkLock)
         {

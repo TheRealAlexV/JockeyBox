@@ -130,7 +130,6 @@ public sealed class DualDeckTransport : IDisposable
 
         // No output yet, so a fade has to start from a sane centre instead of 0.
         Engine.Fader.Reset(0.5);
-
         // The scheduler keeps one provider for its lifetime and asks it on every
         // auto-mix, so the holder can be swapped at any time (the analyser starts
         // after the window is up) without rebuilding the scheduler.
@@ -142,6 +141,13 @@ public sealed class DualDeckTransport : IDisposable
 
         _ = InitializeAsync(ready);
     }
+
+    /// <summary>
+    /// Completes when the first route has been applied, or the attempt has failed.
+    /// Exists so a test can wait for startup instead of racing it: whether the launch
+    /// rewrote the device file is exactly what must be observed after it settled.
+    /// </summary>
+    internal Task Ready => _ready;
 
     /// <summary>Raised when either deck, or the active deck, changes.</summary>
     public event EventHandler? StateChanged;
@@ -785,14 +791,35 @@ public sealed class DualDeckTransport : IDisposable
         return new AudioRoute(deckA, deckB, recording, soundboard, monitor)
         {
             VirtualBuses = VirtualBusesFromSettings(settings),
-            // The ordered lines are the device's geometry when they exist. The
-            // VirtualAsio* flags above still decide the legacy stereo pair, so an
-            // install that never configured lines behaves exactly as before.
-            VirtualLines = settings.VirtualDeviceLines ?? new List<JockeyBox.Audio.Virtual.VirtualLine>(),
+            // The device file owns the width, not these settings: it is the one copy the
+            // native driver reads, and settings.json is per-user %APPDATA%, which an
+            // elevated ASIO host in session 0 can never see. Empty keeps the legacy
+            // stereo pair below, so an install that never configured lines is unchanged.
+            VirtualLines = DeviceLines(),
             VirtualBusName = string.IsNullOrWhiteSpace(settings.VirtualAsioBusName)
                 ? "main"
                 : settings.VirtualAsioBusName.Trim(),
         };
+    }
+
+    /// <summary>
+    /// The device's own line list, from the one file the native driver reads. Empty
+    /// means unconfigured and keeps the legacy stereo pair. A file that exists but
+    /// cannot be parsed is a fault - the driver refuses it too, so no ring attaches -
+    /// and is logged rather than thrown: a settings change must not die on it.
+    /// </summary>
+    private static IReadOnlyList<VirtualLine> DeviceLines()
+    {
+        try
+        {
+            return VirtualDeviceConfig.ConfiguredLines();
+        }
+        catch (Exception ex)
+        {
+            Log.Error($"virtual device config '{VirtualDeviceConfig.DefaultPath}' could not be read; " +
+                      "publishing the legacy stereo pair and leaving the file alone", ex);
+            return Array.Empty<VirtualLine>();
+        }
     }
 
     /// <summary>
@@ -920,7 +947,6 @@ public sealed class DualDeckTransport : IDisposable
             await Task.Yield();
 
             var settings = AppSettings.Load();
-            VirtualDeviceConfig.TrySaveEffective(settings.VirtualDeviceLines);
             var route = BuildRouteFromAppSettings(settings);
 
             Engine.MasterVolume = Math.Clamp(settings.MasterVolume, 0f, 1.2f);

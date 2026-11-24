@@ -116,6 +116,35 @@ public static class VirtualDeviceConfig
     public static IReadOnlyList<VirtualLine> EffectiveLines(IReadOnlyList<VirtualLine>? lines) =>
         lines is { Count: > 0 } ? lines : LegacyLines;
 
+    /// <summary>
+    /// The lines this process should publish: the file's own list, or empty when the
+    /// device is unconfigured. Empty keeps the legacy stereo pair fed by the flagged
+    /// bus, which is what the transport did before lines existed.
+    ///
+    /// <para><b>Empty covers the untouched-install marker.</b> An unconfigured install
+    /// writes <see cref="LegacyLines"/> to the file: one stereo line whose source is
+    /// <c>main</c>. That source resolves to no bus in this graph - it exists to give
+    /// the native driver a width - so publishing it as a line would put two channels of
+    /// silence on the ring. It is recognised here and mapped back to the empty list.</para>
+    ///
+    /// <para>A file that exists but cannot be parsed throws, like <see cref="Load"/>:
+    /// the driver refuses such a file rather than reinterpreting it, so the caller has
+    /// to decide what to do instead of being handed a plausible-looking line set.</para>
+    /// </summary>
+    public static IReadOnlyList<VirtualLine> ConfiguredLines(string? path = null)
+    {
+        path ??= DefaultPath;
+        if (!File.Exists(path)) return Array.Empty<VirtualLine>();
+
+        var lines = Load(path);
+        return lines.Count == 1
+               && lines[0].Kind == VirtualLineKind.Stereo
+               && string.Equals(lines[0].Source, "main", StringComparison.OrdinalIgnoreCase)
+            ? Array.Empty<VirtualLine>()
+            : lines;
+    }
+
+
     /// <summary>Sum of the line widths, clamped to the device's bounds.</summary>
     public static int ChannelCount(IReadOnlyList<VirtualLine> lines)
     {
@@ -141,6 +170,13 @@ public static class VirtualDeviceConfig
     }
 
     /// <summary>
+    /// What <see cref="JockeyBox.Audio.Graph.AudioEngine.ApplyVirtualLines"/> returns when
+    /// the file could not be written: the edit did not land, so nothing was published.
+    /// </summary>
+    public const string SaveFailedMessage =
+        "Virtual device lines could not be saved to disk; the device was left unchanged.";
+
+    /// <summary>
     /// Saves the effective lines to disk, ensuring a failing write logs once and does not throw into the caller.
     /// Returns true if saved successfully, false otherwise.
     /// </summary>
@@ -154,7 +190,11 @@ public static class VirtualDeviceConfig
         }
         catch (Exception ex)
         {
-            JockeyBox.Tools.Log.Warn($"virtual device config could not be written to '{path ?? DefaultPath}': {ex.Message}");
+            // Error, not Warn: the file the native driver reads is now stale, and a
+            // caller that ignores the false proceeds on a device config that is not
+            // what the operator asked for.
+            JockeyBox.Tools.Log.Error(
+                $"virtual device config could not be written to '{path ?? DefaultPath}'", ex);
             return false;
         }
     }
