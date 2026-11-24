@@ -11,8 +11,8 @@
         <!-- Shared row design, context menu and filter/sort strip, identical to
              the library and Spotify lists. -->
         <ResourceDictionary.MergedDictionaries>
-            <ResourceDictionary Source="/Views/Shared/TrackRows.xaml"/>
-            <ResourceDictionary Source="/Views/Shared/TrackMenu.xaml"/>
+            <ResourceDictionary Source="/JockeyBox;component/Views/Shared/TrackRows.xaml"/>
+            <ResourceDictionary Source="/JockeyBox;component/Views/Shared/TrackMenu.xaml"/>
         </ResourceDictionary.MergedDictionaries>
         <views:YtDurationConverter x:Key="DurationText"/>
         <views:ViewCountConverter x:Key="ViewsText"/>

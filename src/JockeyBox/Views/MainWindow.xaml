@@ -35,9 +35,9 @@
              filter/sort strip. Referenced by SpotifyView and YouTubeView too,
              so the three lists cannot drift apart again. -->
         <ResourceDictionary.MergedDictionaries>
-            <ResourceDictionary Source="/Views/Shared/TrackRows.xaml"/>
-            <ResourceDictionary Source="/Views/Shared/TrackMenu.xaml"/>
-            <ResourceDictionary Source="/Views/Shared/StatusConsole.xaml"/>
+            <ResourceDictionary Source="/JockeyBox;component/Views/Shared/TrackRows.xaml"/>
+            <ResourceDictionary Source="/JockeyBox;component/Views/Shared/TrackMenu.xaml"/>
+            <ResourceDictionary Source="/JockeyBox;component/Views/Shared/StatusConsole.xaml"/>
         </ResourceDictionary.MergedDictionaries>
 
         <views:ActivityElapsedConverter x:Key="ActivityElapsed"/>
