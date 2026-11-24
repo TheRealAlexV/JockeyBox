@@ -33,7 +33,7 @@ public sealed class KaraokePairTests
         string other = TestAudio.WriteConstantWav(0.30f);
         try
         {
-            var vm = UiThread.Run(() => new MainViewModel());
+            var vm = NewUiVm();
             var pair = Track("a/song", music, karaoke);
             var normal = Track("a/other", other, null);
 
@@ -74,7 +74,7 @@ public sealed class KaraokePairTests
         string karaoke = TestAudio.WriteConstantWav(0.50f);
         try
         {
-            var vm = UiThread.Run(() => new MainViewModel());
+            var vm = NewUiVm();
             UiThread.Run(() => Invoke(vm, "LoadKaraokePair", Track("a/song", music, karaoke), AudioVariant.Karaoke));
 
             // The strip's signal is the pair flag, not A-B mode plus sync.
@@ -98,7 +98,7 @@ public sealed class KaraokePairTests
     [Fact]
     public void RestoreTitle_CalledTwice_StillYieldsTheBaseTitles()
     {
-        var vm = UiThread.Run(() => new MainViewModel());
+        var vm = NewUiVm();
 
         vm.DeckA.SetKaraokeTitle("Karaoke");
         vm.DeckA.RestoreTitle();
@@ -116,7 +116,7 @@ public sealed class KaraokePairTests
     [Fact]
     public void KaraokeTitle_IsTheDeckPrefixPlusTheCallersOwnTake()
     {
-        var vm = UiThread.Run(() => new MainViewModel());
+        var vm = NewUiVm();
 
         vm.DeckA.SetKaraokeTitle("Karaoke");
         vm.DeckB.SetKaraokeTitle("Original");
@@ -144,7 +144,7 @@ public sealed class KaraokePairTests
         string karaoke = TestAudio.WriteConstantWav(0.50f);
         try
         {
-            var vm = UiThread.Run(() => new MainViewModel());
+            var vm = NewUiVm();
             var pair = Track("a/song", music, karaoke);
 
             UiThread.Run(() => Invoke(vm, "LoadKaraokePair", pair, AudioVariant.Karaoke));
@@ -189,42 +189,43 @@ public sealed class KaraokePairTests
             {
                 var pair = Track("a/song", music, karaoke);
 
+                // The fake route has to exist before the load is asked for. A
+                // channel with no output fails the load, and the pair's release
+                // guard then reads both decks as "stopped with nothing loaded"
+                // and drops the pair on the next 33 ms tick - leaving both decks
+                // Playing with pairLoaded=False, which is the signature this test
+                // used to fail with.
+                TestAudio.PrimeOutput(vm);
+
                 // One karaoke load arms the link and the lock, then starts both
                 // decks. It used to call PlayDeck(A), which bypasses Target.
                 UiThread.Run(() => Invoke(vm, "LoadKaraokePair", pair, AudioVariant.Karaoke));
 
-                bool both = false;
-                for (int i = 0; i < 4000 && !both; i++)
-                {
-                    // The fake output path the other transport tests use, re-asserted
-                    // each pass: no engine thread runs here, so the transport keeps
-                    // reporting the route as gone and a load would fail with
-                    // "no output configured".
-                    UiThread.Run(() =>
-                    {
-                        vm.Transport.DeckA.SetOutputAvailable(true);
-                        vm.Transport.DeckB.SetOutputAvailable(true);
-                    });
-                    vm.Transport.Engine.DeckA.Commands.Drain();
-                    vm.Transport.Engine.DeckB.Commands.Drain();
-                    // Let the marshalled state notifications run: the channel posts
-                    // them to the UI dispatcher, which no test thread pumps by itself.
-                    UiThread.Run(() => { });
-                    both = vm.Transport.DeckA.State == TransportState.Playing
-                        && vm.Transport.DeckB.State == TransportState.Playing;
-                    if (!both) Thread.Sleep(5);
-                }
+                // Wait on the pair's own settled state, not on a proxy. The UI
+                // tick that runs the release guard also writes the settled line
+                // once both decks report Playing with the pair still loaded, so
+                // this waits for exactly the line the assertion below reads: the
+                // pair cannot be sampled and then change underneath it.
+                bool settled = WaitFor(vm, () => PairLoaded(vm)
+                                                  && lines.Any(line => line.Contains("both decks Playing")));
+                Assert.True(settled,
+                    $"the pair never settled: pairLoaded={ReadField(vm, "_isKaraokePairLoaded")} " +
+                    $"pairStartLogged={ReadField(vm, "_pairStartLogged")} " +
+                    $"A={vm.Transport.DeckA.State} ({vm.Transport.DeckA.Error}) " +
+                    $"B={vm.Transport.DeckB.State} ({vm.Transport.DeckB.Error}) " +
+                    $"target={vm.Transport.Target} sync={vm.Transport.SyncActive}");
 
-                Assert.True(both,
-                    $"both decks play: A={vm.Transport.DeckA.State} ({vm.Transport.DeckA.Error}), " +
-                    $"B={vm.Transport.DeckB.State} ({vm.Transport.DeckB.Error})");
                 Assert.Equal(TransportTarget.Both, vm.Transport.Target);
                 Assert.True(vm.Transport.SyncActive, "the pair engages the master/slave lock");
 
-                // One UI tick, the same one the window's timer runs: a deck reaching
-                // Playing raises no channel event, so the settled line is written by
-                // the tick that drives the readouts. No timer here, so drive it once.
-                UiThread.Run(() => Invoke(vm, "OnUiTick"));
+                // The fixtures have to still be on disk at the settle point. A
+                // cleaner outside any checkout deletes files under %TEMP% (and has
+                // taken a whole %TEMP% directory with them), which surfaced as a
+                // deck failing with "audio file not found" for a file this test had
+                // written milliseconds earlier. Name the path when it happens.
+                Assert.True(File.Exists(music) && File.Exists(karaoke),
+                    $"the fixtures survived the load: music={music} exists={File.Exists(music)}, " +
+                    $"karaoke={karaoke} exists={File.Exists(karaoke)}");
 
                 // The same line that lands in jockeybox.log proves it without the UI.
                 var pairText = string.Join("\n", lines.Where(line => line.Contains("karaoke pair")));
@@ -291,7 +292,7 @@ public sealed class KaraokePairTests
             File.Copy(source, backing);
             File.Copy(source, vocals);
 
-            var vm = UiThread.Run(() => new MainViewModel());
+            var vm = NewUiVm();
             try
             {
                 var track = Track("a/song", music, karaoke);
@@ -489,7 +490,7 @@ public sealed class KaraokePairTests
         string karaoke = TestAudio.WriteConstantWav(0.50f);
         try
         {
-            var vm = UiThread.Run(() => new MainViewModel());
+            var vm = NewUiVm();
             var pair = Track("a/song", music, karaoke);
             var (karaokeRow, originalRow) = PlaybackQueueItem.FromKaraokePair(pair);
             vm.Queue.Add(karaokeRow);
@@ -542,6 +543,19 @@ public sealed class KaraokePairTests
             .GetValue(vm);
 
     /// <summary>
+    /// A view model with its fake output already announced. Every test in this
+    /// class that loads a pair must start from here: a channel with no output
+    /// refuses the load, and the pair is then released by the guard one tick
+    /// later - the flake, not a real pair.
+    /// </summary>
+    private static MainViewModel NewUiVm()
+    {
+        var vm = UiThread.Run(() => new MainViewModel());
+        TestAudio.PrimeOutput(vm);
+        return vm;
+    }
+
+    /// <summary>
     /// Pump until <paramref name="until"/> holds. A MainViewModel in a test has no
     /// device, and a channel with no output refuses every load as a no-op, so each
     /// pass tells both channels an output exists and drains their queued commands
@@ -562,8 +576,7 @@ public sealed class KaraokePairTests
 
     private static void PumpDecks(MainViewModel vm)
     {
-        vm.Transport.DeckA.SetOutputAvailable(true);
-        vm.Transport.DeckB.SetOutputAvailable(true);
+        TestAudio.PrimeOutput(vm);
         vm.Transport.Engine.DeckA.Commands.Drain();
         vm.Transport.Engine.DeckB.Commands.Drain();
     }
