@@ -92,16 +92,19 @@
             <Setter Property="MinWidth" Value="30"/>
             <Setter Property="HorizontalAlignment" Value="Stretch"/>
             <Setter Property="Padding" Value="0"/>
-            <Setter Property="Margin" Value="0,0,3,0"/>
+            <!-- 5 px between pads, not 3: nine 15 px boxes in a row need a gap the
+                 eye can read as a gap before the dashed edge starts to look like
+                 one continuous dotted rule. -->
+            <Setter Property="Margin" Value="0,0,5,0"/>
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="Button">
                         <Grid>
-                            <Rectangle x:Name="frame" RadiusX="3" RadiusY="3"
-                                       Stroke="{StaticResource BorderBrush}"
-                                       StrokeThickness="1" StrokeDashArray="2 2"
+                            <Rectangle x:Name="frame" RadiusX="2" RadiusY="2"
+                                       Stroke="{StaticResource TextDimBrush}"
+                                       StrokeThickness="1" StrokeDashArray="5 2"
                                        Fill="{TemplateBinding Background}"/>
                             <StackPanel Orientation="Horizontal"
                                         VerticalAlignment="Center"
@@ -111,9 +114,14 @@
                                            VerticalAlignment="Center"
                                            HorizontalAlignment="Center"
                                            Foreground="{TemplateBinding Foreground}"/>
+                                <!-- The position is only drawn when there is one.
+                                     At 15 px an 8 px en dash between the frame edges
+                                     read as dust on the button, and an empty pad is
+                                     already saying "empty" with its dashed outline. -->
                                 <TextBlock x:Name="posText" Text="{Binding PositionText}"
                                            FontFamily="Consolas" FontSize="8"
                                            Margin="4,0,0,0"
+                                           Visibility="Collapsed"
                                            VerticalAlignment="Center"
                                            HorizontalAlignment="Center"
                                            Foreground="{TemplateBinding Foreground}"/>
@@ -129,11 +137,13 @@
                                         Value="{StaticResource PanelAltBrush}"/>
                                 <Setter TargetName="slotText" Property="Foreground"
                                         Value="{StaticResource TextBrush}"/>
+                                <Setter TargetName="posText" Property="Visibility"
+                                        Value="Visible"/>
                                 <Setter TargetName="posText" Property="Foreground"
                                         Value="{StaticResource TextBrush}"/>
                             </DataTrigger>
                             <DataTrigger Binding="{Binding IsQuick}" Value="True">
-                                <Setter Property="Margin" Value="8,0,3,0"/>
+                                <Setter Property="Margin" Value="8,0,5,0"/>
                             </DataTrigger>
                             <Trigger Property="IsMouseOver" Value="True">
                                 <Setter TargetName="frame" Property="Stroke"
@@ -613,11 +623,10 @@
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
 
-                        <!-- Top-aligned on the pad bank's first row: centred in the
-                             bank it landed on the seam between the two rows (y272-305
-                             against a boundary at y290), so CLEAR read as belonging to
-                             row 2. 44 px matches a pad, so it sits on row 1 exactly. -->
-                        <Grid Grid.Column="0" Height="15" VerticalAlignment="Top" Margin="0,4,0,0">
+                        <!-- Top-aligned on the pad bank's first row. 22 px is CLEAR's
+                             height now, so the label centres against the button it
+                             names rather than against the 15 px pads. -->
+                        <Grid Grid.Column="0" Height="22" VerticalAlignment="Top" Margin="0,4,0,0">
                             <TextBlock Text="CUES" FontSize="9" FontWeight="Bold"
                                        Foreground="{StaticResource TextDimBrush}"
                                        VerticalAlignment="Center"/>
@@ -630,8 +639,8 @@
                                      arms it, the label becomes DONE, and the border
                                      and weight change with it, so the armed state
                                      never rests on colour alone. -->
-                                <Button DockPanel.Dock="Right" MinWidth="44" Height="15"
-                                        Margin="4,0,0,0" FontSize="9" FontWeight="Bold"
+                                <Button DockPanel.Dock="Right" MinWidth="54" Height="22"
+                                        Margin="4,0,0,0" Padding="7,0" FontSize="10" FontWeight="Bold"
                                         VerticalAlignment="Top"
                                         Command="{Binding Cues.ToggleClearModeCommand}"
                                         Content="{Binding Cues.ClearModeText}"
@@ -643,7 +652,6 @@
                                                 <DataTrigger Binding="{Binding Cues.IsClearing}" Value="True">
                                                     <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
                                                     <Setter Property="BorderBrush" Value="{StaticResource TextDimBrush}"/>
-                                                    <Setter Property="FontSize" Value="9"/>
                                                 </DataTrigger>
                                             </Style.Triggers>
                                         </Style>
@@ -709,8 +717,10 @@
         </Style>
 
         <!-- ======== Vertical splitter: browser | mixer dock, same bottom band ========
-             8px hit area, one hairline, a short grip turned upright so the vertical
-             bar does not read as a stray horizontal rule. -->
+             8px hit area, one hairline, and a real grab handle: a 6x44 px pill with
+             three dots at mid-height. The 2x34 px nib this replaced read as a seam in
+             the card, not as something to drag. Hover turns the dots and the pill's
+             edge accent, so the affordance answers the pointer. -->
         <Style x:Key="ColumnSplitter" TargetType="GridSplitter">
             <Setter Property="Width" Value="8"/>
             <Setter Property="VerticalAlignment" Value="Stretch"/>
@@ -726,14 +736,39 @@
                         <Grid Background="Transparent">
                             <Border Width="1" HorizontalAlignment="Center"
                                     Background="{StaticResource BorderBrush}"/>
-                            <Border x:Name="grip" Width="2" Height="34" CornerRadius="1"
+                            <Border x:Name="grip" Width="6" Height="44" CornerRadius="3"
                                     HorizontalAlignment="Center" VerticalAlignment="Center"
-                                    Background="#3A4150"/>
+                                    Background="{StaticResource BorderBrush}"
+                                    BorderBrush="{StaticResource BorderBrush}"
+                                    BorderThickness="1">
+                                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                                    <Ellipse x:Name="dot1" Width="2" Height="2" Margin="0,0,0,2"
+                                             Fill="{StaticResource TextDimBrush}"/>
+                                    <Ellipse x:Name="dot2" Width="2" Height="2" Margin="0,0,0,2"
+                                             Fill="{StaticResource TextDimBrush}"/>
+                                    <Ellipse x:Name="dot3" Width="2" Height="2"
+                                             Fill="{StaticResource TextDimBrush}"/>
+                                </StackPanel>
+                            </Border>
                         </Grid>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
                                 <Setter TargetName="grip" Property="Background"
                                         Value="{StaticResource TextDimBrush}"/>
+                                <Setter TargetName="grip" Property="BorderBrush"
+                                        Value="{StaticResource TextDimBrush}"/>
+                                <Setter TargetName="dot1" Property="Fill"
+                                        Value="{StaticResource PanelBrush}"/>
+                                <Setter TargetName="dot2" Property="Fill"
+                                        Value="{StaticResource PanelBrush}"/>
+                                <Setter TargetName="dot3" Property="Fill"
+                                        Value="{StaticResource PanelBrush}"/>
+                            </Trigger>
+                            <Trigger Property="IsMouseCaptured" Value="True">
+                                <Setter TargetName="grip" Property="Background"
+                                        Value="{StaticResource AccentABrush}"/>
+                                <Setter TargetName="grip" Property="BorderBrush"
+                                        Value="{StaticResource AccentABrush}"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -1433,7 +1468,7 @@
                          TRACK BROWSER label as a third nav band. LastChildFill
                          is off so the right-docked buttons keep their own
                          widths (+ Queue was stretching to fill the row). -->
-                    <DockPanel DockPanel.Dock="Top" Margin="4,0,4,8">
+                    <DockPanel DockPanel.Dock="Top" Margin="6,0,8,8">
                         <TextBlock Text="TRACK BROWSER" FontSize="11" FontWeight="Bold"
                                    Foreground="{StaticResource TextDimBrush}" VerticalAlignment="Center"/>
                         <Button DockPanel.Dock="Right" Content="Load &#x25B6;" Margin="8,0,0,0"
@@ -1502,7 +1537,13 @@
 
                     <Grid>
                         <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="190"/>
+                            <!-- The playlist rail gives way, not the track table: six
+                                 columns need 346 px (TrackRows.xaml) and the pane is
+                                 530 wide, so the rail takes 155 and the browser keeps
+                                 367 - enough for the columns plus the tree's own
+                                 scrollbar gutter. At 190 the browser had 107 px, which
+                                 is why Artist was cut mid-word at the pane edge. -->
+                            <ColumnDefinition Width="155"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
 
@@ -1744,8 +1785,12 @@
                         </Grid.RowDefinitions>
 
                         <!-- Column headers come from Views/Shared/TrackRows.xaml, so
-                             they line up with the rows on all three lists. -->
+                             they line up with the rows on all three lists. The 14 px
+                             right inset is the tree's scrollbar gutter: the header is
+                             outside the tree's ScrollViewer, so without it the Icons
+                             header sat 14 px right of the icons it names. -->
                         <ContentControl Grid.Row="0" Content="{StaticResource TrackColumnHeaders}"
+                                        Margin="0,0,14,0"
                                         Focusable="False" IsTabStop="False"/>
 
                         <!-- Tree; the busy state below covers it while a playlist's
@@ -1767,6 +1812,7 @@
                                       ContextMenu="{StaticResource TrackMenu}"
                                       Tag="{Binding TrackMenu}"
                                       ScrollViewer.CanContentScroll="True"
+                                      ScrollViewer.VerticalScrollBarVisibility="Visible"
                                       ScrollViewer.HorizontalScrollBarVisibility="Disabled">
                                 <!-- Virtualisation is the difference between "5 000 rows
                                      open in 10 s" and a scrolled window: without it every
@@ -2794,12 +2840,17 @@
                                     </Style.Triggers>
                                 </Style>
                             </Grid.Style>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="108"/>
-                                <ColumnDefinition Width="*"/>
-                            </Grid.ColumnDefinitions>
-                                <Border Grid.Column="1" Style="{StaticResource Card}" Padding="8,10"
-                                        Margin="6,0" VerticalAlignment="Center">
+                            <!-- One column, stacked. At 420 the dock can hold either the
+                                 EQ card or a five-cell strip row beside it, never both:
+                                 side by side the row ran past the panel edge (the BYP
+                                 toggle was sliced at x1370-1382) and the EQ's right
+                                 border fell outside the panel. Stacked, each gets the
+                                 full width - the row keeps its five cells untrimmed and
+                                 the EQ card shows its own border with 14 px of inset
+                                 before the panel edge. -->
+                            <StackPanel>
+                                <Border Style="{StaticResource Card}" Padding="8,10"
+                                        Margin="6,6,6,0">
                                     <StackPanel>
                                         <TextBlock Text="EQ" FontSize="9" Margin="0,0,0,7"
                                                    Foreground="{StaticResource TextDimBrush}"/>
@@ -2892,25 +2943,20 @@
                                                 ToolTip="High shelf, 13 kHz. 0 dB takes the band out of circuit."/>
                                     </StackPanel>
                                 </Border>
-                            <Grid Grid.Column="1" Margin="6,0,0,0">
-            <Border Margin="0,5,0,0" Padding="0,4,0,0"
-                    BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0">
+                            <Grid Margin="6,6,6,0">
+            <Border Padding="0,4,0,0" BorderBrush="{StaticResource BorderBrush}"
+                    BorderThickness="0,1,0,0">
 
                 <StackPanel>
                     <!-- Header: what this is, whether it is on, what it costs, and the switch that
                          gives the rows back to the window when the rack is not in use. -->
-                    <DockPanel LastChildFill="False">
+                    <DockPanel LastChildFill="True">
                         <TextBlock DockPanel.Dock="Left" Text="CHANNEL STRIP" FontSize="9"
                                    FontWeight="Bold" Foreground="{StaticResource TextDimBrush}"
                                    VerticalAlignment="Center"/>
                         <TextBlock DockPanel.Dock="Left" Text="{Binding MicStripCountText}"
                                    FontSize="9" Foreground="{StaticResource TextDimBrush}"
                                    Margin="8,0,0,0" VerticalAlignment="Center"/>
-                        <TextBlock DockPanel.Dock="Left" FontSize="9" Margin="8,0,0,0"
-                                   VerticalAlignment="Center" Foreground="{StaticResource AccentABrush}"
-                                   MaxWidth="220" TextTrimming="CharacterEllipsis"
-                                   Text="{Binding SelectedMicStrip.Name, StringFormat={}editing {0}}"/>
-
                         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal"
                                     VerticalAlignment="Center" Margin="12,0,0,0"
                                     ToolTip="Chain: frames this strip's own stages cost, 240 only from the limiter. Pad: frames the mixer adds so every device lines up. Both 0 = zero added latency.">
@@ -2929,13 +2975,23 @@
                                       IsChecked="{Binding IsMixerOn, Mode=TwoWay}"
                                       AutomationProperties.Name="Mixer enable"
                                       ToolTip="Master gate for every strip. Off is bit-transparent: no filter, no limiter, no latency."/>
+                        <!-- Fill child: it yields to the controls at both ends and
+                             trims, instead of pushing the MIXER gate off the panel. -->
+                        <TextBlock FontSize="9" Margin="8,0,0,0" VerticalAlignment="Center"
+                                   Foreground="{StaticResource AccentABrush}"
+                                   TextTrimming="CharacterEllipsis"
+                                   Text="{Binding SelectedMicStrip.Name, StringFormat={}editing {0}}"/>
                     </DockPanel>
 
-                    <!-- Strip row: one button per attached device. -->
+                    <!-- Strip row: one button per attached device, one device per line.
+                         It was a WrapPanel for the old full-width band; in a 420 px
+                         column two devices side by side would share 400 px between
+                         them, so each row now takes the width and the name column is
+                         the one that gives way. -->
                     <ItemsControl ItemsSource="{Binding MicStrips}" Margin="0,4,0,0">
                         <ItemsControl.ItemsPanel>
                             <ItemsPanelTemplate>
-                                <WrapPanel Orientation="Horizontal"/>
+                                <StackPanel Orientation="Vertical"/>
                             </ItemsPanelTemplate>
                         </ItemsControl.ItemsPanel>
                         <ItemsControl.ItemTemplate>
@@ -2947,7 +3003,12 @@
                                              ToolTip="Edit this device's channel strip">
                                     <Grid>
                                         <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="118"/>
+                                            <!-- The name is the column that gives way:
+                                                 at 420 the dock gives the row ~390, and
+                                                 the four controls after it need 200 of
+                                                 that. A fixed 118 pushed BYP past the
+                                                 panel edge. -->
+                                            <ColumnDefinition Width="*" MinWidth="70"/>
                                             <ColumnDefinition Width="66"/>
                                             <ColumnDefinition Width="Auto"/>
                                             <ColumnDefinition Width="Auto"/>
@@ -3023,6 +3084,7 @@
                 </StackPanel>
             </Border>
                             </Grid>
+                            </StackPanel>
                         </Grid>
                         <Grid x:Name="DockPageCues">
                             <Grid.Style>

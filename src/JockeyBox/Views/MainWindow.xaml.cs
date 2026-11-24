@@ -209,6 +209,7 @@ public partial class MainWindow : Window
         var shellRows = ShellGrid.RowDefinitions;
         var centreRows = CentreHost.RowDefinitions;
         if (shellRows.Count < 2 || centreRows.Count < 4) return;
+        ApplyLibraryPaneWidth();
 
         double fixedHeight = shellRows[0].ActualHeight
                              + centreRows[0].ActualHeight
@@ -877,10 +878,15 @@ public partial class MainWindow : Window
 
     // ---- shell panes: rail, library, dock, flyout ---------------------------
 
-    /// <summary>Width the library pane takes when open. 300 px is one artist tree
-    /// plus the track table's narrowest readable column set; below 260 the album
-    /// titles ellipsise into each other.</summary>
-    private const double LibraryPaneWidth = 300;
+    /// <summary>Width the library pane opens at when the window can afford it: 155 px
+    /// of playlist rail plus the 346 px the shared track table needs for its six
+    /// columns, plus the tree's scrollbar gutter. At 300 the pane gave the table 107 px,
+    /// so Artist was cut mid-word at the pane edge and the Icons strip was off-screen.</summary>
+    private const double LibraryPaneWidth = 545;
+
+    /// <summary>Below this the pane is not worth opening; the columns give way as they
+    /// already do in TrackRows.xaml instead of the whole pane shrinking to a strip.</summary>
+    private const double LibraryPaneFloor = 300;
 
     /// <summary>Which rail toggle opened the flyout, so a second press closes it.</summary>
     private ToggleButton? _flyoutToggle;
@@ -893,7 +899,22 @@ public partial class MainWindow : Window
     {
         LibraryToggle.IsChecked = open;
         LibraryPane.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
-        ShellBody.ColumnDefinitions[1].Width = new GridLength(open ? LibraryPaneWidth : 0);
+        if (open) ApplyLibraryPaneWidth();
+        else ShellBody.ColumnDefinitions[1].Width = new GridLength(0);
+    }
+
+    /// <summary>The pane's width follows the window: it takes its six-column width when
+    /// the centre can still keep its own floor, and only what is left when it cannot.
+    /// Recomputed on every layout pass rather than once on open, because the capture
+    /// harness opens the pane before the window has its final size and a width frozen
+    /// at that moment left the pane at 390 px.</summary>
+    private void ApplyLibraryPaneWidth()
+    {
+        if (LibraryPane.Visibility != Visibility.Visible) return;
+        double width = Math.Clamp(ActualWidth - 855, LibraryPaneFloor, LibraryPaneWidth);
+        var column = ShellBody.ColumnDefinitions[1];
+        if (Math.Abs(column.Width.Value - width) > 0.5)
+            column.Width = new GridLength(width, GridUnitType.Pixel);
     }
 
     /// <summary>Open the dock on a named page: strips, soundboard, cues or jobs.</summary>
