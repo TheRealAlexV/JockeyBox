@@ -86,8 +86,7 @@ public sealed class VirtualDeviceWidthOwnershipTests : IDisposable
     [Fact]
     public void Configured_width_survives_a_restart()
     {
-        Assert.True(VirtualDeviceConfig.TrySaveEffective(EightChannels()),
-                    "the fixture must be written before the restart is simulated");
+        VirtualDeviceConfig.Save(EightChannels());
         Assert.Equal(8, VirtualDeviceConfig.ChannelCount(VirtualDeviceConfig.Load()));
 
         // The restart: a new settings object (which knows nothing about the width) and
@@ -108,7 +107,7 @@ public sealed class VirtualDeviceWidthOwnershipTests : IDisposable
     [Fact]
     public async Task Launch_with_no_configured_width_does_not_overwrite_the_device_file()
     {
-        Assert.True(VirtualDeviceConfig.TrySaveEffective(EightChannels()));
+        VirtualDeviceConfig.Save(EightChannels());
         var before = File.ReadAllText(DevicePath);
 
         var devices = new DeviceService();
@@ -125,25 +124,90 @@ public sealed class VirtualDeviceWidthOwnershipTests : IDisposable
     }
 
     /// <summary>
-    /// A write that cannot land is reported, not swallowed. The path is unwritable, so
-    /// the edit never reached the file the driver reads: the caller has to be told that
-    /// rather than being handed "saved, restart the host".
+    /// A fresh install has no file to edit: the driver would fall back to legacy stereo
+    /// and nothing would say a wider device was ever possible. One launch must leave the
+    /// default behind, exactly once: a second launch leaves those bytes untouched.
     /// </summary>
     [Fact]
-    public void Failed_write_is_reported_rather_than_swallowed()
+    public async Task A_fresh_home_gets_one_file_and_a_second_launch_leaves_it_byte_identical()
     {
-        // A regular file where a directory would have to be: creating the directory
-        // fails, so the save cannot succeed.
+        Assert.False(File.Exists(DevicePath), "this fixture starts from a home with no file");
+
+        await LaunchOnce();
+
+        Assert.True(File.Exists(DevicePath), "the first launch must leave a file to edit");
+        Assert.Equal(2, VirtualDeviceConfig.ChannelCount(VirtualDeviceConfig.Load()));
+        Assert.Contains("\"version\":1", File.ReadAllText(DevicePath));
+        var afterFirst = Sha256(DevicePath);
+
+        await LaunchOnce();
+
+        Assert.Equal(afterFirst, Sha256(DevicePath));
+    }
+
+    /// <summary>
+    /// The clobber proof at the file's own width: a 4-channel file is the operator's, and
+    /// a launch may not rewrite one byte of it.
+    /// </summary>
+    [Fact]
+    public async Task An_existing_four_channel_file_is_byte_identical_after_a_launch()
+    {
+        VirtualDeviceConfig.Save(TwoStereoLines());
+        Assert.Equal(4, VirtualDeviceConfig.ChannelCount(VirtualDeviceConfig.Load()));
+        var before = Sha256(DevicePath);
+
+        await LaunchOnce();
+
+        Assert.Equal(before, Sha256(DevicePath));
+        Assert.Equal(4, VirtualDeviceConfig.ChannelCount(VirtualDeviceConfig.Load()));
+    }
+
+    /// <summary>
+    /// The one write the app makes unasked must not fail silently: an unwritable path
+    /// leaves the operator no file, so the launch has to say so instead of proceeding as
+    /// though the default landed.
+    /// </summary>
+    [Fact]
+    public async Task A_bootstrap_that_cannot_write_is_reported()
+    {
+        // A regular file where a directory would have to be: the save cannot succeed.
         var blocker = Path.Combine(_root, "not-a-directory");
         File.WriteAllText(blocker, "x");
         var unwritable = Path.Combine(blocker, "virtual-device.json");
         Environment.SetEnvironmentVariable(VirtualDeviceConfig.ConfigPathEnvVar, unwritable);
 
-        using var engine = new AudioEngine();
-        var message = engine.ApplyVirtualLines(EightChannels());
+        var lines = new System.Collections.Concurrent.ConcurrentQueue<string>();
+        void Handler(string line) => lines.Enqueue(line);
+        Log.LineWritten += Handler;
+        try
+        {
+            await LaunchOnce();
+        }
+        finally
+        {
+            Log.LineWritten -= Handler;
+        }
 
         Assert.False(File.Exists(unwritable));
-        Assert.Contains("could not be saved", message ?? "", StringComparison.OrdinalIgnoreCase);
-        Assert.NotEqual(VirtualDeviceConfig.RestartRequiredMessage, message);
+        Assert.Contains(lines, line => line.Contains("could not be created", StringComparison.OrdinalIgnoreCase));
     }
+
+    /// <summary>One app launch, waited for: the file work happens inside it.</summary>
+    private static async Task LaunchOnce()
+    {
+        var devices = new DeviceService();
+        using var transport = new DualDeckTransport(
+            new DeckChannel("Deck A", devices),
+            new DeckChannel("Deck B", devices));
+        await transport.Ready.WaitAsync(TimeSpan.FromSeconds(60));
+    }
+
+    private static string Sha256(string path) =>
+        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(path)));
+
+    private static IReadOnlyList<VirtualLine> TwoStereoLines() => new[]
+    {
+        new VirtualLine { Id = "line-1", Name = "Line 1", Kind = VirtualLineKind.Stereo, Source = "deck:a" },
+        new VirtualLine { Id = "line-2", Name = "Line 2", Kind = VirtualLineKind.Stereo, Source = "deck:b" },
+    };
 }

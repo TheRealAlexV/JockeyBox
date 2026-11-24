@@ -999,46 +999,6 @@ public sealed class AudioEngine : IDisposable
         Log.Warn($"virtual device line source '{source}' names no bus in this graph; " +
                  "that line's channels stay silent (deck:a, deck:b, mic:N, soundboard, monitor)");
 
-    /// <summary>
-    /// Apply an edited line list: persist it, then republish the taps if the device
-    /// keeps its width. A width change cannot be applied to a live ring - the driver
-    /// derived its own geometry from the file at <c>init()</c> - so it is saved and
-    /// <see cref="VirtualDeviceConfig.RestartRequiredMessage"/> is returned instead.
-    /// Returns null when the change took effect immediately, and
-    /// <see cref="VirtualDeviceConfig.SaveFailedMessage"/> when it did not land at all:
-    /// the file was not written, so nothing is published and the caller must not report
-    /// the edit as applied.
-    /// </summary>
-    public string? ApplyVirtualLines(IReadOnlyList<VirtualLine> lines)
-    {
-        ArgumentNullException.ThrowIfNull(lines);
-
-        // Persist before publishing: a crash between the two leaves the file and the
-        // next launch agreeing, which a restart would fix, rather than a live device
-        // that disagrees with its own file. A failed write stops here: publishing would
-        // hand the operator a device the next launch does not match.
-        if (!VirtualDeviceConfig.TrySaveEffective(lines))
-            return VirtualDeviceConfig.SaveFailedMessage;
-
-        lock (_sinkLock)
-        {
-            var publish = Volatile.Read(ref _virtualPublish);
-            if (publish is null ||
-                VirtualDeviceConfig.ChannelCount(lines) != publish.Taps.Channels)
-            {
-                return VirtualDeviceConfig.RestartRequiredMessage;
-            }
-
-            var taps = VirtualTapTable.FromLines(lines, WarnUnknownVirtualSource);
-            // Carry the edit into the route as well: a later re-apply of the same route
-            // (unplug, device change) rebuilds the table from VirtualLines, and a stale
-            // list here would silently revert what the operator just saved.
-            _route = _route with { VirtualLines = lines };
-            Volatile.Write(ref _virtualPublish, publish with { Taps = taps });
-            return null;
-        }
-    }
-
     // ------------------------------------------------------------------ fader / tempo helpers
 
     /// <summary>Seconds → engine frames.</summary>

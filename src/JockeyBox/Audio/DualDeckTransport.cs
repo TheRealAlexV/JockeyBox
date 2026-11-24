@@ -947,6 +947,14 @@ public sealed class DualDeckTransport : IDisposable
             await Task.Yield();
 
             var settings = AppSettings.Load();
+
+            // A fresh install has no device file, so the operator has nothing to edit and
+            // the driver silently runs the legacy stereo pair. Create the default exactly
+            // once; an existing file is never touched (VirtualDeviceConfig.CreateIfAbsent),
+            // which is what keeps this from being the launch-time clobber the re-publish
+            // from settings used to be.
+            VirtualDeviceConfig.CreateIfAbsent();
+
             var route = BuildRouteFromAppSettings(settings);
 
             Engine.MasterVolume = Math.Clamp(settings.MasterVolume, 0f, 1.2f);

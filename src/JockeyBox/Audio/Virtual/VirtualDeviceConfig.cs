@@ -111,12 +111,6 @@ public static class VirtualDeviceConfig
     };
 
     /// <summary>
-    /// Returns the effective line set: if lines is empty or null, returns <see cref="LegacyLines"/>.
-    /// </summary>
-    public static IReadOnlyList<VirtualLine> EffectiveLines(IReadOnlyList<VirtualLine>? lines) =>
-        lines is { Count: > 0 } ? lines : LegacyLines;
-
-    /// <summary>
     /// The lines this process should publish: the file's own list, or empty when the
     /// device is unconfigured. Empty keeps the legacy stereo pair fed by the flagged
     /// bus, which is what the transport did before lines existed.
@@ -170,31 +164,39 @@ public static class VirtualDeviceConfig
     }
 
     /// <summary>
-    /// What <see cref="JockeyBox.Audio.Graph.AudioEngine.ApplyVirtualLines"/> returns when
-    /// the file could not be written: the edit did not land, so nothing was published.
+    /// Creates the device file with the legacy default when none exists, and never
+    /// touches a file that does.
+    ///
+    /// <para><b>The invariant: an existing file is the operator's.</b> Nothing in the
+    /// app authors a width; this file is hand-edited configuration. The only write the
+    /// app performs on its own is "there is nothing here yet, leave something valid",
+    /// because without it a fresh install has no file to edit: the driver falls back to
+    /// legacy stereo and nothing says a wider device was ever possible. A file that
+    /// exists is never rewritten, not even to normalise its formatting, and that is what
+    /// makes a hand edit survive every launch.</para>
+    ///
+    /// <para>Returns true when it created the file.</para>
     /// </summary>
-    public const string SaveFailedMessage =
-        "Virtual device lines could not be saved to disk; the device was left unchanged.";
-
-    /// <summary>
-    /// Saves the effective lines to disk, ensuring a failing write logs once and does not throw into the caller.
-    /// Returns true if saved successfully, false otherwise.
-    /// </summary>
-    public static bool TrySaveEffective(IReadOnlyList<VirtualLine>? lines, string? path = null)
+    public static bool CreateIfAbsent(string? path = null)
     {
+        path ??= DefaultPath;
+
+        // Named, not incidental: the contract is "absent only". Existing, unreadable or
+        // differently shaped are all the operator's, and are left exactly as they are.
+        if (File.Exists(path)) return false;
+
         try
         {
-            var effective = EffectiveLines(lines);
-            Save(effective, path);
+            Save(LegacyLines, path);
             return true;
         }
         catch (Exception ex)
         {
-            // Error, not Warn: the file the native driver reads is now stale, and a
-            // caller that ignores the false proceeds on a device config that is not
-            // what the operator asked for.
+            // The one write the app makes unasked. If it cannot land, the install runs
+            // legacy stereo with no file to edit, so it is logged as an error, not a note.
             JockeyBox.Tools.Log.Error(
-                $"virtual device config could not be written to '{path ?? DefaultPath}'", ex);
+                $"virtual device config could not be created at '{path}'; the device keeps " +
+                "the legacy stereo pair and there is no file to edit", ex);
             return false;
         }
     }
