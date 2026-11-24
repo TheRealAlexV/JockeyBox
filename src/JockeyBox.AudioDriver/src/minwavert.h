@@ -2,6 +2,7 @@
 #pragma once
 
 #include "jbx.h"
+#include "jbxring.h"
 
 class CMiniportWaveRT;
 
@@ -63,8 +64,14 @@ public:
     static NTSTATUS CreateInstance(
         _Out_ CMiniportWaveRT ** OutMiniport);
 
+    // Phase 2 attach state. The app claims a reader slot itself, so this is the
+    // only signal the driver needs; there is no handover IOCTL.
+    BOOLEAN IsRingAttached() const { return m_Ring.AnyReaderActive(); }
+    ULONG RingPayloadBytes() const { return m_Ring.PayloadBytes(); }
+
 private:
     void Destroy() override;
 
     PPORTWAVERT m_Port;
+    CJbxRing m_Ring;
 };

@@ -5,6 +5,30 @@ named `JockeyBox Virtual Line 1`, as a single WaveRT capture endpoint. It exists
 to prove the plumbing: the driver compiles, packages and signs into a `.sys` and
 a `.cat`, and its stream object satisfies the WaveRT contract.
 
+## Phase 2 (this revision)
+
+- The wave miniport creates the shared section in `Init()` and owns it for the
+  lifetime of the device: `\BaseNamedObjects\JockeyBox.Bus.Pair1`, which the app
+  opens as `Global\JockeyBox.Bus.Pair1` (`BusLayout.MapNameFor("Pair1", Global)`).
+- The section is created by the driver because a user-mode process needs
+  `SeCreateGlobalPrivilege` for `Global\`. The app only opens it by name; there is
+  **no** pointer-handover IOCTL.
+- Explicit DACL, built in code (`src/jbxring.cpp`, `JbxBuildSectionSecurityDescriptor`):
+  `SYSTEM` full control, `BUILTIN\Administrators` full control, `NT AUTHORITY\Authenticated Users`
+  `SECTION_QUERY | SECTION_MAP_READ | SECTION_MAP_WRITE | READ_CONTROL`.
+- Header written by the driver matches `src/JockeyBox.Ipc/BusLayout.cs` field for
+  field: magic `0x5355424A`, version 1, header size 1024, sample rate 48000,
+  channels 2, block frames 480, capacity 8 blocks, `writeBlockIndex` 0,
+  `overrunCount` 0, 8 reader slots at 64, payload at 1024 (float32 interleaved,
+  30 720 bytes). No second header format.
+- Name publication: the INF writes `SectionName` (`Global\JockeyBox.Bus.Pair1`)
+  under the service key, so the app reads the name instead of hardcoding it.
+- Attach state: the reader claims one of the eight 64-byte reader slots
+  (`active` at slot offset 24). `CMiniportWaveRT::IsRingAttached()` reads those
+  slots; nothing else is needed and no IOCTL exists.
+- Audio is still silence: the stream zeroes its buffer on allocation and on every
+  transition into `KSSTATE_RUN`, attached ring or not. Phase 3 adds the copy.
+
 ## What phase 1 does
 
 - `DriverEntry` calls `PcInitializeAdapterDriver`; the adapter is a plain WDM

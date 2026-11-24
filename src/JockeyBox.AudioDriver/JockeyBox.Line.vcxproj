@@ -51,11 +51,13 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="src\adapter.cpp" />
+    <ClCompile Include="src\jbxring.cpp" />
     <ClCompile Include="src\mintopo.cpp" />
     <ClCompile Include="src\minwavert.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="src\jbx.h" />
+    <ClInclude Include="src\jbxring.h" />
     <ClInclude Include="src\mintopo.h" />
     <ClInclude Include="src\minwavert.h" />
   </ItemGroup>

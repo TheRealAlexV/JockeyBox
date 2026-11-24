@@ -158,6 +158,20 @@ NTSTATUS CMiniportWaveRT::Init(
 
     Port->AddRef();
     m_Port = Port;
+
+    // Phase 2: the driver owns the Global\ section; the app only opens it.
+    // A failure here must not take the endpoint away, so it is logged and the
+    // stream simply stays silent with no ring attached.
+    NTSTATUS ringStatus = m_Ring.Create();
+    if (!NT_SUCCESS(ringStatus))
+    {
+        DbgPrintEx(
+            DPFLTR_IHVAUDIO_ID,
+            DPFLTR_ERROR_LEVEL,
+            "JockeyBox.Line: section create failed 0x%08X\n",
+            ringStatus);
+    }
+
     return STATUS_SUCCESS;
 }
 
@@ -459,8 +473,14 @@ NTSTATUS CMiniportWaveRTStream::SetState(KSSTATE State)
 
     if (State == KSSTATE_RUN)
     {
-        // Silence, always: clear whatever the previous run left behind.
+        // Silence, always: clear whatever the previous run left behind. Phase 3
+        // will copy from the ring here once IsRingAttached() is true; until
+        // then an attached ring changes nothing about what the engine reads.
         ZeroBuffer();
+        if (m_Miniport != NULL && m_Miniport->IsRingAttached())
+        {
+            // Phase 3 fills this block from the ring payload.
+        }
         m_liRunStart = KeQueryPerformanceCounter(&m_liFrequency);
     }
     else if (m_State == KSSTATE_RUN)

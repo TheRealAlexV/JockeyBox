@@ -52,9 +52,13 @@ ServiceType   = 1
 StartType     = 3
 ErrorControl  = 1
 ServiceBinary = %12%\JockeyBox.Line.sys
+; Published so the app never hardcodes the section name. This is exactly
+; BusLayout.MapNameFor("Pair1", BusScope.Global).
+HKR,,SectionName,,%JbxSectionName%
 
 [Strings]
 JbxProvider     = "JockeyBox"
 JbxManufacturer = "JockeyBox"
 JbxDeviceDesc   = "JockeyBox Virtual Line 1"
 JbxDiskName     = "JockeyBox Virtual Audio Driver"
+JbxSectionName  = "Global\JockeyBox.Bus.Pair1"
