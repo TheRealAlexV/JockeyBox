@@ -509,6 +509,12 @@ public class LyricsService
         catch { return null; }
     }
 
+    /// <summary>Explicitly cache a document for a track under its source id.</summary>
+    public void CacheDocument(TrackEntry track, LyricsDocument doc)
+    {
+        WriteCache(track, doc);
+    }
+
     private void WriteCache(TrackEntry track, LyricsDocument doc, bool legacyKey = false)
     {
         try

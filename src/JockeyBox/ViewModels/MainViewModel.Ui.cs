@@ -144,6 +144,9 @@ public sealed class TrackMenuCapabilities : ObservableObject
     public ICommand? ShowInExplorer { get; init; }
     public ICommand? Tags { get; init; }
 
+    public ICommand? AlignLyrics { get; init; }
+    public bool CanAlignLyrics => AlignLyrics != null;
+
     /// <summary>
     /// "Find on YouTube" on a track row. Takes no parameter on purpose: it reads
     /// the row the surface selected and opens the YouTube search window filled
@@ -341,6 +344,7 @@ public partial class MainViewModel
             MakeKaraokeKeepBacking = MakeKaraokeKeepBackingCommand,
             MakeKaraokeVocalsOnly = MakeKaraokeVocalsOnlyCommand,
             ShowInExplorer = RevealInExplorerCommand,
+            AlignLyrics = AlignSelectedLyricsCommand,
         };
 
         RebuildPlaylistTargets(caps);

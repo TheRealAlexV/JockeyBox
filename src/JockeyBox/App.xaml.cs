@@ -122,7 +122,8 @@ public partial class App : Application
             SelftestRequested(e.Args) || LibraryDump.Requested(e.Args) ||
             UiShot.Requested(e.Args) || PerfProbe.Requested(e.Args) ||
             PreviewCheck.Requested(e.Args) || LingerCheck.Requested(e.Args) ||
-            LyricsProbe.Requested(e.Args) || AudioTrace.Requested(e.Args) ||
+            LyricsProbe.Requested(e.Args) || LyricAlignCli.Requested(e.Args) ||
+            AudioTrace.Requested(e.Args) ||
             AsioProbe.Requested(e.Args);
 
         if (!Tools.SingleInstance.TryAcquire(Tools.AppPaths.Home, out string owner, out int ownerPid))
@@ -342,6 +343,22 @@ public partial class App : Application
                 Console.Error.WriteLine("lyrics-probe failed: " + ex);
             }
             Shutdown(probeExit);
+            return;
+        }
+
+        // --align-lyrics "<path-or-artist|title>": run offline lyric alignment pipeline headlessly.
+        if (LyricAlignCli.Requested(e.Args))
+        {
+            int alignExit = 1;
+            try
+            {
+                alignExit = LyricAlignCli.Run(e.Args);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine("align-lyrics failed: " + ex);
+            }
+            Shutdown(alignExit);
             return;
         }
 

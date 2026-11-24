@@ -41,6 +41,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
     private readonly LibraryScanner _scanner;
     private readonly LibraryWatcher _watcher = new();
     private readonly LyricsService _lyricsService;
+    private readonly LyricAlignmentService _lyricAlignment;
     private readonly SeparationService _separation;
     private readonly DispatcherTimer _uiTimer;
 
@@ -205,6 +206,7 @@ public partial class MainViewModel : ObservableObject, IDisposable
 
         _scanner = new LibraryScanner(_tagCache);
         _lyricsService = new LyricsService(_settings);
+        _lyricAlignment = new LyricAlignmentService(_trackMeta, _lyricsService);
         _separation = new SeparationService(_settings,
             System.Windows.Application.Current.Dispatcher);
         _separation.StatusChanged += message => StatusText = message;
@@ -1674,6 +1676,35 @@ public partial class MainViewModel : ObservableObject, IDisposable
         await RescanAsync();
         ReselectLibraryKey(key);
         StatusText = string.IsNullOrWhiteSpace(outcome.Message) ? "Deleted the track file." : outcome.Message;
+    }
+
+    [RelayCommand(CanExecute = nameof(CanEditSelectedFileTrack))]
+    private async Task AlignSelectedLyricsAsync()
+    {
+        if (SelectedFileTrack() is not { } track) return;
+
+        StatusText = $"Aligning lyrics for {track.Artist} - {track.Title}…";
+        var lookup = await _lyricsService.GetLyricsAsync(track, CancellationToken.None);
+        if (lookup.Document == null || lookup.Document.Lines.Count == 0)
+        {
+            StatusText = $"No lyrics available to align for {track.Title}.";
+            return;
+        }
+
+        var aligned = await _lyricAlignment.AlignAsync(track, lookup.Document);
+        if (aligned != null)
+        {
+            StatusText = $"Lyrics aligned successfully for {track.Title}.";
+            if (string.Equals(TrackMetadataStore.NormalizeKey(CurrentLyricsKey),
+                    TrackMetadataStore.NormalizeKey(track.RelativeKey), StringComparison.Ordinal))
+            {
+                ApplyLyricsDocument(aligned);
+            }
+        }
+        else
+        {
+            StatusText = $"Lyric alignment failed for {track.Title}.";
+        }
     }
 
     [RelayCommand(CanExecute = nameof(CanEditSelectedFileTrack))]

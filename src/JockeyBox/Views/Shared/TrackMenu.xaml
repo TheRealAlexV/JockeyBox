@@ -193,17 +193,22 @@
                   Command="{Binding PlacementTarget.Tag.ShowInExplorer, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
                   Visibility="{Binding PlacementTarget.Tag.CanShowInExplorer, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={StaticResource MenuVisibility}}"/>
 
-        <!-- 8. Tags -->
+        <!-- 8. Align Lyrics (offline AI vocal sync) -->
+        <MenuItem Header="Align Lyrics"
+                  Command="{Binding PlacementTarget.Tag.AlignLyrics, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                  Visibility="{Binding PlacementTarget.Tag.CanAlignLyrics, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={StaticResource MenuVisibility}}"/>
+
+        <!-- 9. Tags -->
         <MenuItem Header="Tags"
                   Command="{Binding PlacementTarget.Tag.Tags, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
                   Visibility="{Binding PlacementTarget.Tag.CanEditTags, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={StaticResource MenuVisibility}}"/>
 
-        <!-- 9. Find on YouTube -->
+        <!-- 10. Find on YouTube -->
         <MenuItem Header="Find on YouTube"
                   Command="{Binding PlacementTarget.Tag.FindOnYouTube, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
                   Visibility="{Binding PlacementTarget.Tag.CanFindOnYouTube, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={StaticResource MenuVisibility}}"/>
 
-        <!-- 10. Find on Spotify -->
+        <!-- 11. Find on Spotify -->
         <MenuItem Header="Find on Spotify"
                   Command="{Binding PlacementTarget.Tag.FindOnSpotify, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
                   Visibility="{Binding PlacementTarget.Tag.CanFindOnSpotify, RelativeSource={RelativeSource AncestorType=ContextMenu}, Converter={StaticResource MenuVisibility}}"/>
