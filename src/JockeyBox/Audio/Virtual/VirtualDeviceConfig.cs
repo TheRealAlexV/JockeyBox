@@ -63,6 +63,12 @@ public static class VirtualDeviceConfig
     /// <summary>ASIO hosts are built for far fewer; 32 keeps every path bounded.</summary>
     public const int MaxChannels = 32;
 
+    // The driver's reader keeps these in fixed C buffers (id[64], name[64],
+    // source[128]) and counts UTF-8 bytes including the terminator.
+    public const int MaxIdBytes = 63;
+    public const int MaxNameBytes = 63;
+    public const int MaxSourceBytes = 127;
+
     /// <summary>What the app must tell the operator after a geometry edit.</summary>
     public const string RestartRequiredMessage =
         "Virtual device lines changed. Restart OBS (the ASIO host) to apply.";
@@ -83,14 +89,29 @@ public static class VirtualDeviceConfig
     public static void Save(IReadOnlyList<VirtualLine> lines, string? path = null)
     {
         path ??= DefaultPath;
+        var text = Serialize(lines);   // validate before touching the disk at all
+
         var directory = Path.GetDirectoryName(path);
-        if (!string.IsNullOrEmpty(directory)) Directory.CreateDirectory(directory);
-        File.WriteAllText(path, Serialize(lines), new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        if (!string.IsNullOrEmpty(directory)) VirtualConfigDirectory.Ensure(directory);
+
+        // The driver re-reads this file every second while it retries a re-attach, so
+        // a plain overwrite can be read half-written (or as zero bytes). Write a
+        // sibling, then move it over the real file: a reader sees old or new, never torn.
+        var temporary = path + ".tmp";
+        File.WriteAllText(temporary, text, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
+        File.Move(temporary, path, overwrite: true);
     }
 
     public static IReadOnlyList<VirtualLine> Load(string? path = null)
     {
         path ??= DefaultPath;
+
+        // A zero-length file is a truncated write, not "unconfigured": treating it as
+        // absent would silently serve the legacy pair and hide the real fault.
+        var info = new FileInfo(path);
+        if (info.Exists && info.Length == 0)
+            throw new FormatException($"'{path}' is empty; refusing it as a device config");
+
         return Parse(File.ReadAllText(path, Encoding.UTF8));
     }
 
@@ -215,12 +236,30 @@ public static class VirtualDeviceConfig
                 throw new InvalidOperationException($"line '{line.Id}' has a null name or source");
             if (!double.IsFinite(line.Gain))
                 throw new InvalidOperationException($"line '{line.Id}' gain is not finite");
+
+            // The driver's reader holds these in fixed char arrays (64/64/128 bytes
+            // including the terminator) and counts UTF-8 bytes, not characters. A
+            // name that fits as characters but not as bytes would make the driver
+            // reject the whole file and serve two silent channels, so refuse it here
+            // where the operator can still see why.
+            RequireBytes(line.Id, MaxIdBytes, "id");
+            RequireBytes(line.Name, MaxNameBytes, "name");
+            RequireBytes(line.Source, MaxSourceBytes, "source");
+
             channels += line.Channels;
         }
 
         if (channels > MaxChannels)
             throw new InvalidOperationException(
                 $"{channels} channels exceeds the device maximum of {MaxChannels}");
+    }
+
+    private static void RequireBytes(string value, int limit, string field)
+    {
+        var bytes = Encoding.UTF8.GetByteCount(value);
+        if (bytes > limit)
+            throw new InvalidOperationException(
+                $"line {field} \"{value}\" is {bytes} bytes, over the device limit of {limit}");
     }
 
     // Only '"', '\\' and control characters are escaped: System.Text.Json's default

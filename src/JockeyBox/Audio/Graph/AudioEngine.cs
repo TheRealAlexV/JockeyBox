@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using JockeyBox.Audio.Endpoints;
+using JockeyBox.Audio.Virtual;
 using JockeyBox.Settings;
 using JockeyBox.Tools;
 
@@ -30,6 +31,14 @@ public sealed record AudioRoute(
     /// a bus can be both a physical output and the ring.
     /// </summary>
     public IReadOnlyList<BusKind> VirtualBuses { get; init; } = Array.Empty<BusKind>();
+
+    /// <summary>
+    /// The virtual device's ordered lines. This is the geometry: when it is non-empty
+    /// the ring is <c>sum of line widths</c> channels wide and each line's source
+    /// binding decides what lands where - the <see cref="VirtualBuses"/> flags are then
+    /// irrelevant. Empty keeps the legacy stereo pair fed by the first flagged bus.
+    /// </summary>
+    public IReadOnlyList<VirtualLine> VirtualLines { get; init; } = Array.Empty<VirtualLine>();
 
     /// <summary>
     /// Section name of the ring, without the <c>Local\JockeyBox.Bus.</c> prefix.
@@ -166,24 +175,34 @@ public sealed class AudioEngine : IDisposable
     /// </summary>
     private IAudioSink? _firstSink;
 
-    /// <summary>The virtual ASIO ring producer, or null when no bus is flagged for it.</summary>
+    /// <summary>The virtual ASIO ring producer, or null when nothing feeds it.</summary>
     private VirtualBusSink? _virtualSink;
 
-    /// <summary>Which bus feeds the virtual ring (only meaningful while <see cref="_virtualSink"/> is set).</summary>
+    /// <summary>
+    /// The bus the legacy (empty line list) plan takes its stereo pair from. Only
+    /// meaningful while <see cref="_virtualSink"/> is set and the plan is legacy.
+    /// </summary>
     private BusKind _virtualBus = BusKind.Monitor;
 
     /// <summary>Non-zero when a flagged bus exists but its ring could not be opened.</summary>
     private int _virtualRingFailed;
 
     /// <summary>
-    /// The render thread's view of the ring: sink and bus published as one
-    /// immutable pair, so a route change can never hand it a sink from one route
-    /// with the bus index from another. Allocated once per route change, never per
-    /// block.
+    /// One published plan for the render thread: the sink, the precomputed tap table
+    /// and the interleaved buffer it mixes into. Immutable apart from the buffer, which
+    /// only the render thread writes; allocated once per geometry, never per block.
+    /// A tap-only change republishes a new plan that shares the same sink and buffer,
+    /// so the render thread's one volatile read is enough.
     /// </summary>
-    public sealed record VirtualRing(VirtualBusSink Sink, BusKind Bus);
+    public sealed record VirtualPublish(VirtualBusSink Sink, VirtualTapTable Taps, float[] Mix)
+    {
+        public int Channels => Taps.Channels;
+    }
 
-    private VirtualRing? _virtualRing;
+    private VirtualPublish? _virtualPublish;
+
+    /// <summary>Render-thread state: which table was mixed last, for the one-block ramp.</summary>
+    private readonly VirtualTapMixer _virtualMixer = new();
 
     /// <summary>
     /// True when a bus is flagged for the virtual ring but the section did not open
@@ -192,8 +211,8 @@ public sealed class AudioEngine : IDisposable
     /// </summary>
     public bool VirtualRingFailed => Volatile.Read(ref _virtualRingFailed) != 0;
 
-    /// <summary>The sink+bus pair the render thread is publishing to, or null.</summary>
-    public VirtualRing? Ring => Volatile.Read(ref _virtualRing);
+    /// <summary>The plan the render thread is publishing to, or null.</summary>
+    public VirtualPublish? Ring => Volatile.Read(ref _virtualPublish);
 
     /// <summary>
     /// When the render thread started, in <see cref="Stopwatch"/> ticks. A route with
@@ -726,12 +745,13 @@ public sealed class AudioEngine : IDisposable
             old = new List<DeviceOutput>(_outputs);
             _outputs.Clear();
 
-            // The ring is not a device: one producer per route, attached to the one
-            // bus flagged for it. Created here, never per block.
+            // The ring is not a device: one producer per route, publishing the tap
+            // table built from the line list (or the legacy pair). Created here,
+            // never per block.
             oldVirtual = _virtualSink;
-            _virtualSink = OpenVirtualBus(route, out _virtualBus);
-            Volatile.Write(ref _virtualRing,
-                _virtualSink is null ? null : new VirtualRing(_virtualSink, _virtualBus));
+            var publish = OpenVirtualBus(route);
+            _virtualSink = publish?.Sink;
+            Volatile.Write(ref _virtualPublish, publish);
 
             foreach (var output in built.Outputs)
             {
@@ -824,7 +844,7 @@ public sealed class AudioEngine : IDisposable
             foreach (var bus in _buses) bus.Sink = null;
             DisposeQuietly(_virtualSink);
             _virtualSink = null;
-            Volatile.Write(ref _virtualRing, null);
+            Volatile.Write(ref _virtualPublish, null);
             _firstSink = null;
         }
 
@@ -844,48 +864,106 @@ public sealed class AudioEngine : IDisposable
     }
 
     /// <summary>
-    /// Open the virtual ring producer for a route, or null when no bus is flagged.
-    /// Device sessions are plural; the ring is one section, so with several buses
-    /// flagged the first in routing order publishes and the rest are named in the log.
+    /// Open the virtual ring producer for a route, or null when nothing feeds it.
+    /// Device sessions are plural; the ring is one section.
+    ///
+    /// <para><b>Geometry.</b> A non-empty line list is the source of truth: the ring
+    /// opens as wide as the lines sum to, and each line's source binding is resolved
+    /// into the tap table. The legacy flags only matter when the list is empty, in
+    /// which case the first flagged bus publishes the stereo pair exactly as before
+    /// (with several flagged, the first in routing order publishes and the rest are
+    /// named in the log).</para>
     /// </summary>
-    private VirtualBusSink? OpenVirtualBus(AudioRoute route, out BusKind bus)
+    private VirtualPublish? OpenVirtualBus(AudioRoute route)
     {
-        bus = BusKind.Monitor;
-        if (route.VirtualBuses == null || route.VirtualBuses.Count == 0)
+        var lines = route.VirtualLines;
+        var hasLines = lines is { Count: > 0 };
+
+        if (!hasLines && (route.VirtualBuses == null || route.VirtualBuses.Count == 0))
         {
             Volatile.Write(ref _virtualRingFailed, 0);
             return null;
         }
 
-        bus = route.VirtualBuses[0];
-        if (route.VirtualBuses.Count > 1)
-            Log.Warn($"virtual ASIO ring: {route.VirtualBuses.Count} buses are flagged for " +
-                     $"'{route.VirtualBusName}'; publishing {bus} only " +
-                     $"({string.Join(", ", route.VirtualBuses.Skip(1))} ignored)");
+        VirtualTapTable taps;
+        if (hasLines)
+        {
+            taps = VirtualTapTable.FromLines(lines!, WarnUnknownVirtualSource);
+        }
+        else
+        {
+            _virtualBus = route.VirtualBuses[0];
+            if (route.VirtualBuses.Count > 1)
+                Log.Warn($"virtual ASIO ring: {route.VirtualBuses.Count} buses are flagged for " +
+                         $"'{route.VirtualBusName}'; publishing {_virtualBus} only " +
+                         $"({string.Join(", ", route.VirtualBuses.Skip(1))} ignored)");
+            taps = VirtualTapTable.Legacy(_virtualBus);
+        }
 
         // Refuse a name the driver can never attach to before the writer is opened:
         // the generic "not opened" line would hide which bus and which rule failed.
+        var subject = hasLines ? $"virtual device ({lines!.Count} lines)" : $"bus {_virtualBus}";
         var nameError = AppSettings.ValidateVirtualAsioBusName(route.VirtualBusName);
         if (nameError != null)
         {
             Volatile.Write(ref _virtualRingFailed, 1);
-            Log.Warn($"virtual ASIO ring: bus {bus} cannot publish to " +
+            Log.Warn($"virtual ASIO ring: {subject} cannot publish to " +
                      $"'{route.VirtualBusName}': {nameError}");
             return null;
         }
 
-        var sink = VirtualBusSink.TryOpen(route.VirtualBusName, Rate, Channels, BlockFrames,
+        var sink = VirtualBusSink.TryOpen(route.VirtualBusName, Rate, taps.Channels, BlockFrames,
             out var error);
         if (sink == null)
         {
             Volatile.Write(ref _virtualRingFailed, 1);
-            Log.Warn($"virtual ASIO ring: bus {bus} could not publish to " +
+            Log.Warn($"virtual ASIO ring: {subject} could not publish to " +
                      $"'{route.VirtualBusName}': {error}");
             return null;
         }
 
+        if (hasLines)
+            Log.Info($"virtual ASIO ring: {lines!.Count} line(s) = {taps.Channels} channels " +
+                     $"({taps.TapArray.Length} tap(s))");
+
         Volatile.Write(ref _virtualRingFailed, 0);
-        return sink;
+        return new VirtualPublish(sink, taps, new float[BlockFrames * taps.Channels]);
+    }
+
+    /// <summary>Once per unresolvable source, on the control thread that built the table.</summary>
+    private static void WarnUnknownVirtualSource(string source) =>
+        Log.Warn($"virtual device line source '{source}' names no bus in this graph; " +
+                 "that line's channels stay silent (deck:a, deck:b, mic:N, soundboard, monitor)");
+
+    /// <summary>
+    /// Apply an edited line list: persist it, then republish the taps if the device
+    /// keeps its width. A width change cannot be applied to a live ring - the driver
+    /// derived its own geometry from the file at <c>init()</c> - so it is saved and
+    /// <see cref="VirtualDeviceConfig.RestartRequiredMessage"/> is returned instead.
+    /// Returns null when the change took effect immediately.
+    /// </summary>
+    public string? ApplyVirtualLines(IReadOnlyList<VirtualLine> lines)
+    {
+        ArgumentNullException.ThrowIfNull(lines);
+
+        // Persist before publishing: a crash between the two leaves the file and the
+        // next launch agreeing, which a restart would fix, rather than a live device
+        // that disagrees with its own file.
+        VirtualDeviceConfig.Save(lines);
+
+        lock (_sinkLock)
+        {
+            var publish = Volatile.Read(ref _virtualPublish);
+            if (publish is null ||
+                VirtualDeviceConfig.ChannelCount(lines) != publish.Taps.Channels)
+            {
+                return VirtualDeviceConfig.RestartRequiredMessage;
+            }
+
+            var taps = VirtualTapTable.FromLines(lines, WarnUnknownVirtualSource);
+            Volatile.Write(ref _virtualPublish, publish with { Taps = taps });
+            return null;
+        }
     }
 
     // ------------------------------------------------------------------ fader / tempo helpers
@@ -975,7 +1053,7 @@ public sealed class AudioEngine : IDisposable
                             if (ReferenceEquals(firstSink, _virtualSink))
                             {
                                 _virtualSink = null;
-                                Volatile.Write(ref _virtualRing, null);
+                                Volatile.Write(ref _virtualPublish, null);
                                 Volatile.Write(ref _virtualRingFailed, 1);
                             }
                         }
@@ -996,9 +1074,9 @@ public sealed class AudioEngine : IDisposable
                 }
                 // A virtual-only route has no device clock: the wall clock is the
                 // cadence, and the ring's cushion (64 blocks by default) rides out a
-                // late wake-up. One atomic read: the sink and its bus come together.
-                else if (Volatile.Read(ref _virtualRing) is { } ring &&
-                         ring.Sink.IsAheadOfClock(_clockStart, BlockFrames, Rate))
+                // late wake-up. One atomic read: the sink and its taps come together.
+                else if (Volatile.Read(ref _virtualPublish) is { } pace &&
+                         pace.Sink.IsAheadOfClock(_clockStart, BlockFrames, Rate))
                 {
                     Thread.Sleep(1);
                     continue;
@@ -1175,11 +1253,15 @@ public sealed class AudioEngine : IDisposable
         //     so a device never receives two sessions carrying overlapping signal.
         foreach (var output in _outputs) output.Write(BlockFrames);
 
-        // 11b. The virtual ASIO ring gets the same post-delay block the flagged bus
-        //      gave its device, so the driver serves what the operator routed to it.
-        //      Snapshot read: sink and bus always belong to the same route.
-        if (Volatile.Read(ref _virtualRing) is { } ring)
-            ring.Sink.Write(_buses[(int)ring.Bus].Output, 0, BlockFrames);
+        // 11b. The virtual ASIO ring gets the taps of the plan: each destination
+        //      channel is mixed from its source bus's post-delay block, so the driver
+        //      serves what the operator routed to it. Snapshot read: sink, taps and the
+        //      interleaved buffer always belong to the same plan.
+        if (Volatile.Read(ref _virtualPublish) is { } publish)
+        {
+            _virtualMixer.Render(publish.Taps, _buses, BlockFrames, publish.Mix);
+            publish.Sink.Write(publish.Mix, 0, BlockFrames);
+        }
 
         TraceIfDue(frame);
 

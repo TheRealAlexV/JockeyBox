@@ -107,6 +107,86 @@ public sealed class VirtualDeviceConfigTests
         }
     }
 
+    [Fact]
+    public void A_name_over_the_drivers_byte_limit_is_refused_before_it_is_written()
+    {
+        var lines = Sample();
+        lines[0].Name = "Deck A - Green Room Camera";   // 27 chars, 27 bytes: legal
+
+        Assert.Equal(26, System.Text.Encoding.UTF8.GetByteCount(lines[0].Name));
+        Assert.Contains("Deck A - Green Room Camera", VirtualDeviceConfig.Serialize(lines));
+
+        // 70 bytes: fits no driver buffer of 64, and counting characters would not see it.
+        lines[0].Name = new string('x', 70);
+        var error = Assert.Throws<InvalidOperationException>(() => VirtualDeviceConfig.Serialize(lines));
+        Assert.Contains("name", error.Message);
+        Assert.Contains("70 bytes", error.Message);
+        Assert.Contains(VirtualDeviceConfig.MaxNameBytes.ToString(), error.Message);
+    }
+
+    [Fact]
+    public void Multi_byte_characters_are_counted_as_bytes_not_characters()
+    {
+        var lines = Sample();
+        lines[0].Name = new string('é', 40);   // 40 characters, 80 bytes
+
+        var error = Assert.Throws<InvalidOperationException>(() => VirtualDeviceConfig.Serialize(lines));
+        Assert.Contains("80 bytes", error.Message);
+    }
+
+    [Fact]
+    public void An_id_or_source_over_the_drivers_byte_limit_is_refused()
+    {
+        var idLines = Sample();
+        idLines[0].Id = new string('i', 64);
+        var idError = Assert.Throws<InvalidOperationException>(() => VirtualDeviceConfig.Serialize(idLines));
+        Assert.Contains("id", idError.Message);
+
+        var sourceLines = Sample();
+        sourceLines[0].Source = new string('s', 128);
+        var sourceError = Assert.Throws<InvalidOperationException>(
+            () => VirtualDeviceConfig.Serialize(sourceLines));
+        Assert.Contains("source", sourceError.Message);
+    }
+
+    [Fact]
+    public void A_zero_length_config_is_invalid_rather_than_absent()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"jb-{Guid.NewGuid():N}", "virtual-device.json");
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, "");
+
+            var error = Assert.Throws<FormatException>(() => VirtualDeviceConfig.Load(path));
+            Assert.Contains("empty", error.Message);
+        }
+        finally
+        {
+            var directory = Path.GetDirectoryName(path)!;
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Save_leaves_no_temporary_file_behind()
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"jb-{Guid.NewGuid():N}", "virtual-device.json");
+        try
+        {
+            VirtualDeviceConfig.Save(Sample(), path);
+            VirtualDeviceConfig.Save(Sample(), path);
+
+            Assert.True(File.Exists(path));
+            Assert.False(File.Exists(path + ".tmp"));
+        }
+        finally
+        {
+            var directory = Path.GetDirectoryName(path)!;
+            if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static string RepoRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);

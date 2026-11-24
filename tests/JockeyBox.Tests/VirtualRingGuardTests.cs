@@ -127,7 +127,8 @@ public sealed class VirtualRingGuardTests
         });
         var first = engine.Ring;
         Assert.NotNull(first);
-        Assert.Equal(BusKind.Monitor, first!.Bus);
+        Assert.Equal(BusKind.Monitor, first!.Taps.TapArray[0].Bus);
+        Assert.True(first.Taps.IsLegacy);
         Assert.Equal(nameMonitor, first.Sink.SectionName);
         await engine.SetRouteAsync(new AudioRoute
         {
@@ -136,7 +137,7 @@ public sealed class VirtualRingGuardTests
         });
         var second = engine.Ring;
         Assert.NotNull(second);
-        Assert.Equal(BusKind.DeckA, second!.Bus);
+        Assert.Equal(BusKind.DeckA, second!.Taps.TapArray[0].Bus);
         Assert.Equal(nameDeckA, second.Sink.SectionName);
         Assert.NotSame(first.Sink, second.Sink);
     }
@@ -166,7 +167,8 @@ public sealed class VirtualRingGuardTests
             while (Volatile.Read(ref stop) == 0)
             {
                 if (engine.Ring is not { } ring) continue;
-                string expected = ring.Bus == BusKind.Monitor ? nameMonitor : nameDeckA;
+                bool monitorPlan = ring.Taps.TapArray[0].Bus == BusKind.Monitor;
+                string expected = monitorPlan ? nameMonitor : nameDeckA;
                 if (ring.Sink.SectionName != expected) Interlocked.Increment(ref torn);
             }
         });
