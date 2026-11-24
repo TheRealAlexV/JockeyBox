@@ -61,6 +61,11 @@
         <Setter Property="FontWeight" Value="SemiBold"/>
         <Setter Property="Padding" Value="6,0"/>
         <Setter Property="Foreground" Value="{DynamicResource TextDimBrush}"/>
+        <!-- Belt to the floor's braces: hosts narrower than the 346 px column
+             total (YouTube's cards go to 240) ellipsize the header instead of
+             cutting it mid-word. A cut word is the defect; an ellipsis is a
+             deliberate "there is more". -->
+        <Setter Property="TextTrimming" Value="CharacterEllipsis"/>
     </Style>
 
     <Border x:Key="TrackColumnHeaders" x:Shared="False"
@@ -392,7 +397,12 @@
         <Setter Property="FontSize" Value="11"/>
         <Setter Property="Height" Value="22"/>
         <Setter Property="MinHeight" Value="22"/>
-        <Setter Property="Width" Value="118"/>
+        <!-- MinWidth, not Width: the longest label ("Track name", 62 px at 11 pt)
+             needs ~84 px of content box once the 7 px padding and the arrow are
+             taken out. A fixed 118 could still be squeezed smaller by a host that
+             ran out of row, and it then cut the label mid-word ("Track na") rather
+             than asking for a second line. -->
+        <Setter Property="MinWidth" Value="118"/>
         <Setter Property="Padding" Value="7,1"/>
         <Setter Property="VerticalContentAlignment" Value="Center"/>
     </Style>
@@ -414,37 +424,39 @@
              StackPanel gives every child its desired width, so the box could
              only ever be its fixed 210). FILTER and SORT keep Auto. In an
              auto-sized host the star column falls back to the box's MinWidth. -->
-        <Grid Margin="0,0,0,4">
-            <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="Auto"/>
-                <ColumnDefinition Width="*"/>
-                <ColumnDefinition Width="Auto"/>
-                <ColumnDefinition Width="Auto"/>
-                <ColumnDefinition Width="Auto"/>
-            </Grid.ColumnDefinitions>
-
-            <TextBlock Grid.Column="0" Text="FILTER" Style="{StaticResource StripLabel}"
-                       Margin="0,0,6,0"/>
-            <TextBox Grid.Column="1" Style="{StaticResource StripFilterBox}"
-                     Text="{Binding FilterText, UpdateSourceTrigger=PropertyChanged}"
-                     ToolTip="{Binding FilterHint}"
-                     AutomationProperties.Name="{Binding FilterHint}"/>
-
-            <TextBlock Grid.Column="2" Text="SORT" Style="{StaticResource StripLabel}"
-                       Margin="10,0,6,0"/>
-            <ComboBox Grid.Column="3" Style="{StaticResource StripSortCombo}"
-                      ItemsSource="{Binding SortChoices}"
-                      DisplayMemberPath="Label"
-                      SelectedValuePath="Value"
-                      SelectedValue="{Binding SortField, Mode=TwoWay}"
-                      AutomationProperties.Name="Sort by"
-                      ToolTip="Sort field"/>
-            <Button Grid.Column="4" Style="{StaticResource StripDirectionButton}"
-                    Content="{Binding DirectionLabel}"
-                    Command="{Binding ToggleDirectionCommand}"
-                    ToolTip="{Binding DirectionToolTip}"
-                    AutomationProperties.Name="Sort direction"/>
-        </Grid>
+        <!-- Two rows: FILTER with its box, then SORT with the combo and the
+             direction button. As one row this needs ~420 px, and every host that
+             gave it less clipped the sort combo mid-label ("Tra", "Track na")
+             rather than reflowing: a row holding four controls cannot fit into
+             room for three and a half. Two rows fit any host the pane can reach,
+             and the box is still the only thing that stretches. -->
+        <StackPanel Margin="0,0,0,4">
+            <DockPanel>
+                <TextBlock DockPanel.Dock="Left" Text="FILTER" Style="{StaticResource StripLabel}"
+                           Margin="0,0,6,0"/>
+                <TextBox Style="{StaticResource StripFilterBox}"
+                         Text="{Binding FilterText, UpdateSourceTrigger=PropertyChanged}"
+                         ToolTip="{Binding FilterHint}"
+                         AutomationProperties.Name="{Binding FilterHint}"/>
+            </DockPanel>
+            <DockPanel Margin="0,4,0,0">
+                <TextBlock DockPanel.Dock="Left" Text="SORT" Style="{StaticResource StripLabel}"
+                           Margin="0,0,6,0"/>
+                <Button DockPanel.Dock="Right" Style="{StaticResource StripDirectionButton}"
+                        Content="{Binding DirectionLabel}"
+                        Command="{Binding ToggleDirectionCommand}"
+                        ToolTip="{Binding DirectionToolTip}"
+                        AutomationProperties.Name="Sort direction"/>
+                <ComboBox Style="{StaticResource StripSortCombo}"
+                          HorizontalAlignment="Left"
+                          ItemsSource="{Binding SortChoices}"
+                          DisplayMemberPath="Label"
+                          SelectedValuePath="Value"
+                          SelectedValue="{Binding SortField, Mode=TwoWay}"
+                          AutomationProperties.Name="Sort by"
+                          ToolTip="Sort field"/>
+            </DockPanel>
+        </StackPanel>
     </DataTemplate>
 
 </ResourceDictionary>

@@ -1468,18 +1468,15 @@
                          TRACK BROWSER label as a third nav band. LastChildFill
                          is off so the right-docked buttons keep their own
                          widths (+ Queue was stretching to fill the row). -->
-                    <DockPanel DockPanel.Dock="Top" Margin="6,0,8,8">
-                        <TextBlock Text="TRACK BROWSER" FontSize="11" FontWeight="Bold"
-                                   Foreground="{StaticResource TextDimBrush}" VerticalAlignment="Center"/>
-                        <Button DockPanel.Dock="Right" Content="Load &#x25B6;" Margin="8,0,0,0"
-                                Command="{Binding LoadSelectedTreeTrackCommand}"/>
-                        <Button x:Name="ExpandButton" DockPanel.Dock="Right"
-                                Content="&#x2B07; Expand all" Margin="4,0,0,0"
-                                FontSize="10" Padding="6,3" Click="OnExpandAllClick"/>
-                        <Button DockPanel.Dock="Right" Content="+ Queue" Margin="4,0,0,0"
-                                FontSize="10" Padding="6,3"
-                                ToolTip="Add the selected track to the playback queue (Ctrl+Q)"
-                                Command="{Binding AddToQueueCommand}"/>
+                    <!-- Browser toolbar: three rows. At the pane's 300 px floor one row
+                         cannot hold the label, the layout switcher, the three actions
+                         and the filter/sort strip; the strip lost that contest and its
+                         sort combo was cut mid-word ("Track na") against the pane edge.
+                         Whole controls per row means only the filter box ever shrinks. -->
+                    <StackPanel DockPanel.Dock="Top" Margin="6,0,8,8">
+                        <DockPanel LastChildFill="False">
+                            <TextBlock Text="TRACK BROWSER" FontSize="11" FontWeight="Bold"
+                                       Foreground="{StaticResource TextDimBrush}" VerticalAlignment="Center"/>
                         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal"
                                     VerticalAlignment="Center" Margin="12,0,0,0">
                             <Button Content="ARTIST"
@@ -1521,19 +1518,31 @@
                                 </Button.Style>
                             </Button>
                         </StackPanel>
+                        </DockPanel>
+
                         <!-- Filter + sort strip, shared with the Spotify and YouTube
-                             lists. Its filter box writes into SearchText, so the tree
-                             keeps filtering exactly as before. It is the toolbar's
-                             fill child (last child, so LastChildFill gives it the
-                             row), and its star column takes all the slack between the
-                             TRACK BROWSER label and the ARTIST / PATH group: no fixed
-                             width. The 12 px right margin is the gap to that group,
-                             which sits just left of + Queue. -->
-                        <ContentControl Margin="12,0,12,0" VerticalAlignment="Center"
-                                        Focusable="False"
+                             lists. Two rows since the shared template was reworked:
+                             one row could not fit FILTER, its box, SORT, the combo and
+                             the direction button in the pane, and the piece that lost
+                             was the combo, cut mid-label. Its filter box writes into
+                             SearchText, so the tree keeps filtering exactly as before. -->
+                        <ContentControl Margin="0,6,0,0" Focusable="False"
                                         Content="{Binding LibraryView}"
                                         ContentTemplate="{StaticResource FilterSortStrip}"/>
-                    </DockPanel>
+
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
+                                    Margin="0,6,0,0">
+                            <Button Content="+ Queue" Margin="0,0,4,0"
+                                    FontSize="10" Padding="6,3"
+                                    ToolTip="Add the selected track to the playback queue (Ctrl+Q)"
+                                    Command="{Binding AddToQueueCommand}"/>
+                            <Button x:Name="ExpandButton" Content="&#x2B07; Expand all"
+                                    Margin="0,0,4,0" FontSize="10" Padding="6,3"
+                                    Click="OnExpandAllClick"/>
+                            <Button Content="Load &#x25B6;" Margin="4,0,0,0"
+                                    Command="{Binding LoadSelectedTreeTrackCommand}"/>
+                        </StackPanel>
+                    </StackPanel>
 
                     <Grid>
                         <Grid.ColumnDefinitions>
@@ -2949,39 +2958,62 @@
 
                 <StackPanel>
                     <!-- Header: what this is, whether it is on, what it costs, and the switch that
-                         gives the rows back to the window when the rack is not in use. -->
-                    <DockPanel LastChildFill="True">
-                        <TextBlock DockPanel.Dock="Left" Text="CHANNEL STRIP" FontSize="9"
-                                   FontWeight="Bold" Foreground="{StaticResource TextDimBrush}"
-                                   VerticalAlignment="Center"/>
-                        <TextBlock DockPanel.Dock="Left" Text="{Binding MicStripCountText}"
-                                   FontSize="9" Foreground="{StaticResource TextDimBrush}"
-                                   Margin="8,0,0,0" VerticalAlignment="Center"/>
-                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal"
-                                    VerticalAlignment="Center" Margin="12,0,0,0"
+                         gives the rows back to the window when the rack is not in use.
+                         Same five column widths and the same 11 px horizontal inset as the
+                         channel rows below, so CH and PAD sit over the values they label.
+                         As a DockPanel this docked from the right edge with 26 px number
+                         cells and put PAD 36 px right of the rows' PAD. -->
+                    <Grid Margin="11,0,11,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" MinWidth="70"/>
+                            <ColumnDefinition Width="66"/>
+                            <ColumnDefinition Width="76"/>
+                            <ColumnDefinition Width="76"/>
+                            <ColumnDefinition Width="34"/>
+                        </Grid.ColumnDefinitions>
+                        <DockPanel Grid.Column="0" LastChildFill="True">
+                            <TextBlock DockPanel.Dock="Left" Text="CHANNEL STRIP" FontSize="9"
+                                       FontWeight="Bold" Foreground="{StaticResource TextDimBrush}"
+                                       VerticalAlignment="Center"/>
+                            <TextBlock DockPanel.Dock="Left" Text="{Binding MicStripCountText}"
+                                       FontSize="9" Foreground="{StaticResource TextDimBrush}"
+                                       Margin="8,0,0,0" VerticalAlignment="Center"/>
+                            <!-- Fill child: yields to the label and trims. -->
+                            <TextBlock FontSize="9" Margin="8,0,0,0" VerticalAlignment="Center"
+                                       Foreground="{StaticResource AccentABrush}"
+                                       TextTrimming="CharacterEllipsis"
+                                       ToolTip="{Binding SelectedMicStrip.Name}"
+                                       Text="{Binding SelectedMicStrip.Name, StringFormat={}editing {0}}"/>
+                        </DockPanel>
+                        <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center"
                                     ToolTip="Chain: frames this strip's own stages cost, 240 only from the limiter. Pad: frames the mixer adds so every device lines up. Both 0 = zero added latency.">
-                            <TextBlock Text="CHAIN" Style="{StaticResource RackCaption}"/>
-                            <TextBlock Text="{Binding MixerChainFrames}" FontFamily="Consolas" FontSize="10"
-                                       Width="26" TextAlignment="Right" Margin="3,0,0,0"/>
-                            <TextBlock Text="f" Style="{StaticResource RackCaption}" Margin="2,0,0,0"/>
-                            <TextBlock Text="PAD" Style="{StaticResource RackCaption}" Margin="10,0,0,0"/>
-                            <TextBlock Text="{Binding MixerPadFrames}" FontFamily="Consolas" FontSize="10"
-                                       Width="26" TextAlignment="Right" Margin="3,0,0,0"/>
-                            <TextBlock Text="f" Style="{StaticResource RackCaption}" Margin="2,0,0,0"/>
+                            <TextBlock Text="CHAIN" Style="{StaticResource RackCaption}" Width="30"/>
+                            <!-- Value and unit as one run: "0" beside a separate bold "f"
+                                 read as the token "0f", which looks like a broken format
+                                 string. It is frames, and the space says so. -->
+                            <TextBlock Text="{Binding MixerChainFrames, StringFormat={}{0} f}"
+                                       FontFamily="Consolas" FontSize="10" Width="40"
+                                       TextAlignment="Right" Margin="3,0,0,0"/>
                         </StackPanel>
-                        <TextBlock DockPanel.Dock="Right" Text="MIXER" Style="{StaticResource RackCaption}"
-                                   Margin="12,0,5,0"/>
-                        <ToggleButton DockPanel.Dock="Right" Style="{StaticResource RackGate}"
+                        <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center"
+                                    ToolTip="Pad: frames the mixer adds so every device lines up. 0 = no added latency.">
+                            <TextBlock Text="PAD" Style="{StaticResource RackCaption}" Width="30"/>
+                            <TextBlock Text="{Binding MixerPadFrames, StringFormat={}{0} f}"
+                                       FontFamily="Consolas" FontSize="10" Width="40"
+                                       TextAlignment="Right" Margin="3,0,0,0"/>
+                        </StackPanel>
+                        <!-- MIXER sits in the meter column, which the header has no
+                             meter to fill; the gate sits in the BYP column, so the two
+                             grids are the same width and PAD lands over PAD. -->
+                        <TextBlock Grid.Column="1" Text="MIXER" Style="{StaticResource RackCaption}"
+                                   HorizontalAlignment="Right" VerticalAlignment="Center"
+                                   Margin="0,0,6,0"/>
+                        <ToggleButton Grid.Column="4" Style="{StaticResource RackGate}"
                                       IsChecked="{Binding IsMixerOn, Mode=TwoWay}"
+                                      HorizontalAlignment="Right"
                                       AutomationProperties.Name="Mixer enable"
                                       ToolTip="Master gate for every strip. Off is bit-transparent: no filter, no limiter, no latency."/>
-                        <!-- Fill child: it yields to the controls at both ends and
-                             trims, instead of pushing the MIXER gate off the panel. -->
-                        <TextBlock FontSize="9" Margin="8,0,0,0" VerticalAlignment="Center"
-                                   Foreground="{StaticResource AccentABrush}"
-                                   TextTrimming="CharacterEllipsis"
-                                   Text="{Binding SelectedMicStrip.Name, StringFormat={}editing {0}}"/>
-                    </DockPanel>
+                    </Grid>
 
                     <!-- Strip row: one button per attached device, one device per line.
                          It was a WrapPanel for the old full-width band; in a 420 px
@@ -3010,9 +3042,9 @@
                                                  panel edge. -->
                                             <ColumnDefinition Width="*" MinWidth="70"/>
                                             <ColumnDefinition Width="66"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                            <ColumnDefinition Width="Auto"/>
+                                            <ColumnDefinition Width="76"/>
+                                            <ColumnDefinition Width="76"/>
+                                            <ColumnDefinition Width="34"/>
                                         </Grid.ColumnDefinitions>
 
                                         <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,6,0">
@@ -3041,21 +3073,20 @@
                                         </Grid>
 
                                         <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center"
-                                                    Margin="0,0,10,0"
                                                     ToolTip="Chain frames: this strip's own stages (limiter lookahead only)">
-                                            <TextBlock Text="CH" Style="{StaticResource RackCaption}"/>
+                                            <TextBlock Text="CH" Style="{StaticResource RackCaption}" Width="30"/>
                                             <TextBlock Text="{Binding ChainFrames}" FontFamily="Consolas" FontSize="10"
-                                                       Width="24" TextAlignment="Right" Margin="3,0,0,0"/>
+                                                       Width="40" TextAlignment="Right" Margin="3,0,0,0"/>
                                         </StackPanel>
                                         <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center"
-                                                    Margin="0,0,10,0"
                                                     ToolTip="Pad frames: delay added to line up with the slowest device">
-                                            <TextBlock Text="PAD" Style="{StaticResource RackCaption}"/>
+                                            <TextBlock Text="PAD" Style="{StaticResource RackCaption}" Width="30"/>
                                             <TextBlock Text="{Binding PadFrames}" FontFamily="Consolas" FontSize="10"
-                                                       Width="24" TextAlignment="Right" Margin="3,0,0,0"/>
+                                                       Width="40" TextAlignment="Right" Margin="3,0,0,0"/>
                                         </StackPanel>
 
                                         <ToggleButton Grid.Column="4" Style="{StaticResource MicToggle}" Width="34"
+                                                      HorizontalAlignment="Right"
                                                       Content="BYP"
                                                       IsChecked="{Binding Bypass, Mode=TwoWay}"
                                                       AutomationProperties.Name="Bypass this strip"

@@ -287,15 +287,43 @@
         </Grid>
 
         <!-- ================= Two panes ================= -->
-        <Grid Grid.Row="1">
+        <!-- Rail beside the table normally; rail on top when the pane is too narrow
+             for both. Below ~560 the table's own column floor (346 px in
+             TrackRows.xaml) plus a rail with a readable playlist name leaves no
+             room for a second pane, and squeezing produced clipped headers. -->
+        <Grid Grid.Row="1" x:Name="SpotifyPanes">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="200" MinWidth="150"/>
+                <ColumnDefinition Width="Auto" MinWidth="150"/>
                 <ColumnDefinition Width="8"/>
-                <ColumnDefinition Width="*" MinWidth="300"/>
+                <ColumnDefinition Width="*"/>
             </Grid.ColumnDefinitions>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+            </Grid.RowDefinitions>
 
             <!-- Playlist rail -->
-            <Border Grid.Column="0" Style="{StaticResource PaneCard}">
+            <Border Grid.Column="0">
+                <Border.Style>
+                    <Style TargetType="Border" BasedOn="{StaticResource PaneCard}">
+                        <Setter Property="Grid.Row" Value="0"/>
+                        <Setter Property="Grid.RowSpan" Value="2"/>
+                        <Setter Property="MaxWidth" Value="200"/>
+                        <Style.Triggers>
+                            <!-- Narrow: rail becomes a short strip above the table
+                                 rather than a 200 px column eating two thirds of a
+                                 330 px pane. -->
+                            <DataTrigger Binding="{Binding ActualWidth, ElementName=SpotifyPanes, Converter={StaticResource HeightBelow}, ConverterParameter=560}"
+                                         Value="True">
+                                <Setter Property="Grid.ColumnSpan" Value="3"/>
+                                <Setter Property="Grid.RowSpan" Value="1"/>
+                                <Setter Property="Height" Value="80"/>
+                                <Setter Property="MaxWidth" Value="100000"/>
+                                <Setter Property="Margin" Value="0,0,0,6"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Border.Style>
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
@@ -374,7 +402,26 @@
             <!-- Track table. x:Name is the height probe for the fold below: the
                  card is stretched by its star row, so its ActualHeight is the
                  budget the list has to live inside. -->
-            <Border Grid.Column="2" Style="{StaticResource PaneCard}" x:Name="TrackCard">
+            <Border x:Name="TrackCard">
+                <Border.Style>
+                    <Style TargetType="Border" BasedOn="{StaticResource PaneCard}">
+                        <Setter Property="Grid.Row" Value="0"/>
+                        <Setter Property="Grid.RowSpan" Value="2"/>
+                        <Setter Property="Grid.Column" Value="2"/>
+                        <Style.Triggers>
+                            <!-- Narrow: the table takes the whole width under the
+                                 rail strip, so its columns keep their floor instead
+                                 of being compressed into clipped headers. -->
+                            <DataTrigger Binding="{Binding ActualWidth, ElementName=SpotifyPanes, Converter={StaticResource HeightBelow}, ConverterParameter=560}"
+                                         Value="True">
+                                <Setter Property="Grid.Column" Value="0"/>
+                                <Setter Property="Grid.ColumnSpan" Value="3"/>
+                                <Setter Property="Grid.Row" Value="1"/>
+                                <Setter Property="Grid.RowSpan" Value="1"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Border.Style>
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
@@ -461,9 +508,9 @@
                          Folds away instead of squeezing the list shut: at a short card
                          this row plus the idle preview bar are the difference between
                          zero track rows and three. -->
-                    <WrapPanel Margin="0,5,0,0">
-                        <WrapPanel.Style>
-                            <Style TargetType="WrapPanel">
+                    <Grid Margin="0,5,0,0">
+                        <Grid.Style>
+                            <Style TargetType="Grid">
                                 <Setter Property="Grid.Row" Value="2"/>
                                 <Setter Property="VerticalAlignment" Value="Center"/>
                                 <Style.Triggers>
@@ -489,21 +536,32 @@
                                     </MultiDataTrigger>
                                 </Style.Triggers>
                             </Style>
-                        </WrapPanel.Style>
-                        <TextBlock Text="EDIT" Style="{StaticResource SectionLabel}" Margin="0,0,8,0"/>
-                        <TextBox Width="150" Height="24" FontSize="11" Margin="0,0,4,0"
-                                 VerticalContentAlignment="Center"
-                                 Text="{Binding NewPlaylistName, UpdateSourceTrigger=PropertyChanged}"
-                                 ToolTip="Name for a new private Spotify playlist">
-                            <TextBox.InputBindings>
-                                <KeyBinding Key="Enter" Command="{Binding CreateSpotifyPlaylistCommand}"/>
-                            </TextBox.InputBindings>
-                        </TextBox>
-                        <Button Content="+ New playlist" Style="{StaticResource QuietButton}"
-                                Margin="0,0,4,0"
-                                Command="{Binding CreateSpotifyPlaylistCommand}"
-                                ToolTip="{Binding WriteTooltip}"
-                                ToolTipService.ShowOnDisabled="True"/>
+                        </Grid.Style>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="Auto"/>
+                        </Grid.RowDefinitions>
+                        <DockPanel Grid.Row="0">
+                            <TextBlock DockPanel.Dock="Left" Text="EDIT"
+                                       Style="{StaticResource SectionLabel}" Margin="0,0,8,0"/>
+                            <Button DockPanel.Dock="Right" Content="+ New playlist"
+                                    Style="{StaticResource QuietButton}" Margin="4,0,0,0"
+                                    Command="{Binding CreateSpotifyPlaylistCommand}"
+                                    ToolTip="{Binding WriteTooltip}"
+                                    ToolTipService.ShowOnDisabled="True"/>
+                            <!-- Fill child: it takes the slack between the label and the
+                                 button, so a narrow pane shortens the name box instead of
+                                 pushing a sibling out through the card edge. -->
+                            <TextBox MinWidth="90" Height="24" FontSize="11"
+                                     VerticalContentAlignment="Center"
+                                     Text="{Binding NewPlaylistName, UpdateSourceTrigger=PropertyChanged}"
+                                     ToolTip="Name for a new private Spotify playlist">
+                                <TextBox.InputBindings>
+                                    <KeyBinding Key="Enter" Command="{Binding CreateSpotifyPlaylistCommand}"/>
+                                </TextBox.InputBindings>
+                            </TextBox>
+                        </DockPanel>
+                        <WrapPanel Grid.Row="1" Margin="0,4,0,0">
                         <Button Content="Add selected" Style="{StaticResource QuietButton}"
                                 Margin="0,0,4,0"
                                 Command="{Binding AddSelectedToSpotifyPlaylistCommand}"
@@ -518,10 +576,17 @@
                                 Command="{Binding ReauthorizeSpotifyCommand}"
                                 Visibility="{Binding ShowReauthorize, Converter={StaticResource BoolToVisibility}}"
                                 ToolTip="Open Spotify's consent screen again to grant playlist editing"/>
-                    </WrapPanel>
+                        </WrapPanel>
+                    </Grid>
 
-                    <!-- Table -->
-                    <Grid Grid.Row="3" Margin="0,4,0,0">
+                    <!-- Table. The shared header and row grids have a 346 px column
+                         floor (TrackRows.xaml); inside a narrower card they cut labels
+                         mid-word ("Track  name", "Arti"). The table keeps that floor and
+                         this region scrolls the remainder rather than compressing. -->
+                    <ScrollViewer Grid.Row="3" Margin="0,4,0,0" Focusable="False"
+                                  HorizontalScrollBarVisibility="Auto"
+                                  VerticalScrollBarVisibility="Disabled">
+                    <Grid MinWidth="346">
                         <Grid.RowDefinitions>
                             <RowDefinition Height="Auto"/>
                             <RowDefinition Height="*"/>
@@ -636,11 +701,16 @@
                                             </Style.Triggers>
                                         </Style>
                                     </StackPanel.Style>
+                                    <!-- Both strings wrap. Neither carried Wrapping, so a
+                                         narrow card cut them mid-word ("Connect", "Loads
+                                         playlists; tra"). The second sentence also had a
+                                         semicolon doing a full stop's job. -->
                                     <TextBlock Text="Connect your Spotify account" FontSize="15" FontWeight="SemiBold"
-                                               TextAlignment="Center"/>
-                                    <TextBlock Text="Loads playlists; tracks you already own are skipped."
+                                               TextAlignment="Center" TextWrapping="Wrap"
+                                               Margin="8,0,8,0"/>
+                                    <TextBlock Text="Loads your playlists. Tracks you already own are skipped."
                                                FontSize="12" TextWrapping="Wrap" TextAlignment="Center"
-                                               Foreground="{StaticResource TextDimBrush}" Margin="0,2,0,2"/>
+                                               Foreground="{StaticResource TextDimBrush}" Margin="8,2,8,2"/>
                                 </StackPanel>
                                 <Button Content="{Binding ConnectLabel}" Command="{Binding ConnectCommand}"
                                         HorizontalAlignment="Center" Padding="16,5"
@@ -648,6 +718,7 @@
                             </StackPanel>
                         </Border>
                     </Grid>
+                    </ScrollViewer>
 
                     <!-- Versions picker: choose which upload becomes the library file -->
                     <Border Grid.Row="4" Margin="0,5,0,0"
