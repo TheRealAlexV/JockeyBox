@@ -1776,6 +1776,274 @@ int runChannelGeometryTest(const wchar_t* configPath) {
     return failures;
 }
 
+// ---- config reader: fixture pin and hostile inputs --------------------------
+// Part of the default run, not an opt-in step: a reader/writer drift that would
+// present on air as silence has to fail the normal suite. Needs no driver and no
+// host, so it costs milliseconds.
+namespace {
+
+bool writeConfigFile(const wchar_t* path, const char* text, size_t length) {
+    HANDLE file = CreateFileW(path, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                              FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (file == INVALID_HANDLE_VALUE) return false;
+    DWORD written = 0;
+    const bool ok = length == 0 ||
+                    (WriteFile(file, text, static_cast<DWORD>(length), &written, nullptr) &&
+                     written == static_cast<DWORD>(length));
+    CloseHandle(file);
+    return ok;
+}
+
+}  // namespace
+
+static int runConfigReaderTests(const wchar_t* goldenPath) {
+    using jb::asio::config::Device;
+    int failures = 0;
+    int cases = 0;
+    wprintf(L"\n== config reader: fixture pin and hostile inputs ==\n");
+
+    // Parses one buffer and checks acceptance plus, on refusal, that the reason
+    // names what the operator has to fix.
+    const auto expectBuffer = [&](const char* label, const char* text, size_t length,
+                                  bool wantOk, const char* mention) {
+        Device device;
+        const bool ok = jb::asio::config::parse(text, length, device);
+        const bool named = mention == nullptr || std::strstr(device.error, mention) != nullptr;
+        const bool passed = ok == wantOk && named;
+        ++cases;
+        wprintf(L"%-24hs : %hs", label, ok ? "accepted" : "refused");
+        if (!ok) wprintf(L" [%hs]", device.error);
+        wprintf(L" %s\n", passed ? L"OK" : L"WRONG");
+        if (!passed) ++failures;
+    };
+
+    // The committed fixture is the pin between this reader and the C# writer:
+    // 3 stereo + 2 mono lines, 8 channels, in the app's own key order.
+    {
+        Device device;
+        const bool loaded = jb::asio::config::load(goldenPath, device);
+        const bool shape = loaded && device.lineCount == 5 && device.channels == 8 &&
+                           std::strcmp(device.lines[0].id, "deck-a") == 0 &&
+                           std::strcmp(device.lines[0].name, "Deck A") == 0 &&
+                           std::strcmp(device.lines[0].source, "deck:a") == 0 &&
+                           device.lines[0].channels == 2 && device.lines[1].channels == 2 &&
+                           device.lines[2].channels == 2 && device.lines[3].channels == 1 &&
+                           device.lines[4].channels == 1;
+        ++cases;
+        wprintf(L"%-24hs : %d lines, %d channels %s\n", "golden fixture", device.lineCount,
+                device.channels, shape ? L"OK" : L"WRONG");
+        if (!shape) {
+            wprintf(L"  %hs\n", loaded ? "wrong shape" : device.error);
+            ++failures;
+        }
+    }
+
+    char text[4096] = {};
+    char field[192] = {};
+
+    // Byte limits: id 63, name 63, source 127. 63 fits, 64 does not, and the
+    // refusal names the field and the count so the app side can match it.
+    std::memset(field, 'n', 63);
+    field[63] = '\0';
+    _snprintf_s(text, sizeof(text), _TRUNCATE,
+                "{\"version\":1,\"lines\":[{\"id\":\"l1\",\"name\":\"%s\",\"type\":"
+                "\"stereo\",\"source\":\"s\",\"gain\":1,\"mute\":false}]}",
+                field);
+    expectBuffer("name at 63 bytes", text, std::strlen(text), true, nullptr);
+
+    std::memset(field, 'n', 64);
+    field[64] = '\0';
+    _snprintf_s(text, sizeof(text), _TRUNCATE,
+                "{\"version\":1,\"lines\":[{\"id\":\"l1\",\"name\":\"%s\",\"type\":"
+                "\"stereo\",\"source\":\"s\",\"gain\":1,\"mute\":false}]}",
+                field);
+    expectBuffer("name at 64 bytes", text, std::strlen(text), false, "name is 64 bytes");
+
+    // The review's case: 40 accented characters are 80 UTF-8 bytes, which is over
+    // the 63-byte cap even though it is 40 "characters". 31 fit, 32 do not.
+    {
+        char accented[192] = {};
+        for (int i = 0; i < 31; ++i) std::memcpy(accented + i * 2, "\xC3\xA9", 2);
+        _snprintf_s(text, sizeof(text), _TRUNCATE,
+                    "{\"version\":1,\"lines\":[{\"id\":\"l1\",\"name\":\"%s\",\"type\":"
+                    "\"stereo\",\"source\":\"s\",\"gain\":1,\"mute\":false}]}",
+                    accented);
+        expectBuffer("31 accented chars", text, std::strlen(text), true, nullptr);
+
+        for (int i = 0; i < 32; ++i) std::memcpy(accented + i * 2, "\xC3\xA9", 2);
+        _snprintf_s(text, sizeof(text), _TRUNCATE,
+                    "{\"version\":1,\"lines\":[{\"id\":\"l1\",\"name\":\"%s\",\"type\":"
+                    "\"stereo\",\"source\":\"s\",\"gain\":1,\"mute\":false}]}",
+                    accented);
+        expectBuffer("32 accented chars", text, std::strlen(text), false, "name is 64 bytes");
+    }
+
+    std::memset(field, 'o', 64);
+    field[64] = '\0';
+    _snprintf_s(text, sizeof(text), _TRUNCATE,
+                "{\"version\":1,\"lines\":[{\"id\":\"%s\",\"name\":\"n\",\"type\":"
+                "\"stereo\",\"source\":\"s\",\"gain\":1,\"mute\":false}]}",
+                field);
+    expectBuffer("id at 64 bytes", text, std::strlen(text), false, "id is 64 bytes");
+
+    std::memset(field, 's', 128);
+    field[128] = '\0';
+    _snprintf_s(text, sizeof(text), _TRUNCATE,
+                "{\"version\":1,\"lines\":[{\"id\":\"l1\",\"name\":\"n\",\"type\":"
+                "\"stereo\",\"source\":\"%s\",\"gain\":1,\"mute\":false}]}",
+                field);
+    expectBuffer("source at 128 bytes", text, std::strlen(text), false, "source is 128 bytes");
+
+    // A UTF-8 BOM is legal on disk and must not read as "root is not an object".
+    {
+        const char body[] =
+            "{\"version\":1,\"lines\":[{\"id\":\"l1\",\"name\":\"n\",\"type\":\"stereo\","
+            "\"source\":\"s\",\"gain\":1,\"mute\":false}]}";
+        char bom[sizeof(body) + 3] = {};
+        std::memcpy(bom, "\xEF\xBB\xBF", 3);
+        std::memcpy(bom + 3, body, sizeof(body) - 1);
+        expectBuffer("UTF-8 BOM", bom, sizeof(body) - 1 + 3, true, nullptr);
+    }
+
+    // Duplicate keys: the writer never emits one, and merging a second "lines"
+    // would silently change the channel count.
+    {
+        const char dupRoot[] =
+            "{\"version\":1,\"lines\":[],\"lines\":[{\"id\":\"l1\",\"name\":\"n\","
+            "\"type\":\"stereo\",\"source\":\"s\",\"gain\":1,\"mute\":false}]}";
+        expectBuffer("duplicate 'lines'", dupRoot, sizeof(dupRoot) - 1, false,
+                     "duplicate 'lines'");
+        const char dupMember[] =
+            "{\"version\":1,\"lines\":[{\"id\":\"l1\",\"name\":\"n\",\"name\":\"m\","
+            "\"type\":\"stereo\",\"source\":\"s\",\"gain\":1,\"mute\":false}]}";
+        expectBuffer("duplicate 'name'", dupMember, sizeof(dupMember) - 1, false,
+                     "duplicate 'name'");
+    }
+
+    // version is an integer in the writer; 1.0 and 1e0 are different JSON values.
+    {
+        const char vFloat[] =
+            "{\"version\":1.0,\"lines\":[{\"id\":\"l1\",\"name\":\"n\",\"type\":\"stereo\","
+            "\"source\":\"s\",\"gain\":1,\"mute\":false}]}";
+        expectBuffer("version 1.0", vFloat, sizeof(vFloat) - 1, false, "expected an integer");
+        const char vExp[] =
+            "{\"version\":1e0,\"lines\":[{\"id\":\"l1\",\"name\":\"n\",\"type\":\"stereo\","
+            "\"source\":\"s\",\"gain\":1,\"mute\":false}]}";
+        expectBuffer("version 1e0", vExp, sizeof(vExp) - 1, false, "expected an integer");
+    }
+
+    // Strict JSON numbers: a leading zero is rejected, and a 64-character literal
+    // fails exactly where the app's System.Text.Json fails.
+    {
+        const char leadingZero[] =
+            "{\"version\":1,\"lines\":[{\"id\":\"l1\",\"name\":\"n\",\"type\":\"stereo\","
+            "\"source\":\"s\",\"gain\":01.5,\"mute\":false}]}";
+        expectBuffer("gain 01.5", leadingZero, sizeof(leadingZero) - 1, false, "leading zero");
+
+        char longNumber[256] = {};
+        longNumber[0] = '1';
+        std::memset(longNumber + 1, '0', 63);
+        const char* prefix =
+            "{\"version\":1,\"lines\":[{\"id\":\"l1\",\"name\":\"n\",\"type\":\"stereo\","
+            "\"source\":\"s\",\"gain\":";
+        const char* suffix = ",\"mute\":false}]}";
+        _snprintf_s(text, sizeof(text), _TRUNCATE, "%s%s%s", prefix, longNumber, suffix);
+        expectBuffer("64-char number", text, std::strlen(text), false, "longer than 63");
+
+        const char okGain[] =
+            "{\"version\":1,\"lines\":[{\"id\":\"l1\",\"name\":\"n\",\"type\":\"stereo\","
+            "\"source\":\"s\",\"gain\":0.5,\"mute\":false}]}";
+        expectBuffer("gain 0.5", okGain, sizeof(okGain) - 1, true, nullptr);
+    }
+
+    // The writer always emits name and source; a missing one is a torn or edited
+    // file, not a shorter form to be guessed at.
+    {
+        const char noName[] =
+            "{\"version\":1,\"lines\":[{\"id\":\"l1\",\"type\":\"stereo\",\"source\":\"s\","
+            "\"gain\":1,\"mute\":false}]}";
+        expectBuffer("missing name", noName, sizeof(noName) - 1, false, "line has no name");
+        const char noSource[] =
+            "{\"version\":1,\"lines\":[{\"id\":\"l1\",\"name\":\"n\",\"type\":\"stereo\","
+            "\"gain\":1,\"mute\":false}]}";
+        expectBuffer("missing source", noSource, sizeof(noSource) - 1, false,
+                     "line has no source");
+    }
+
+    // File-level cases: absence is the stereo default, everything else refuses.
+    {
+        wchar_t temp[MAX_PATH] = {};
+        wchar_t scratch[MAX_PATH] = {};
+        wchar_t absent[MAX_PATH] = {};
+        wchar_t directory[MAX_PATH] = {};
+        GetTempPathW(MAX_PATH, temp);
+        swprintf_s(scratch, L"%sjb-config-%lu.json", temp, GetCurrentProcessId());
+        swprintf_s(absent, L"%sjb-config-absent-%lu.json", temp, GetCurrentProcessId());
+        swprintf_s(directory, L"%sjb-config-dir-%lu", temp, GetCurrentProcessId());
+        DeleteFileW(absent);
+
+        const char truncated[] =
+            "{\"version\":1,\"lines\":[{\"id\":\"deck-a\",\"name\":\"Deck A\",\"type\":"
+            "\"stereo\",\"source\":\"deck:a\",\"gain\":1,\"mut";
+        // A writer caught mid-file leaves a torn tail: refuse, never guess.
+        {
+            Device device;
+            bool ok = writeConfigFile(scratch, truncated, sizeof(truncated) - 1);
+            const bool loaded = ok && jb::asio::config::load(scratch, device);
+            const bool passed = ok && !loaded && device.error[0] != '\0';
+            ++cases;
+            wprintf(L"%-24hs : %hs [%hs] %s\n", "torn tail",
+                    loaded ? "accepted" : "refused", device.error, passed ? L"OK" : L"WRONG");
+            if (!passed) ++failures;
+            DeleteFileW(scratch);
+        }
+        // Zero bytes is a file whose content is unknown, not "unconfigured".
+        {
+            Device device;
+            const bool wrote = writeConfigFile(scratch, "", 0);
+            const bool loaded = wrote && jb::asio::config::load(scratch, device);
+            const bool passed = wrote && !loaded && std::strstr(device.error, "empty") != nullptr;
+            ++cases;
+            wprintf(L"%-24hs : %hs [%hs] %s\n", "zero-byte file",
+                    loaded ? "accepted" : "refused", device.error, passed ? L"OK" : L"WRONG");
+            if (!passed) ++failures;
+            DeleteFileW(scratch);
+        }
+        // A genuinely absent file is the legacy stereo default: no error text.
+        {
+            Device device;
+            const bool loaded = jb::asio::config::load(absent, device);
+            const bool passed = !loaded && device.error[0] == '\0' && !device.loaded &&
+                                device.channels == jb::asio::config::kMinChannels;
+            ++cases;
+            wprintf(L"%-24hs : %s %s\n", "absent file", passed ? L"stereo default" : L"WRONG",
+                    passed ? L"OK" : L"");
+            if (!passed) ++failures;
+        }
+        // Access denied (a directory here) is a refusal that names the Windows
+        // error, not a silent two-channel device.
+        {
+            Device device;
+            const bool made = CreateDirectoryW(directory, nullptr) != FALSE;
+            const bool loaded = made && jb::asio::config::load(directory, device);
+            const bool passed = made && !loaded &&
+                                std::strstr(device.error, "Windows error") != nullptr;
+            ++cases;
+            wprintf(L"%-24hs : %hs [%hs] %s\n", "unreadable file",
+                    loaded ? "accepted" : "refused", device.error, passed ? L"OK" : L"WRONG");
+            if (!passed) ++failures;
+            RemoveDirectoryW(directory);
+        }
+    }
+
+    wprintf(L"config limits     : id %zu B, name %zu B, source %zu B, number %zu chars\n",
+            jb::asio::config::kIdBytes, jb::asio::config::kNameBytes,
+            jb::asio::config::kSourceBytes, jb::asio::config::kMaxNumberChars);
+    wprintf(L"config reader     : %s (%d cases, %d failing)\n",
+            failures == 0 ? L"PASS" : L"FAIL", cases, failures);
+    return failures;
+}
+
 int wmain(int argc, wchar_t** argv) {
     wchar_t dllPath[MAX_PATH] = {};
     if (argc > 1 && wcscmp(argv[1], L"--soak") != 0 &&
@@ -1980,6 +2248,15 @@ int wmain(int argc, wchar_t** argv) {
     if (wchar_t* slash = wcsrchr(harnessDir, L'\\')) *slash = L'\0';
     wcscat_s(harnessDir, L"\\");
 
+    // ---- config reader: the fixture pin and the hostile inputs ------------
+    // Runs every time: the DLL is compiled from the same tree as the reader, so a
+    // drift between the app's writer and this parser must fail the normal suite,
+    // not wait for someone to remember --config-test.
+    wchar_t goldenPath[MAX_PATH] = {};
+    swprintf_s(goldenPath, L"%s..\\..\\JockeyBox\\Audio\\Virtual\\virtual-device.golden.json",
+               harnessDir);
+    const int configFailures = runConfigReaderTests(goldenPath);
+
     const AudioPathResult audio = runAudioPathTests(harnessDir);
     const bool capacityLagPassed = runExactCapacityLagTest();
 
@@ -2003,6 +2280,7 @@ int wmain(int argc, wchar_t** argv) {
         wprintf(L"cross-language    : not run\n");
     }
     wprintf(L"exact-capacity    : %s\n", capacityLagPassed ? L"PASS" : L"FAIL");
+    wprintf(L"config reader     : %s\n", configFailures == 0 ? L"PASS" : L"FAIL");
 
     const bool audioPassed = audio.bitExactPassed && audio.gapPassed &&
                              audio.latencyPassed && audio.trimNoOpPassed &&

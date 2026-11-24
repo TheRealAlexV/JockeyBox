@@ -145,7 +145,10 @@ out\AsioHostHarness.exe <dll> --keep
 ```
 
 The line-model geometry (three Stereo Lines plus two Mono Lines = 8 channels) is
-verified against the same fixture the app's writer test pins byte for byte:
+verified against the same fixture the app's writer test pins byte for byte. The
+fixture pin and the hostile config cases (byte limits, BOM, duplicate keys, torn
+tail, zero-byte and unreadable files) run in the **default** harness run above, so
+a reader/writer drift fails the normal suite. The live audio gate stays opt-in:
 
 ```
 out\AsioHostHarness.exe --config-test ..\..\JockeyBox\Audio\Virtual\virtual-device.golden.json
