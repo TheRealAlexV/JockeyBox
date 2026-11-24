@@ -137,6 +137,16 @@ main()
     public static async Task InstallAsync(string? customPython, bool useGpu,
                                           IProgress<string> log, CancellationToken ct)
     {
+        // The venv is rebuilt with --clear below, so everything the app needs from it
+        // has to ride in one pip invocation. A separate alignment install step would be
+        // wiped by the next re-run and its download repeated, so the union goes in
+        // together and is skipped entirely when already satisfied.
+        if (await SharedVenvReadyAsync(useGpu, ct))
+        {
+            log.Report("Python engine already installed (audio-separator, stable-ts, faster-whisper).");
+            return;
+        }
+
         var python = await DetectPythonAsync(customPython, log, ct)
             ?? throw new InvalidOperationException(
                 "No suitable Python found. Install Python 3.10-3.13 from python.org " +
@@ -155,14 +165,38 @@ main()
             log, ct, "pip upgrade failed");
 
         var package = useGpu ? "audio-separator[gpu]" : "audio-separator[cpu]";
-        log.Report($"Installing {package} (this downloads PyTorch - several hundred MB, please wait)\u2026");
-        await RunLoggedAsync(VenvPython, new[] { "-m", "pip", "install", "--upgrade", package },
-            log, ct, "audio-separator install failed");
+        log.Report($"Installing {package} and lyric alignment (stable-ts, faster-whisper) " +
+                   "- this downloads PyTorch, several hundred MB, please wait\u2026");
+        await RunLoggedAsync(VenvPython,
+            new[] { "-m", "pip", "install", "--upgrade", package, "stable-ts", "faster-whisper" },
+            log, ct, "audio-separator + lyric alignment install failed");
 
         log.Report("Verifying installation\u2026");
         await RunLoggedAsync(CliPath, new[] { "--version" }, log, ct, "engine verification failed");
 
+        log.Report("Verifying lyric alignment\u2026");
+        await RunLoggedAsync(VenvPython, new[] { "-c", "import stable_whisper, faster_whisper" },
+            log, ct, "lyric alignment packages failed to import");
+
         log.Report("Engine installed successfully.");
+    }
+
+    /// <summary>
+    /// Modules the shared venv has to provide: separation and lyric alignment both run
+    /// from it. Checked with find_spec, which is cheap enough to run before every
+    /// install and never imports torch just to answer a yes/no question.
+    /// </summary>
+    internal const string SharedVenvProbe =
+        "import importlib.util as u, sys; sys.exit(0 if all(u.find_spec(m) for m in " +
+        "(\"audio_separator\", \"stable_whisper\", \"faster_whisper\")) else 1)";
+
+    /// <summary>True when the existing venv already satisfies the whole union.</summary>
+    internal static async Task<bool> SharedVenvReadyAsync(bool useGpu, CancellationToken ct)
+    {
+        if (!File.Exists(VenvPython)) return false;
+        if (useGpu && !CudaReady(VenvDir)) return false;
+        var (code, _) = await RunCaptureAsync(VenvPython, new[] { "-c", SharedVenvProbe }, ct);
+        return code == 0;
     }
 
     // ---- python auto-install ----------------------------------------------

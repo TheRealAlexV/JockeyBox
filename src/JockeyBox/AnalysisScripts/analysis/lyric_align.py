@@ -80,49 +80,111 @@ def extract_vocals_demucs(audio_path: str, temp_dir: str) -> str | None:
         return None
 
 
-def align_lyrics(audio_path: str, lines_input: list[dict], model_name: str = "base") -> dict:
-    """Align lyrics using stable-ts without modifying lyric text."""
+def align_lyrics(audio_path: str, lines_input: list[dict], model_name: str = "small.en") -> dict:
+    """Align lyrics to the audio without modifying the lyric text.
+
+    stable-ts's ``align()`` is deliberately not used here. On this stack it puts the first
+    line of Sweater Weather at 3.04 s when the singer starts at 2.30 s, and that offset
+    follows unrelated knobs instead of the audio: 0.32 s with silence suppression off,
+    0.54 s under fast_mode with small.en, 3.14 s on a demucs vocal stem. Plain
+    transcription of the same audio with the same model reports 2.32 s, so the line times
+    are derived by matching the known lyric word sequence against the recognised words.
+    """
+    import difflib
+    import re
+
     import stable_whisper
+    import whisper
+
+    def norm(word: str) -> str:
+        return re.sub(r"[^a-z0-9']", "", word.lower())
 
     with tempfile.TemporaryDirectory() as temp_dir:
         # Try vocal isolation first
         effective_audio = extract_vocals_demucs(audio_path, temp_dir) or audio_path
 
+        # Decode here rather than handing the path to the model: stable-ts passes it
+        # straight to faster-whisper's decoder, which calls av.open(metadata_errors=...)
+        # and dies on PyAV 19 with "unexpected keyword argument 'metadata_errors'".
+        audio = whisper.load_audio(effective_audio)
+
         # Load faster-whisper backend via stable-ts
         # Compute type int8 for fast CPU/cross-platform execution
         model = stable_whisper.load_faster_whisper(model_name, compute_type="int8", device="cpu")
 
-        # Prepare input lines / text
-        # Ground truth lines: preserve original text and approximate timing if provided
-        plain_lines = [l.get("text", "").strip() for l in lines_input if l.get("text", "").strip()]
-        if not plain_lines:
+        # Ground truth lines: keep the caller's order and text; empty lines carry no timing
+        entries = [(i, l.get("text", "").strip()) for i, l in enumerate(lines_input)]
+        entries = [(i, text) for i, text in entries if text]
+        if not entries:
             return {"status": "error", "error": "No non-empty lyric lines provided."}
 
-        full_lyrics_text = "\n".join(plain_lines)
+        # Silence suppression is stable-ts's own default and is what moves a line start off
+        # the true onset, so it stays off here.
+        result = model.transcribe(audio, language="en", word_timestamps=True,
+                                  suppress_silence=False)
 
-        # Run stable_whisper alignment
-        result = model.align(effective_audio, full_lyrics_text, language="en", original_split=True)
+        heard = []
+        for segment in result.segments:
+            for w in (segment.words or []):
+                token = norm(w.word)
+                if token:
+                    heard.append((float(w.start), float(w.end), token))
+
+        # Flatten the lyric lines into one word sequence, remembering which line owns each word
+        lyric, owner = [], []
+        for pos, (_, text) in enumerate(entries):
+            for word in text.split():
+                token = norm(word)
+                if token:
+                    lyric.append((token, word))
+                    owner.append(pos)
+
+        starts = [None] * len(entries)
+        times = [[] for _ in entries]
+        if lyric and heard:
+            matcher = difflib.SequenceMatcher(None, [w[0] for w in lyric],
+                                              [h[2] for h in heard], autojunk=False)
+            for a, b, size in matcher.get_matching_blocks():
+                for k in range(size):
+                    pos = owner[a + k]
+                    start, end, _ = heard[b + k]
+                    if starts[pos] is None:
+                        starts[pos] = start
+                    times[pos].append((start, end, lyric[a + k][1]))
 
         aligned_lines = []
-        for segment in result.segments:
-            seg_start_ms = int(round(segment.start * 1000))
-            seg_text = segment.text.strip()
+        previous_start = -1.0
+        for pos, (orig_index, text) in enumerate(entries):
+            start = starts[pos]
+            # One matched word is not evidence of where a line begins: a stopword like
+            # "we" appears throughout the song and once anchored a line 4.7 s late. A line
+            # needs a real run of words, unless the line itself is a single word.
+            if start is not None and len(times[pos]) < 2 and len(text.split()) > 1:
+                start = None
+            # Lines are sung in order, so a mapped start behind the previous one is noise.
+            if start is not None and start < previous_start:
+                start = None
+            if start is None:
+                # A line the model never heard keeps the caller's own timestamp rather
+                # than inventing one from its neighbours.
+                fallback = lines_input[orig_index].get("time_ms")
+                if fallback is None:
+                    continue
+                start = float(fallback) / 1000.0
+
             words_list = []
-            if hasattr(segment, "words") and segment.words:
-                for w in segment.words:
-                    w_start_ms = int(round(w.start * 1000))
-                    w_end_ms = int(round(w.end * 1000))
-                    w_text = w.word.strip()
-                    if w_text:
-                        words_list.append({
-                            "start_ms": w_start_ms,
-                            "end_ms": max(w_end_ms, w_start_ms),
-                            "text": w_text
-                        })
+            for start_s, end_s, word_text in times[pos]:
+                w_start_ms = int(round(start_s * 1000))
+                w_end_ms = max(int(round(end_s * 1000)), w_start_ms)
+                words_list.append({
+                    "start_ms": w_start_ms,
+                    "end_ms": w_end_ms,
+                    "text": word_text
+                })
 
             aligned_lines.append({
-                "time_ms": seg_start_ms,
-                "text": seg_text,
+                "time_ms": int(round(start * 1000)),
+                "text": text,
                 "words": words_list
             })
 
@@ -148,7 +210,9 @@ def main():
         sys.exit(1)
 
     try:
-        with open(input_json_path, "r", encoding="utf-8") as f:
+        # utf-8-sig strips the BOM the C# writer's Encoding.UTF8 emits, and is a
+        # no-op for input without one, so this side stays robust to whoever writes it.
+        with open(input_json_path, "r", encoding="utf-8-sig") as f:
             raw_input = json.load(f)
 
         if isinstance(raw_input, list):

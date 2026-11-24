@@ -103,7 +103,11 @@ public sealed class BpmAnalysisService : IBeatGridProvider, IDisposable
         _store = store;
         _isPlaying = audioPlaying ?? (() => false);
         _configuredPython = pythonPath;
-        _scriptPath = scriptPath ?? Path.Combine(AppContext.BaseDirectory, "AnalysisScripts", "analysis", "bpm_scan.py");
+        // Under PublishSingleFile, AppContext.BaseDirectory is the %TEMP% extraction
+        // directory, but AnalysisScripts stays loose beside the real exe, so it has
+        // to be resolved from the process's own directory.
+        var exeDir = Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory;
+        _scriptPath = scriptPath ?? Path.Combine(exeDir, "AnalysisScripts", "analysis", "bpm_scan.py");
         _worker = Task.Run(WorkerLoopAsync);
     }
 
