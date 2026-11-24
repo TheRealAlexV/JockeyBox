@@ -293,7 +293,7 @@ public sealed class VirtualDeviceConfigTests
             Assert.Equal(overridePath, VirtualDeviceConfig.DefaultPath);
             Assert.Equal(tempDir, VirtualDeviceConfig.DirectoryPath);
 
-            var created = VirtualDeviceConfig.CreateIfAbsent();
+            var created = VirtualDeviceConfig.CreateIfAbsent(VirtualDeviceConfig.DefaultPath);
             Assert.True(created);
             Assert.True(File.Exists(overridePath));
             Assert.StartsWith(Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),

@@ -171,7 +171,7 @@ public sealed class VirtualDeviceWidthOwnershipTests : IDisposable
     /// though the default landed.
     /// </summary>
     [Fact]
-    public async Task A_bootstrap_that_cannot_write_is_reported()
+    public void A_bootstrap_that_cannot_write_is_reported()
     {
         // A regular file where a directory would have to be: the save cannot succeed.
         var blocker = Path.Combine(_root, "not-a-directory");
