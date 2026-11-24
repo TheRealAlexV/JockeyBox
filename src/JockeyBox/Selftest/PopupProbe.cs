@@ -26,10 +26,55 @@ namespace JockeyBox.Selftest;
 /// </summary>
 internal static class PopupProbe
 {
-    public static bool Requested(string[] args) => Harness.Flag(args, "--popup-probe") != null;
+    public static bool Requested(string[] args) =>
+        Harness.Flag(args, "--popup-probe") != null ||
+        Harness.Flag(args, "--popup-probe-delayed") != null;
 
     /// <summary>Exit code for a popup that could not be opened or closed.</summary>
     public const int FailureExitCode = 1;
+
+    /// <summary>
+    /// <c>--popup-probe-delayed &lt;ms&gt;</c>: run the same probe after <paramref name="args"/>
+    /// says so many milliseconds, so another process can be started and its effect on this
+    /// one's extraction directory observed before the popup opens. Null when the flag is
+    /// absent; throws on a value that is not a delay, which the caller reports as a failure.
+    /// </summary>
+    public static int? DelayMs(string[] args)
+    {
+        string? raw = Harness.Flag(args, "--popup-probe-delayed");
+        if (raw is null) return null;
+        if (int.TryParse(raw, out int ms) && ms >= 0) return ms;
+        throw new ArgumentException($"--popup-probe-delayed wants milliseconds, got '{raw}'");
+    }
+
+    /// <summary>
+    /// Waits <paramref name="delayMs"/> on the dispatcher (a nested frame keeps this
+    /// process's window work serviced, exactly as an idle app would), then runs the probe.
+    /// Printed first: the extraction directory, because with
+    /// <c>IncludeAllContentForSelfExtract</c> it is the base directory and it is the
+    /// directory under observation.
+    /// </summary>
+    public static int RunAfter(int delayMs)
+    {
+        Console.Out.WriteLine($"POPUP WAITING: {delayMs} ms");
+        Console.Out.WriteLine($"PROBE DIR: {AppContext.BaseDirectory}");
+        Console.Out.Flush();
+
+        var frame = new DispatcherFrame();
+        var timer = new DispatcherTimer(DispatcherPriority.Normal)
+        {
+            Interval = TimeSpan.FromMilliseconds(delayMs),
+        };
+        timer.Tick += (_, _) =>
+        {
+            timer.Stop();
+            frame.Continue = false;
+        };
+        timer.Start();
+        Dispatcher.PushFrame(frame);
+
+        return Run();
+    }
 
     public static int Run()
     {
@@ -64,8 +109,11 @@ internal static class PopupProbe
         catch (Exception ex)
         {
             // The field failure was a load failure of Accessibility, which surfaces as
-            // the exception type and the assembly identity it could not find.
-            Console.Out.WriteLine($"POPUP FAILED: {ex.GetType().FullName}: {ex.Message}");
+            // the exception type and the assembly identity it could not find. ToString,
+            // not Type + Message: a FileNotFoundException raised by the resolver carries
+            // an empty Message, so the trimmed form printed nothing after the colon and
+            // threw away the stack that names the failing path.
+            Console.Out.WriteLine($"POPUP FAILED: {ex}");
             for (Exception? inner = ex.InnerException; inner is not null; inner = inner.InnerException)
                 Console.Out.WriteLine($"  inner: {inner.GetType().FullName}: {inner.Message}");
             Console.Out.Flush();

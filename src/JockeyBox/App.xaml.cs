@@ -339,7 +339,9 @@ public partial class App : Application
             int popupExit = PopupProbe.FailureExitCode;
             try
             {
-                popupExit = PopupProbe.Run();
+                popupExit = PopupProbe.DelayMs(e.Args) is { } popupDelay
+                    ? PopupProbe.RunAfter(popupDelay)
+                    : PopupProbe.Run();
             }
             catch (Exception ex)
             {
