@@ -148,7 +148,9 @@ def main():
         sys.exit(1)
 
     try:
-        with open(input_json_path, "r", encoding="utf-8") as f:
+        # utf-8-sig strips the BOM the C# writer's Encoding.UTF8 emits, and is a
+        # no-op for input without one, so this side stays robust to whoever writes it.
+        with open(input_json_path, "r", encoding="utf-8-sig") as f:
             raw_input = json.load(f)
 
         if isinstance(raw_input, list):

@@ -56,7 +56,12 @@ public sealed class LyricAlignmentService : IDisposable
         _trackMeta = trackMeta;
         _lyricsService = lyricsService;
         _configuredPython = configuredPython;
-        _scriptPath = scriptPath ?? Path.Combine(AppContext.BaseDirectory, "AnalysisScripts", "analysis", "lyric_align.py");
+        // Under PublishSingleFile, AppContext.BaseDirectory is the extraction
+        // directory, but AnalysisScripts stays loose beside the real exe, so it has
+        // to be resolved from the process's own directory (PreviewStreamPlayer does
+        // the same for libvlc).
+        var exeDir = Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory;
+        _scriptPath = scriptPath ?? Path.Combine(exeDir, "AnalysisScripts", "analysis", "lyric_align.py");
 
         _queue = Channel.CreateBounded<LyricAlignmentRequest>(new BoundedChannelOptions(queueCapacity)
         {
