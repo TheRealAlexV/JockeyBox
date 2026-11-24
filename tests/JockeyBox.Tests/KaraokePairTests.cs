@@ -195,7 +195,7 @@ public sealed class KaraokePairTests
                 // and drops the pair on the next 33 ms tick - leaving both decks
                 // Playing with pairLoaded=False, which is the signature this test
                 // used to fail with.
-                PrimeOutput(vm);
+                TestAudio.PrimeOutput(vm);
 
                 // One karaoke load arms the link and the lock, then starts both
                 // decks. It used to call PlayDeck(A), which bypasses Target.
@@ -217,6 +217,15 @@ public sealed class KaraokePairTests
 
                 Assert.Equal(TransportTarget.Both, vm.Transport.Target);
                 Assert.True(vm.Transport.SyncActive, "the pair engages the master/slave lock");
+
+                // The fixtures have to still be on disk at the settle point. A
+                // cleaner outside any checkout deletes files under %TEMP% (and has
+                // taken a whole %TEMP% directory with them), which surfaced as a
+                // deck failing with "audio file not found" for a file this test had
+                // written milliseconds earlier. Name the path when it happens.
+                Assert.True(File.Exists(music) && File.Exists(karaoke),
+                    $"the fixtures survived the load: music={music} exists={File.Exists(music)}, " +
+                    $"karaoke={karaoke} exists={File.Exists(karaoke)}");
 
                 // The same line that lands in jockeybox.log proves it without the UI.
                 var pairText = string.Join("\n", lines.Where(line => line.Contains("karaoke pair")));
@@ -542,7 +551,7 @@ public sealed class KaraokePairTests
     private static MainViewModel NewUiVm()
     {
         var vm = UiThread.Run(() => new MainViewModel());
-        PrimeOutput(vm);
+        TestAudio.PrimeOutput(vm);
         return vm;
     }
 
@@ -565,22 +574,9 @@ public sealed class KaraokePairTests
         return until();
     }
 
-    /// <summary>
-    /// Tell both channels an output exists. A channel with no output refuses every
-    /// load, so this has to happen <em>before</em> a load is asked for, not only
-    /// while pumping after it: a failed load settles both decks as unloaded, and
-    /// the pair's release guard then drops the pair on the next UI tick.
-    /// </summary>
-    private static void PrimeOutput(MainViewModel vm) =>
-        UiThread.Run(() =>
-        {
-            vm.Transport.DeckA.SetOutputAvailable(true);
-            vm.Transport.DeckB.SetOutputAvailable(true);
-        });
-
     private static void PumpDecks(MainViewModel vm)
     {
-        PrimeOutput(vm);
+        TestAudio.PrimeOutput(vm);
         vm.Transport.Engine.DeckA.Commands.Drain();
         vm.Transport.Engine.DeckB.Commands.Drain();
     }

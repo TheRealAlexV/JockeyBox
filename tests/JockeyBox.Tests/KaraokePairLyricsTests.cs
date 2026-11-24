@@ -33,6 +33,13 @@ public sealed class KaraokePairLyricsTests
         var vm = UiThread.Run(() => new MainViewModel());
         try
         {
+            // Before the load, not after it: a pair load issued while both channels
+            // report no output fails, and the pair release guard then drops the pair
+            // on the next UI tick. This test used to prime only inside WaitFor, 5 ms
+            // after LoadKaraokePair, so it ran against a pair that had already been
+            // released and passed anyway because nothing it asserted was undone by
+            // the release. PairLoaded below is what makes that observable.
+            TestAudio.PrimeOutput(vm);
             UseFakeLyrics(vm, cache);
             var pair = Track("pair/song", music, karaoke);
 
@@ -42,6 +49,10 @@ public sealed class KaraokePairLyricsTests
             Assert.Equal(pair.RelativeKey, Private<string>(vm, "CurrentLyricsKey"));
             Assert.True(WaitFor(vm, () => vm.LyricLines.Count > 0),
                         "the pair load must fetch its own lyrics, not keep the previous track's");
+            Assert.True(vm.IsKaraokePairLoaded,
+                        "the pair must survive its own load: " +
+                        $"A={vm.Transport.DeckA.State} ({vm.Transport.DeckA.Error}), " +
+                        $"B={vm.Transport.DeckB.State} ({vm.Transport.DeckB.Error})");
         }
         finally
         {

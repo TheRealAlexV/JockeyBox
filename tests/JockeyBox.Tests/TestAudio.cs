@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Threading;
 using JockeyBox.Audio.Endpoints;
@@ -14,6 +15,67 @@ namespace JockeyBox.Tests;
 /// </summary>
 internal static class TestAudio
 {
+    /// <summary>
+    /// The directory every fixture WAV in this run is written to.
+    ///
+    /// <para><b>Not %TEMP%.</b> Fixtures used to be created straight in %TEMP%
+    /// under a <c>jb-</c> name, and something outside this process deletes files
+    /// <i>and directories</i> there: a fixture could disappear between the write
+    /// and the deck opening it, so a test failed with "audio file not found" for
+    /// a file it had just written, and a whole class failed at 1 ms each once a
+    /// <c>%TEMP%</c> subdirectory was removed under it. <c>%LOCALAPPDATA%</c> is
+    /// ordinary cleaners' blind spot, which is what makes it usable here.</para>
+    ///
+    /// <para><b>Why per process.</b> Four lanes run suites on this host at the
+    /// same time; a shared directory would let one run's cleanup delete another
+    /// run's fixtures, which is the same failure with a different culprit.</para>
+    /// </summary>
+    private static readonly string FixtureDir = CreateFixtureDir();
+
+    private static string CreateFixtureDir()
+    {
+        string dir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "JockeyBox-test",
+            Environment.ProcessId.ToString(CultureInfo.InvariantCulture));
+        Directory.CreateDirectory(dir);
+
+        // Throwaway fixtures are megabytes each; the exit hook keeps a few
+        // thousand of them from piling up in a directory nothing sweeps.
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => TryDeleteDirectory(dir);
+        return dir;
+    }
+
+    private static void TryDeleteDirectory(string dir)
+    {
+        try { if (Directory.Exists(dir)) Directory.Delete(dir, recursive: true); } catch { /* best effort */ }
+    }
+
+    private static string NewFixturePath()
+    {
+        // Recreated on demand on purpose. A cleaner outside this process has
+        // removed this directory in the middle of a suite run, which turned 23
+        // unrelated tests into 1 ms failures on a file they had just asked for.
+        // One syscall here makes that a non-event; it is not a retry of anything
+        // that failed, and the pair tests still assert their own fixtures are on
+        // disk at the settle point, so a deletion during a test stays visible.
+        Directory.CreateDirectory(FixtureDir);
+        return Path.Combine(FixtureDir, $"jb-{Guid.NewGuid():N}.wav");
+    }
+
+    /// <summary>
+    /// Announce the fake output on both decks. A load issued before this arrives
+    /// has no route to play on, so the channel fails it, and the pair guard in
+    /// <c>OnUiTick</c> then reads "stopped with nothing loaded" and drops the
+    /// pair. Any test that loads a deck therefore calls this first.
+    /// </summary>
+    public static void PrimeOutput(JockeyBox.ViewModels.MainViewModel vm) =>
+        UiThread.Run(() =>
+        {
+            vm.Transport.DeckA.SetOutputAvailable(true);
+            vm.Transport.DeckB.SetOutputAvailable(true);
+        });
+
     /// <summary>An <see cref="IMicSource"/> that produces a constant sample forever.</summary>
     internal sealed class ConstantMic : IMicSource
     {
@@ -35,7 +97,7 @@ internal static class TestAudio
     /// <summary>Write a stereo float WAV holding a constant sample value.</summary>
     public static string WriteConstantWav(float value, double seconds = 2.0, int rate = 48_000)
     {
-        string path = Path.Combine(Path.GetTempPath(), $"jb-{Guid.NewGuid():N}.wav");
+        string path = NewFixturePath();
         var format = WaveFormat.CreateIeeeFloatWaveFormat(rate, 2);
         int frames = (int)(seconds * rate);
         var data = new float[frames * 2];
@@ -50,7 +112,7 @@ internal static class TestAudio
     /// <summary>Write a stereo float WAV holding a ramp so alignment is visible sample by sample.</summary>
     public static string WriteRampWav(double seconds = 3.0, double frequency = 3.0, int rate = 48_000)
     {
-        string path = Path.Combine(Path.GetTempPath(), $"jb-{Guid.NewGuid():N}.wav");
+        string path = NewFixturePath();
         var format = WaveFormat.CreateIeeeFloatWaveFormat(rate, 2);
         int frames = (int)(seconds * rate);
         var data = new float[frames * 2];
