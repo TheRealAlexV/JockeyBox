@@ -368,6 +368,87 @@ fi
 
 for rel in "${copied_list[@]}"; do total_bytes=$((total_bytes + $(stat -c %s "$SRC/$rel"))); done
 
+# ---------------------------------------------------------------------------
+# Pin the single-file payload root, so %TEMP% cannot take the app's assemblies.
+#
+# JockeyBox.exe is a self-contained single-file bundle. Before any managed code
+# runs, the host unpacks its ~250 files into %TEMP%\.net\JockeyBox\<bundle id>\
+# - WPF's mixed-mode DirectWriteForwarder.dll among them - and WPF resolves more
+# of them lazily, hours into a session. Anything that cleans %TEMP% while the app
+# is up therefore pulls assemblies out from under it: the next popup dies with an
+# empty-message FileNotFoundException for UIAutomationTypes, and the process then
+# dies at exit with DllNotFoundException inside the mixed-mode CRT uninitializer
+# (_app_exit_callback -> __scrt_uninitialize_type_info), which is not catchable.
+#
+# DOTNET_BUNDLE_EXTRACT_BASE_DIR moves that root. The host reads it before it
+# extracts, so managed code cannot set it for its own process - it has to exist in
+# the environment of whatever launches the exe. This app is installed by copying
+# files and launched by double-clicking JockeyBox.exe: there is no installer step
+# and no shortcut to carry the setting, so this script is the only place that can
+# establish it. User scope, not machine scope: one user's app should not rewrite
+# another user's extraction layout.
+#
+# Scope caveat, deliberate: the variable is machine-wide *for this user*, so other
+# single-file .NET apps extract under this root too - still per app and per bundle
+# (<root>\<app>\<bundle id>\), just not under %TEMP%.
+EXTRACT_ROOT_VAR='DOTNET_BUNDLE_EXTRACT_BASE_DIR'
+
+ensure_extract_root() {
+  local want have
+  if ! command -v powershell.exe >/dev/null 2>&1; then
+    echo "    root    cannot pin: powershell.exe not in PATH" >&2
+    return 1
+  fi
+
+  want="$(timeout 60 powershell.exe -NoProfile -NonInteractive -Command \
+    '$p = Join-Path ([Environment]::GetFolderPath("LocalApplicationData")) "JockeyBox\runtime"; $p' \
+    2>/dev/null | tr -d '\r\n')"
+  if [ -z "$want" ]; then
+    echo "    root    cannot compute %LOCALAPPDATA% (powershell.exe returned nothing)" >&2
+    return 1
+  fi
+
+  have="$(timeout 60 powershell.exe -NoProfile -NonInteractive -Command \
+    '[Environment]::GetEnvironmentVariable("DOTNET_BUNDLE_EXTRACT_BASE_DIR","User")' \
+    2>/dev/null | tr -d '\r\n')"
+
+  if [ "$have" = "$want" ]; then
+    echo "    root    $EXTRACT_ROOT_VAR = $want (user scope, already set)"
+    return 0
+  fi
+
+  if [ "$DRY" -eq 1 ]; then
+    echo "    root    would set $EXTRACT_ROOT_VAR -> $want (was '${have:-unset}')"
+    return 0
+  fi
+
+  timeout 60 powershell.exe -NoProfile -NonInteractive -Command \
+    "[Environment]::SetEnvironmentVariable('DOTNET_BUNDLE_EXTRACT_BASE_DIR','$want','User')" \
+    >/dev/null 2>&1 || true
+
+  # Read it back: a silent failure here leaves the app exposed, and the next
+  # session would look exactly like the two that vanished.
+  have="$(timeout 60 powershell.exe -NoProfile -NonInteractive -Command \
+    '[Environment]::GetEnvironmentVariable("DOTNET_BUNDLE_EXTRACT_BASE_DIR","User")' \
+    2>/dev/null | tr -d '\r\n')"
+  if [ "$have" != "$want" ]; then
+    echo "    root    FAILED to set (read back '${have:-unset}')" >&2
+    return 1
+  fi
+  echo "    root    $EXTRACT_ROOT_VAR -> $want (set for user ${USER:-$(id -un)})"
+  echo "    root    takes effect for processes started from now on; a window opened"
+  echo "    root    before it was set keeps the old value until it is reopened."
+  return 0
+}
+
+echo "==> extraction root"
+if ! ensure_extract_root; then
+  echo "FAILED: the single-file payload root is not pinned to a persistent directory." >&2
+  echo "        Copying the exe is not enough: it would unpack into %TEMP%\\.net\\JockeyBox\\" >&2
+  echo "        where a temp cleaner can delete the files WPF loads later, mid-session." >&2
+  exit 1
+fi
+
 echo "==> $( [ "$DRY" -eq 1 ] && echo "plan (nothing written)" || echo "summary" )"
 printf '    payload   %s file(s) == %s manifest line(s)\n' "$PAYLOAD_COUNT" "$MANIFEST_COUNT"
 printf '    copied    %s file(s), %s bytes\n' "$copied" "$total_bytes"

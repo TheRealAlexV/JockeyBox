@@ -117,7 +117,25 @@ public static class Log
     public static void Fatal(string stage, Exception exception)
     {
         Write("FATAL", $"unhandled exception during {stage}: {exception.GetType().FullName}: {exception.Message}");
+
+        // The type-and-message line above is not enough on its own: the two
+        // failures that cost the most were a DllNotFoundException whose Message
+        // was only "Dll was not found." and a FileNotFoundException whose Message
+        // was empty with the assembly name in FileName. The stack, the target
+        // site and FileName are the only identifying data there, so write them.
+        Write("FATAL", $"detail: pid={Environment.ProcessId} " +
+                       $"tid={Environment.CurrentManagedThreadId} target='{TargetOf(exception)}'" +
+                       (exception is FileNotFoundException fnf ? $" file='{fnf.FileName}'" : ""));
+        foreach (string line in exception.ToString().Replace("\r\n", "\n").Split('\n'))
+            Write("FATAL", "  " + line);
         Flush();
+    }
+
+    /// <summary>Where the exception was raised: the API, which names the need.</summary>
+    private static string TargetOf(Exception exception)
+    {
+        try { return $"{exception.TargetSite?.DeclaringType?.FullName}.{exception.TargetSite?.Name}"; }
+        catch { return "<unavailable>"; }
     }
 
     public static void Info(string message) => Write("INFO ", message);

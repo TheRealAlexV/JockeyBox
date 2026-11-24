@@ -511,6 +511,10 @@ public partial class App : Application
     /// </summary>
     private static void OnDomainUnhandledException(object sender, UnhandledExceptionEventArgs e)
     {
+        // ---- exit-crash instrumentation (remove with the fix) ----------------
+        Tools.Log.Warn($"domain-unhandled: stage='{_startupStage}' terminating={e.IsTerminating} " +
+                       $"shutdownStarted={Environment.HasShutdownStarted}");
+        // ---- end exit-crash instrumentation ----------------------------------
         if (e.ExceptionObject is Exception ex) Tools.Log.Fatal(_startupStage, ex);
         else Tools.Log.Warn($"unhandled exception object during {_startupStage}: {e.ExceptionObject}");
 
