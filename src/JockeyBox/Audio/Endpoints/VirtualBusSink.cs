@@ -124,6 +124,9 @@ public sealed class VirtualBusSink : IAudioSink
 
     public string DeviceName => $"virtual ASIO '{SectionName}'";
 
+    /// <summary>Interleaved channels this sink was opened for (the device geometry).</summary>
+    public int Channels => _channels;
+
     /// <summary>True once a Write failed; the engine then drops this sink like a dead device.</summary>
     public bool HasFailed => Volatile.Read(ref _quiet) != 0;
 

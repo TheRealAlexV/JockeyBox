@@ -362,6 +362,53 @@ public sealed class TransportTests
 
         Assert.Throws<VirtualBusException>(() => VirtualBusReader.Open(name, slot: 3, maxLagBlocks: 0));
     }
+
+    [Fact]
+    public void Eight_Channel_Device_Carries_Every_Channel_Bit_Exact()
+    {
+        // Three Stereo Lines plus two Mono Lines = 8 channels. Each channel carries a
+        // different ramp, so a swap between two channels cannot pass as a copy.
+        const int BlockFrames = 128;
+        const int Channels = 8;
+        const int Blocks = 64;
+        string name = NewBus("eight-channel");
+
+        using var writer = VirtualBusWriter.Open(name, 48000, Channels, BlockFrames, capacityBlocks: 8);
+        using var reader = VirtualBusReader.Open(name);
+
+        Assert.Equal(Channels, writer.Channels);
+        Assert.Equal(Channels, reader.Channels);
+
+        var tx = new float[BlockFrames * Channels];
+        var rx = new float[BlockFrames * Channels];
+
+        for (long block = 1; block <= Blocks; block++)
+        {
+            for (int i = 0; i < tx.Length; i++)
+            {
+                int channel = i % Channels;
+                tx[i] = (((block * 17) + (i * 3) + channel * 1024) % 8192) / 256f - 16f;
+            }
+
+            writer.Write(tx);
+            Assert.Equal(VirtualBusStatus.Data, reader.Read(rx));
+            Assert.True(TestSignal.BitEqual(tx, rx), $"block {block}: {TestSignal.FirstDifference(tx, rx)}");
+        }
+
+        Assert.Equal(0, reader.Underruns);
+        Assert.Equal(0, reader.Corrections);
+        Assert.Equal(0, writer.Overruns);
+        Assert.Equal(0, reader.LagBlocks);
+    }
+
+    [Fact]
+    public void Writer_Refuses_More_Channels_Than_The_Device_Maximum()
+    {
+        string name = NewBus("too-wide");
+
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => VirtualBusWriter.Open(name, 48000, BusLayout.MaxChannels + 1, 128, capacityBlocks: 8));
+    }
 }
 
 internal static class RawRegion

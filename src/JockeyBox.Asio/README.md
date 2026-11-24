@@ -144,6 +144,21 @@ out\AsioHostHarness.exe            # registers HKCU, runs 1 s, unregisters
 out\AsioHostHarness.exe <dll> --keep
 ```
 
+The line-model geometry (three Stereo Lines plus two Mono Lines = 8 channels) is
+verified against the same fixture the app's writer test pins byte for byte:
+
+```
+out\AsioHostHarness.exe --config-test ..\..\JockeyBox\Audio\Virtual\virtual-device.golden.json
+```
+
+It asserts the parsed model, `getChannels` = 8, 64 blocks bit-exact with a
+distinct tone per channel, zero trims/underruns/corrections, latency within one
+block of the measured value, that a 2-channel bus under an 8-channel device is
+served as silence with the mismatch named, and that a config edit is applied by
+a fresh host instance. `JOCKEYBOX_DEVICE_CONFIG` overrides the config path (the
+harness sets it so the machine's real `%ProgramData%` file cannot change the
+other passes).
+
 The harness registers the CLSID under `HKCU\Software\Classes\CLSID\{...}` (in-proc
 COM honours HKCU, so no elevation), calls `CoCreateInstance`, then runs two
 passes: one that reaches slots by their documented numbers through raw vtable

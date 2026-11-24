@@ -173,6 +173,8 @@ public sealed unsafe class VirtualBusWriter : IDisposable
         }
         if (sampleRate <= 0) throw new ArgumentOutOfRangeException(nameof(sampleRate), sampleRate, "Sample rate must be positive.");
         if (channels <= 0) throw new ArgumentOutOfRangeException(nameof(channels), channels, "Channel count must be positive.");
+        if (channels > BusLayout.MaxChannels)
+            throw new ArgumentOutOfRangeException(nameof(channels), channels, $"Channel count must not exceed {BusLayout.MaxChannels}.");
         if (blockFrames <= 0) throw new ArgumentOutOfRangeException(nameof(blockFrames), blockFrames, "Block size must be positive.");
         if (capacityBlocks < 2) throw new ArgumentOutOfRangeException(nameof(capacityBlocks), capacityBlocks, "Capacity must hold at least two blocks.");
         if ((long)blockFrames * channels > int.MaxValue / sizeof(float))

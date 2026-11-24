@@ -148,7 +148,20 @@ public sealed class SliderTickBar : FrameworkElement
         DependencyPropertyHelper.GetValueSource(slider, Slider.TickFrequencyProperty).BaseValueSource
         is not (BaseValueSource.Default or BaseValueSource.Inherited);
 
+    /// <summary>
+    /// Recomputes the ladder, then repaints. The repaint is the point: the values are
+    /// only known once the template has loaded and the slider's range is settled, which
+    /// is after the first render pass, and nothing else dirties this element afterwards
+    /// - so without it the marks exist but stay unpainted until a mouse move over the
+    /// bar forces a redraw.
+    /// </summary>
     private void Rebuild()
+    {
+        BuildMarks();
+        InvalidateVisual();
+    }
+
+    private void BuildMarks()
     {
         _values = Array.Empty<double>();
         _center = -1;

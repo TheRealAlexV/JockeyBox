@@ -784,6 +784,10 @@ public sealed class DualDeckTransport : IDisposable
         return new AudioRoute(deckA, deckB, recording, soundboard, monitor)
         {
             VirtualBuses = VirtualBusesFromSettings(settings),
+            // The ordered lines are the device's geometry when they exist. The
+            // VirtualAsio* flags above still decide the legacy stereo pair, so an
+            // install that never configured lines behaves exactly as before.
+            VirtualLines = settings.VirtualDeviceLines ?? new List<JockeyBox.Audio.Virtual.VirtualLine>(),
             VirtualBusName = string.IsNullOrWhiteSpace(settings.VirtualAsioBusName)
                 ? "main"
                 : settings.VirtualAsioBusName.Trim(),
