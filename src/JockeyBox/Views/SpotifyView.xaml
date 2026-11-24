@@ -667,11 +667,20 @@
                              The status line it gave up still reaches the user through the
                              button's tooltip; it needs 26 px of card to have a row again. -->
                         <Border Grid.Row="1" Background="{StaticResource PanelAltBrush}"
+                                Width="{Binding ActualWidth, ElementName=TrackCard}"
+                                HorizontalAlignment="Left"
                                 Visibility="{Binding IsLoggedIn, Converter={StaticResource InverseBoolToVisibility}}">
-                            <StackPanel MaxWidth="330" HorizontalAlignment="Center">
+                            <!-- Stretch, not Center: a centred StackPanel sizes itself to
+                                 its children's desired width, and a TextBlock's desired
+                                 width for wrapped text is the whole string on one line, so
+                                 the pair stayed one long line and the card clipped it at
+                                 "…are skip". Stretch hands the panel the card's width, and
+                                 the TextAlignment on the children still centres the text. -->
+                            <StackPanel MaxWidth="330" Margin="10,0">
                                 <StackPanel.Style>
                                     <Style TargetType="StackPanel">
                                         <Setter Property="VerticalAlignment" Value="Center"/>
+                                        <Setter Property="HorizontalAlignment" Value="Stretch"/>
                                         <Style.Triggers>
                                             <!-- Short card: bottom-anchor the invitation, folded or
                                                  strip-open. Folded used to centre (11.1 px slack) while

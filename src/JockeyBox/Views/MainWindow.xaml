@@ -2978,6 +2978,9 @@
                             <TextBlock DockPanel.Dock="Left" Text="{Binding MicStripCountText}"
                                        FontSize="9" Foreground="{StaticResource TextDimBrush}"
                                        Margin="8,0,0,0" VerticalAlignment="Center"/>
+                            <TextBlock DockPanel.Dock="Right" Text="MIXER" Style="{StaticResource RackCaption}"
+                                       Margin="8,0,6,0" VerticalAlignment="Center"
+                                       ToolTip="The switch at the end of this row is the mixer's master gate"/>
                             <!-- Fill child: yields to the label and trims. -->
                             <TextBlock FontSize="9" Margin="8,0,0,0" VerticalAlignment="Center"
                                        Foreground="{StaticResource AccentABrush}"
@@ -3002,12 +3005,10 @@
                                        FontFamily="Consolas" FontSize="10" Width="40"
                                        TextAlignment="Right" Margin="3,0,0,0"/>
                         </StackPanel>
-                        <!-- MIXER sits in the meter column, which the header has no
-                             meter to fill; the gate sits in the BYP column, so the two
-                             grids are the same width and PAD lands over PAD. -->
-                        <TextBlock Grid.Column="1" Text="MIXER" Style="{StaticResource RackCaption}"
-                                   HorizontalAlignment="Right" VerticalAlignment="Center"
-                                   Margin="0,0,6,0"/>
+                        <!-- MIXER caption lives in the name column, not the meter column:
+                             the header had five tokens against five row cells, shifted by
+                             one, so MIXER sat over an input meter and BYP had nothing above
+                             it. The gate is the header of the BYP column. -->
                         <ToggleButton Grid.Column="4" Style="{StaticResource RackGate}"
                                       IsChecked="{Binding IsMixerOn, Mode=TwoWay}"
                                       HorizontalAlignment="Right"
