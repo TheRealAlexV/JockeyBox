@@ -85,7 +85,10 @@
              card is ever laid out; at 1040 a share is ~37 px. -->
         <Style x:Key="CuePad" TargetType="Button"
                BasedOn="{StaticResource {x:Type Button}}">
-            <Setter Property="Height" Value="44"/>
+            <!-- 15 px: a third of the 44 px pad this used to be, on the operator's
+                 call that the bank was eating the deck card's height. One line of
+                 text instead of two stacked ones, so a 15 px pad still reads. -->
+            <Setter Property="Height" Value="15"/>
             <Setter Property="MinWidth" Value="30"/>
             <Setter Property="HorizontalAlignment" Value="Stretch"/>
             <Setter Property="Padding" Value="0"/>
@@ -100,15 +103,18 @@
                                        Stroke="{StaticResource BorderBrush}"
                                        StrokeThickness="1" StrokeDashArray="2 2"
                                        Fill="{TemplateBinding Background}"/>
-                            <StackPanel VerticalAlignment="Center"
+                            <StackPanel Orientation="Horizontal"
+                                        VerticalAlignment="Center"
                                         HorizontalAlignment="Center">
                                 <TextBlock x:Name="slotText" Text="{Binding SlotText}"
-                                           FontSize="10" FontWeight="Bold"
+                                           FontSize="9" FontWeight="Bold"
+                                           VerticalAlignment="Center"
                                            HorizontalAlignment="Center"
                                            Foreground="{TemplateBinding Foreground}"/>
                                 <TextBlock x:Name="posText" Text="{Binding PositionText}"
-                                           FontFamily="Consolas" FontSize="9"
-                                           Margin="0,1,0,0"
+                                           FontFamily="Consolas" FontSize="8"
+                                           Margin="4,0,0,0"
+                                           VerticalAlignment="Center"
                                            HorizontalAlignment="Center"
                                            Foreground="{TemplateBinding Foreground}"/>
                             </StackPanel>
@@ -611,7 +617,7 @@
                              bank it landed on the seam between the two rows (y272-305
                              against a boundary at y290), so CLEAR read as belonging to
                              row 2. 44 px matches a pad, so it sits on row 1 exactly. -->
-                        <Grid Grid.Column="0" Height="44" VerticalAlignment="Top" Margin="0,4,0,0">
+                        <Grid Grid.Column="0" Height="15" VerticalAlignment="Top" Margin="0,4,0,0">
                             <TextBlock Text="CUES" FontSize="9" FontWeight="Bold"
                                        Foreground="{StaticResource TextDimBrush}"
                                        VerticalAlignment="Center"/>
@@ -624,7 +630,7 @@
                                      arms it, the label becomes DONE, and the border
                                      and weight change with it, so the armed state
                                      never rests on colour alone. -->
-                                <Button DockPanel.Dock="Right" MinWidth="44" Height="44"
+                                <Button DockPanel.Dock="Right" MinWidth="44" Height="15"
                                         Margin="4,0,0,0" FontSize="9" FontWeight="Bold"
                                         VerticalAlignment="Top"
                                         Command="{Binding Cues.ToggleClearModeCommand}"
@@ -695,6 +701,39 @@
                                 <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
                                 <Setter TargetName="underline" Property="Background"
                                         Value="{StaticResource AccentABrush}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- ======== Vertical splitter: browser | mixer dock, same bottom band ========
+             8px hit area, one hairline, a short grip turned upright so the vertical
+             bar does not read as a stray horizontal rule. -->
+        <Style x:Key="ColumnSplitter" TargetType="GridSplitter">
+            <Setter Property="Width" Value="8"/>
+            <Setter Property="VerticalAlignment" Value="Stretch"/>
+            <Setter Property="HorizontalAlignment" Value="Center"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="Cursor" Value="SizeWE"/>
+            <Setter Property="ResizeDirection" Value="Columns"/>
+            <Setter Property="ResizeBehavior" Value="PreviousAndNext"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="GridSplitter">
+                        <Grid Background="Transparent">
+                            <Border Width="1" HorizontalAlignment="Center"
+                                    Background="{StaticResource BorderBrush}"/>
+                            <Border x:Name="grip" Width="2" Height="34" CornerRadius="1"
+                                    HorizontalAlignment="Center" VerticalAlignment="Center"
+                                    Background="#3A4150"/>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="grip" Property="Background"
+                                        Value="{StaticResource TextDimBrush}"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -2045,13 +2084,23 @@
                  Rows are the two things that never leave the surface (decks and their
                  transport, folders), then the document switcher, then the dock. -->
             <Grid Grid.Column="2" x:Name="CentreHost" Margin="6,0,6,0">
+                <!-- The bottom band is ONE row shared by the documents panel and the
+                     mixer dock, side by side. Stacked, the dock's 190 px came out of the
+                     same band the documents had and left them a 151 px strip at 1400x900:
+                     short enough that neither the queue nor a browser pane could show a
+                     readable number of rows. Two columns in one band gives each panel the
+                     band's full height, and the splitter lets the operator trade width. -->
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>                 <!-- decks, transport, crossfader -->
                     <RowDefinition x:Name="WaveformRow" Height="*" MinHeight="84"/>     <!-- waveforms -->
                     <RowDefinition Height="6"/>                                        <!-- splitter -->
-                    <RowDefinition x:Name="DocumentsRow" Height="3*" MinHeight="132"/>  <!-- documents -->
-                    <RowDefinition Height="Auto"/>                 <!-- mixer dock -->
+                    <RowDefinition x:Name="DocumentsRow" Height="*" MinHeight="132"/>   <!-- documents | dock -->
                 </Grid.RowDefinitions>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>                  <!-- documents -->
+                    <ColumnDefinition Width="8"/>                  <!-- splitter -->
+                    <ColumnDefinition x:Name="DockColumn" Width="420"/>  <!-- mixer dock -->
+                </Grid.ColumnDefinitions>
 
         <!-- ================= Deck block: decks / waveforms / crossfader / transport =================
              The deck cards hold controls only: the two waveforms live in one shared
@@ -2059,7 +2108,7 @@
              the full width of the window and the two decks line up beat for beat.
              Every row here is Auto: the cards keep their natural height and the
              splitter below balances the whole block against the browser. -->
-        <Grid Grid.Row="0">
+        <Grid Grid.Row="0" Grid.ColumnSpan="3">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>   <!-- deck cards -->
                 <RowDefinition Height="Auto"/>   <!-- transport -->
@@ -2503,7 +2552,7 @@
              hold - same Tag ("primary"/"karaoke"), same Loaded/SizeChanged handlers -
              so MainWindow.xaml.cs draws them exactly as before; only their parent
              and therefore their width changed. -->
-        <Border Grid.Row="1" Style="{StaticResource Card}" Padding="8,4" Margin="0,6,0,0">
+        <Border Grid.Row="1" Grid.ColumnSpan="3" Style="{StaticResource Card}" Padding="8,4" Margin="0,6,0,0">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="*"/>   <!-- deck A -->
@@ -2625,7 +2674,7 @@
         <!-- Splitter: balances the deck block against the browser -->
         <!-- Height matches the 6 px row it lives in; the style's 8 would overflow
              the row by a pixel at each end and sit on the card edges. -->
-        <GridSplitter Grid.Row="2" Height="6" Style="{StaticResource RowSplitter}"/>
+        <GridSplitter Grid.Row="2" Grid.ColumnSpan="3" Height="6" Style="{StaticResource RowSplitter}"/>
 
         <!-- ================= Browser + Lyrics ================= -->
         <!-- The browser row needs a definite height, and 480 is only the seed for the
@@ -2640,7 +2689,7 @@
              are not documents any more: they left for the left pane, so a document gets
              the whole centre column instead of a 3:2 split. Lyrics is a document for the
              same reason Spotify is - it is a view, and it is read, not configured. -->
-        <Grid Grid.Row="3" x:Name="BrowserHost" MinHeight="150" Height="480">
+        <Grid Grid.Row="3" Grid.Column="0" x:Name="BrowserHost" MinHeight="150" Height="480">
             <Border Style="{StaticResource Card}" Padding="8">
                 <TabControl x:Name="BrowserTabs" Style="{StaticResource BrowserTabControl}">
                 <TabItem Header="SPOTIFY">
@@ -2672,11 +2721,17 @@
              console. The header row is 30 px and always says what is behind it; the
              body is mixer height and folds to nothing on the chevron, so the deck
              surface gets every pixel back during a set. -->
-        <Border Grid.Row="4" x:Name="MixerDock" Style="{StaticResource Card}" Padding="0" Margin="0,6,0,0">
+        <!-- Splitter: the browser and the dock share one band, so this trades width
+             between them instead of height. Hidden with the dock when it folds away. -->
+        <GridSplitter Grid.Row="3" Grid.Column="1" x:Name="DockSplitter"
+                      Style="{StaticResource ColumnSplitter}"
+                      ToolTip="Drag to trade width between the browser and the mixer dock"/>
+
+        <Border Grid.Row="3" Grid.Column="2" x:Name="MixerDock" Style="{StaticResource Card}" Padding="0" Margin="0">
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
                 <DockPanel Grid.Row="0" Margin="8,3,8,3" LastChildFill="False">
                     <ToggleButton x:Name="DockCollapseToggle" DockPanel.Dock="Left"
@@ -2725,7 +2780,7 @@
                                TextTrimming="CharacterEllipsis"
                                ToolTip="{Binding StatusText}"/>
                 </DockPanel>
-                <ScrollViewer Grid.Row="1" x:Name="DockBody" Height="160" Focusable="False"
+                <ScrollViewer Grid.Row="1" x:Name="DockBody" Focusable="False"
                               VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
                 <Grid>
                         <Grid x:Name="DockPageMixer">

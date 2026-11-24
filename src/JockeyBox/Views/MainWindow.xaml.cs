@@ -201,23 +201,24 @@ public partial class MainWindow : Window
     private void OnShellLayoutChanged(object? sender, EventArgs e)
     {
         // Two levels now matter: the shell's rows (header, body) and the centre
-        // column's rows (decks, waveforms, splitter, documents, dock). The elastic
-        // pair is still the waveform and the documents row; everything else is a
-        // height the documents cannot have, so the band is the viewport minus them.
+        // column's rows (decks, waveforms, splitter, documents). The elastic pair is
+        // the waveform and the documents row; everything else is a height the
+        // documents cannot have, so the band is the viewport minus them. The mixer
+        // dock is not in this sum any more: it shares the documents row as a column,
+        // so it costs the band width, not height.
         var shellRows = ShellGrid.RowDefinitions;
         var centreRows = CentreHost.RowDefinitions;
-        if (shellRows.Count < 2 || centreRows.Count < 5) return;
+        if (shellRows.Count < 2 || centreRows.Count < 4) return;
 
         double fixedHeight = shellRows[0].ActualHeight
                              + centreRows[0].ActualHeight
-                             + centreRows[2].ActualHeight
-                             + centreRows[4].ActualHeight;
+                             + centreRows[2].ActualHeight;
         double band = ShellScroll.ViewportHeight - fixedHeight - 2;
         if (band <= 0) return;
 
         // Both elastic rows are sized, not just the documents: the shell's root
         // ScrollViewer measures its content at infinite height, so a star row never
-        // shrinks to the window and the dock below it fell off the bottom at 900.
+        // shrinks to the window and the dock beside it fell off the bottom at 900.
         // Their sum is the band, with the two floors honoured, so at any height that
         // can hold the floors the dock is on screen and nothing is cut off. Below
         // that the shell scrolls, which is what the root ScrollViewer is for.
@@ -930,7 +931,15 @@ public partial class MainWindow : Window
         DockCollapseToggle.IsChecked = open;
         DockToggle.IsChecked = open;
         DockBody.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
+        // The dock is a column beside the documents now, not a row under them: folded
+        // away it must give its width back, or the closed state would leave a blank
+        // strip where the dock used to be.
+        DockColumn.Width = open ? new GridLength(DockWidth, GridUnitType.Pixel) : new GridLength(0);
+        DockSplitter.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
     }
+
+    /// <summary>Width the mixer dock opens at, before the splitter moves it.</summary>
+    private const double DockWidth = 420;
 
     private void OnFlyoutRoutingClick(object sender, RoutedEventArgs e) => ShowFlyout(RailRoutingToggle, "ROUTING", FlyoutRoutingPanel);
 

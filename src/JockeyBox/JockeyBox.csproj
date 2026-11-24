@@ -80,4 +80,10 @@
     <ProjectReference Include="..\JockeyBox.Ipc\JockeyBox.Ipc.csproj" />
   </ItemGroup>
 
+  <!-- Ensure Accessibility.dll is copied to publish/output for WPF ToolTip/Popup MSAA bridge -->
+  <Target Name="CopyAccessibilityDll" AfterTargets="ResolveReferences">
+    <ItemGroup>
+      <ReferenceCopyLocalPaths Include="@(ReferencePath)" Condition="'%(FileName)' == 'Accessibility'" />
+    </ItemGroup>
+  </Target>
 </Project>
