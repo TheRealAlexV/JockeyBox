@@ -19,7 +19,7 @@
         xmlns:lib="clr-namespace:JockeyBox.Library"
         xmlns:views="clr-namespace:JockeyBox.Views"
         xmlns:activity="clr-namespace:JockeyBox.Activity"
-        Title="JockeyBox" Height="900" Width="1400" MinHeight="880" MinWidth="1140"
+        Title="JockeyBox" Height="900" Width="1400" MinHeight="880" MinWidth="1040"
         Background="{StaticResource WindowBrush}"
         WindowStartupLocation="CenterScreen">
 
@@ -1311,7 +1311,9 @@
                         <Setter Property="Padding" Value="0"/>
                         <Setter Property="FontSize" Value="9"/>
                     </Style>
-                    <Style x:Key="RailCommand" TargetType="Button">
+                    <Style x:Key="RailCommand" TargetType="Button"
+                           BasedOn="{StaticResource {x:Type Button}}">
+                        <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
                         <Setter Property="Width" Value="44"/>
                         <Setter Property="Height" Value="36"/>
                         <Setter Property="Margin" Value="0,0,0,4"/>
@@ -2045,9 +2047,9 @@
             <Grid Grid.Column="2" x:Name="CentreHost" Margin="6,0,6,0">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>                 <!-- decks, transport, crossfader -->
-                    <RowDefinition Height="*" MinHeight="108"/>    <!-- waveforms -->
-                    <RowDefinition Height="6"/>                    <!-- splitter -->
-                    <RowDefinition Height="3*" MinHeight="150"/>   <!-- documents -->
+                    <RowDefinition x:Name="WaveformRow" Height="*" MinHeight="84"/>     <!-- waveforms -->
+                    <RowDefinition Height="6"/>                                        <!-- splitter -->
+                    <RowDefinition x:Name="DocumentsRow" Height="3*" MinHeight="132"/>  <!-- documents -->
                     <RowDefinition Height="Auto"/>                 <!-- mixer dock -->
                 </Grid.RowDefinitions>
 
@@ -2152,9 +2154,9 @@
                          the left column gives up the difference: 49 px left of
                          card centre at 1580 becomes ~139 px at 1518, which is
                          still inside the column the crossfader sits in. -->
-                    <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*" MinWidth="665"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*" MinWidth="420"/>
                 </Grid.ColumnDefinitions>
 
                 <!-- Transition status: live state, not a control. Collapsed
@@ -2215,7 +2217,7 @@
 
                 <!-- Master level: deliberately smaller than the fader it sits
                      beside, because the crossfader is still the primary control. -->
-                <StackPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right"
+                <WrapPanel Grid.Column="2" Orientation="Horizontal" HorizontalAlignment="Right"
                             VerticalAlignment="Center">
 
                     <!-- Talk-over mic: app-domain gain (the Windows recording
@@ -2224,39 +2226,11 @@
                          and a mute that closes the voice without closing the
                          device. Fits on the master row, so the 1400x900 stack
                          does not grow a row. -->
-                    <!-- Which microphone the strip edits. That was the "MIC 1"
-                         label: it named the device but could not change it, so a
-                         setup with two microphones had one strip and no way to
-                         reach the second. The four controls to the right already
-                         retarget through the view model, so this only chooses; it
-                         does not re-wire anything. A device that was enabled and
-                         has gone away stays selectable and MicStatusText says so
-                         in the tooltip, instead of the strip jumping elsewhere. -->
-                    <ComboBox Width="128" MinHeight="22" FontSize="9" Padding="6,0"
-                              Margin="0,0,7,0" VerticalAlignment="Center"
-                              ItemsSource="{Binding MicDeviceChoices}"
-                              ItemTemplate="{StaticResource DeviceChoiceRow}"
-                              SelectedValuePath="Id"
-                              SelectedValue="{Binding SelectedMicDeviceId, Mode=TwoWay}"
-                              AutomationProperties.Name="Microphone device"
-                              ToolTip="{Binding MicStatusText}"/>
-                    <Slider x:Name="MicLevelSlider" Width="90" VerticalAlignment="Center"
-                            Minimum="0" Maximum="2"
-                            SmallChange="0.01" LargeChange="0.1"
-                            Value="{Binding MicLevel, Mode=TwoWay}"
-                            AutomationProperties.Name="Microphone level"
-                            ToolTip="Microphone level: an app gain, 100% = unity, up to 200%. The Windows recording level is not changed."/>
-                    <TextBlock Text="{Binding MicLevel, StringFormat={}{0:0%}}"
-                               FontFamily="Consolas" FontSize="10" Width="38"
-                               Margin="7,0,4,0" TextAlignment="Right" VerticalAlignment="Center"
-                               Foreground="{StaticResource TextDimBrush}"
-                               ToolTip="Microphone gain"/>
-                    <Border Width="4" Height="18" Margin="0,0,5,0" CornerRadius="1"
-                            Background="#0A0C10" VerticalAlignment="Center"
-                            ToolTip="Peak of the loudest enabled recording device">
-                        <Rectangle Fill="{StaticResource AccentABrush}"
-                                   Opacity="{Binding MicPeak, Mode=OneWay}"/>
-                    </Border>
+                    <!-- The microphone picker, its gain and its peak meter used to
+                         sit here and are now the strip band in the flyout (SRC):
+                         two pickers over one setting is how the two disagree, and
+                         the strip is source configuration, not something pressed
+                         mid-mix. MON and MUTE stay: they are the monitor gate. -->
                     <ToggleButton Style="{StaticResource MicToggle}" Width="34" Content="MON"
                                   Margin="0,0,4,0"
                                   IsChecked="{Binding MicMonitorEnabled, Mode=TwoWay}"
@@ -2291,7 +2265,7 @@
                             Command="{Binding Soundboard.StopAllCommand}"
                             AutomationProperties.Name="Panic: silence every soundboard pad"
                             ToolTip="Panic. Silences every soundboard pad. The decks keep playing."/>
-                </StackPanel>
+                </WrapPanel>
             </Grid>
 
             <!-- ================= Channel strips =================
@@ -2751,8 +2725,8 @@
                                TextTrimming="CharacterEllipsis"
                                ToolTip="{Binding StatusText}"/>
                 </DockPanel>
-                <ScrollViewer Grid.Row="1" x:Name="DockBody" Height="176" Focusable="False"
-                              VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <ScrollViewer Grid.Row="1" x:Name="DockBody" Height="160" Focusable="False"
+                              VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
                 <Grid>
                         <Grid x:Name="DockPageMixer">
                             <Grid.Style>

@@ -174,10 +174,6 @@ public partial class MainWindow : Window
         Closed += (_, _) => CloseViewModel();
     }
 
-    /// <summary>Last height written to <see cref="BrowserHost"/>, so a layout pass
-    /// that recomputes the same number does not touch the element.</summary>
-    private double _browserHeight = double.NaN;
-
     /// <summary>
     /// Give the browser row the height the shell can actually afford, so the track
     /// table below it gets a finite viewport to virtualize against.
@@ -217,12 +213,41 @@ public partial class MainWindow : Window
                              + centreRows[2].ActualHeight
                              + centreRows[4].ActualHeight;
         double band = ShellScroll.ViewportHeight - fixedHeight - 2;
-        double cap = Math.Max(200,
-            Math.Min(band * 0.75, band - centreRows[1].MinHeight));
+        if (band <= 0) return;
 
-        if (Math.Abs(cap - _browserHeight) < 0.5) return;
-        _browserHeight = cap;
-        BrowserHost.Height = cap;
+        // Both elastic rows are sized, not just the documents: the shell's root
+        // ScrollViewer measures its content at infinite height, so a star row never
+        // shrinks to the window and the dock below it fell off the bottom at 900.
+        // Their sum is the band, with the two floors honoured, so at any height that
+        // can hold the floors the dock is on screen and nothing is cut off. Below
+        // that the shell scrolls, which is what the root ScrollViewer is for.
+        double waveFloor = centreRows[1].MinHeight;
+        double docFloor = centreRows[3].MinHeight;
+        double documents = Math.Min(Math.Max(band * 0.75, docFloor), Math.Max(docFloor, band - waveFloor));
+        double waveform = Math.Max(waveFloor, band - documents);
+
+        var documentRow = new GridLength(documents);
+        var waveformRow = new GridLength(waveform);
+        var hostHeight = documents;
+        if (DocumentsRow.Height == documentRow && WaveformRow.Height == waveformRow
+            && Math.Abs(BrowserHost.Height - hostHeight) < 0.5) return;
+
+        DocumentsRow.Height = documentRow;
+        WaveformRow.Height = waveformRow;
+        BrowserHost.Height = hostHeight;
+
+        // The library pane sits in a column, not a row, so a star column has the same
+        // problem the rows had: inside the root ScrollViewer it measures at the tree's
+        // full height and the shell scrolls by a thousand pixels with 5425 tracks in
+        // it. It gets the body height instead, and scrolls inside itself.
+        double bodyHeight = Math.Max(0, ShellScroll.ViewportHeight
+                                        - shellRows[0].ActualHeight
+                                        - ShellScroll.Padding.Top - ShellScroll.Padding.Bottom);
+        // NaN is the "auto" default, and every comparison against NaN is false, so
+        // the guard has to treat it as "not set yet" rather than "already correct".
+        double paneHeight = LibraryPane.Height;
+        if (double.IsNaN(paneHeight) || Math.Abs(paneHeight - bodyHeight) > 0.5)
+            LibraryPane.Height = bodyHeight;
     }
 
     /// <summary>The single pop-out lyrics window, if one is open.</summary>

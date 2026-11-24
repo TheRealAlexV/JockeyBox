@@ -1099,6 +1099,20 @@ internal static class UiShot
 
         Console.Out.WriteLine(
             $"uishot: canvas {width}x{height}, arranged {arrangedWidth}x{arrangedHeight} -> {path}");
+        // Row heights: the shell sizes its elastic rows by hand, so a capture that
+        // clips has to be able to say which row lost the pixels.
+        if (window is MainWindow shellWindow)
+            Console.Out.WriteLine(
+                $"uishot: rows documents={shellWindow.DocumentsRow.ActualHeight:0.#}" +
+                $" ({shellWindow.DocumentsRow.Height.Value:0.#}{shellWindow.DocumentsRow.Height.GridUnitType})" +
+                $" waveform={shellWindow.WaveformRow.ActualHeight:0.#}" +
+                $" ({shellWindow.WaveformRow.Height.Value:0.#}{shellWindow.WaveformRow.Height.GridUnitType})" +
+                $" dock={shellWindow.MixerDock.ActualHeight:0.#}" +
+                $" body={shellWindow.DockBody.ActualHeight:0.#}" +
+                $" viewport={shellWindow.ShellScroll.ViewportHeight:0.#}" +
+                $" extent={shellWindow.ShellScroll.ExtentHeight:0.#}" +
+                $" pane={shellWindow.LibraryPane.ActualHeight:0.#}/{shellWindow.LibraryPane.Height:0.#}" +
+                $" body={shellWindow.ShellBody.ActualHeight:0.#}");
         Console.Out.WriteLine(
             $"uishot: settle {settleMs}ms of {waitMs}ms budget{quietNote}, first frame {firstFrameMs}ms, waited on {waitedOn}" +
             $"{(playlistName == null ? "" : $", playlist '{playlistName}'")}" +
