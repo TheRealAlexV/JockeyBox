@@ -948,12 +948,9 @@ public sealed class DualDeckTransport : IDisposable
 
             var settings = AppSettings.Load();
 
-            // A fresh install has no device file, so the operator has nothing to edit and
-            // the driver silently runs the legacy stereo pair. Create the default exactly
-            // once; an existing file is never touched (VirtualDeviceConfig.CreateIfAbsent),
-            // which is what keeps this from being the launch-time clobber the re-publish
-            // from settings used to be.
-            VirtualDeviceConfig.CreateIfAbsent();
+            // The device file is not touched here. Only the composition root creates it
+            // (App.OnStartup -> CreateIfAbsent with an explicit path), so no transport
+            // construction - in the app or in a test - can reach a production write.
 
             var route = BuildRouteFromAppSettings(settings);
 

@@ -13,6 +13,7 @@ namespace JockeyBox.Tests;
 /// driver-side harness reads too: changing the writer without the fixture (or the
 /// reader without the fixture) fails one side or the other.
 /// </summary>
+[Collection(DeviceConfigOwnershipCollection.Name)]
 public sealed class VirtualDeviceConfigTests
 {
     private const string GoldenRelativePath =

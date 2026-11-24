@@ -177,9 +177,18 @@ public static class VirtualDeviceConfig
     ///
     /// <para>Returns true when it created the file.</para>
     /// </summary>
-    public static bool CreateIfAbsent(string? path = null)
+    /// <summary>
+    /// Create the device file with the legacy default, but only when it is absent.
+    ///
+    /// <para><b>The path is a parameter, never an ambient default.</b> The only caller is
+    /// the app's composition root, which asks <see cref="DefaultPath"/> for the file it is
+    /// about to own. Code that must not write - transport startup above all - has no path
+    /// to pass, so no transport construction can reach a production write. A "is this a
+    /// test" check would stay lucky; a required parameter cannot.</para>
+    /// </summary>
+    public static bool CreateIfAbsent(string path)
     {
-        path ??= DefaultPath;
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
 
         // Named, not incidental: the contract is "absent only". Existing, unreadable or
         // differently shaped are all the operator's, and are left exactly as they are.

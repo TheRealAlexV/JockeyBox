@@ -133,13 +133,16 @@ public sealed class VirtualDeviceWidthOwnershipTests : IDisposable
     {
         Assert.False(File.Exists(DevicePath), "this fixture starts from a home with no file");
 
-        await LaunchOnce();
+        // The same call App.OnStartup makes, with the same explicit argument: the one
+        // place allowed to create the file. A launch does not write it at all.
+        Assert.True(VirtualDeviceConfig.CreateIfAbsent(VirtualDeviceConfig.DefaultPath),
+            "a fresh install must be left a file to edit");
 
-        Assert.True(File.Exists(DevicePath), "the first launch must leave a file to edit");
         Assert.Equal(2, VirtualDeviceConfig.ChannelCount(VirtualDeviceConfig.Load()));
         Assert.Contains("\"version\":1", File.ReadAllText(DevicePath));
         var afterFirst = Sha256(DevicePath);
 
+        await LaunchOnce();
         await LaunchOnce();
 
         Assert.Equal(afterFirst, Sha256(DevicePath));
@@ -181,7 +184,8 @@ public sealed class VirtualDeviceWidthOwnershipTests : IDisposable
         Log.LineWritten += Handler;
         try
         {
-            await LaunchOnce();
+            // The composition root's call, on a path that cannot be written.
+            Assert.False(VirtualDeviceConfig.CreateIfAbsent(unwritable));
         }
         finally
         {
