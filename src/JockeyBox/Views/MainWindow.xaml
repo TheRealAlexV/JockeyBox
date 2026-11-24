@@ -1264,6 +1264,30 @@
                 </Style.Triggers>
             </Style>
 
+            <!-- One definition for a CHAIN/PAD cell, used by the strip header and by
+                 every channel row. Written twice by hand, the two grids drifted: the
+                 header put its unit inside a 40 px right-aligned value ("0 f"), the row
+                 put a bare "0" in the same box, so the digits differed by 11 px and the
+                 right-aligned value never lined up. Here the digit sits right-aligned in
+                 a fixed 34 px box and the unit has its own 12 px box, so the digit's x
+                 depends on nothing but the column. -->
+            <ControlTemplate x:Key="StripCell" TargetType="HeaderedContentControl">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="26"/>
+                        <ColumnDefinition Width="34"/>
+                        <ColumnDefinition Width="12"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="{TemplateBinding Header}"
+                               Style="{StaticResource RackCaption}"/>
+                    <TextBlock Grid.Column="1" VerticalAlignment="Center" TextAlignment="Right"
+                               FontFamily="Consolas" FontSize="10"
+                               Text="{Binding Content, RelativeSource={RelativeSource TemplatedParent}}"/>
+                    <TextBlock Grid.Column="2" Text="{TemplateBinding Tag}"
+                               Style="{StaticResource RackCaption}"/>
+                </Grid>
+            </ControlTemplate>
+
             <Style x:Key="RackCaption" TargetType="TextBlock">
                 <Setter Property="FontSize" Value="9"/>
                 <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
@@ -2967,8 +2991,8 @@
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*" MinWidth="70"/>
                             <ColumnDefinition Width="66"/>
-                            <ColumnDefinition Width="76"/>
-                            <ColumnDefinition Width="76"/>
+                            <ColumnDefinition Width="72"/>
+                            <ColumnDefinition Width="72"/>
                             <ColumnDefinition Width="34"/>
                         </Grid.ColumnDefinitions>
                         <DockPanel Grid.Column="0" LastChildFill="True">
@@ -2988,23 +3012,16 @@
                                        ToolTip="{Binding SelectedMicStrip.Name}"
                                        Text="{Binding SelectedMicStrip.Name, StringFormat={}editing {0}}"/>
                         </DockPanel>
-                        <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center"
-                                    ToolTip="Chain: frames this strip's own stages cost, 240 only from the limiter. Pad: frames the mixer adds so every device lines up. Both 0 = zero added latency.">
-                            <TextBlock Text="CHAIN" Style="{StaticResource RackCaption}" Width="30"/>
-                            <!-- Value and unit as one run: "0" beside a separate bold "f"
-                                 read as the token "0f", which looks like a broken format
-                                 string. It is frames, and the space says so. -->
-                            <TextBlock Text="{Binding MixerChainFrames, StringFormat={}{0} f}"
-                                       FontFamily="Consolas" FontSize="10" Width="40"
-                                       TextAlignment="Right" Margin="3,0,0,0"/>
-                        </StackPanel>
-                        <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center"
-                                    ToolTip="Pad: frames the mixer adds so every device lines up. 0 = no added latency.">
-                            <TextBlock Text="PAD" Style="{StaticResource RackCaption}" Width="30"/>
-                            <TextBlock Text="{Binding MixerPadFrames, StringFormat={}{0} f}"
-                                       FontFamily="Consolas" FontSize="10" Width="40"
-                                       TextAlignment="Right" Margin="3,0,0,0"/>
-                        </StackPanel>
+                        <HeaderedContentControl Grid.Column="2" Template="{StaticResource StripCell}"
+                                                Header="CHAIN" Tag="f"
+                                                Content="{Binding MixerChainFrames}"
+                                                VerticalAlignment="Center"
+                                                ToolTip="Chain: frames this strip's own stages cost, 240 only from the limiter. Pad: frames the mixer adds so every device lines up. Both 0 = zero added latency."/>
+                        <HeaderedContentControl Grid.Column="3" Template="{StaticResource StripCell}"
+                                                Header="PAD" Tag="f"
+                                                Content="{Binding MixerPadFrames}"
+                                                VerticalAlignment="Center"
+                                                ToolTip="Pad: frames the mixer adds so every device lines up. 0 = no added latency."/>
                         <!-- MIXER caption lives in the name column, not the meter column:
                              the header had five tokens against five row cells, shifted by
                              one, so MIXER sat over an input meter and BYP had nothing above
@@ -3043,8 +3060,8 @@
                                                  panel edge. -->
                                             <ColumnDefinition Width="*" MinWidth="70"/>
                                             <ColumnDefinition Width="66"/>
-                                            <ColumnDefinition Width="76"/>
-                                            <ColumnDefinition Width="76"/>
+                                            <ColumnDefinition Width="72"/>
+                                            <ColumnDefinition Width="72"/>
                                             <ColumnDefinition Width="34"/>
                                         </Grid.ColumnDefinitions>
 
@@ -3073,18 +3090,14 @@
                                                     Width="{Binding MeterWidth}"/>
                                         </Grid>
 
-                                        <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center"
-                                                    ToolTip="Chain frames: this strip's own stages (limiter lookahead only)">
-                                            <TextBlock Text="CH" Style="{StaticResource RackCaption}" Width="30"/>
-                                            <TextBlock Text="{Binding ChainFrames}" FontFamily="Consolas" FontSize="10"
-                                                       Width="40" TextAlignment="Right" Margin="3,0,0,0"/>
-                                        </StackPanel>
-                                        <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center"
-                                                    ToolTip="Pad frames: delay added to line up with the slowest device">
-                                            <TextBlock Text="PAD" Style="{StaticResource RackCaption}" Width="30"/>
-                                            <TextBlock Text="{Binding PadFrames}" FontFamily="Consolas" FontSize="10"
-                                                       Width="40" TextAlignment="Right" Margin="3,0,0,0"/>
-                                        </StackPanel>
+                                        <HeaderedContentControl Grid.Column="2" Template="{StaticResource StripCell}"
+                                                                Header="CH" Content="{Binding ChainFrames}"
+                                                                VerticalAlignment="Center"
+                                                                ToolTip="Chain frames: this strip's own stages (limiter lookahead only)"/>
+                                        <HeaderedContentControl Grid.Column="3" Template="{StaticResource StripCell}"
+                                                                Header="PAD" Content="{Binding PadFrames}"
+                                                                VerticalAlignment="Center"
+                                                                ToolTip="Pad frames: delay added to line up with the slowest device"/>
 
                                         <ToggleButton Grid.Column="4" Style="{StaticResource MicToggle}" Width="34"
                                                       HorizontalAlignment="Right"
