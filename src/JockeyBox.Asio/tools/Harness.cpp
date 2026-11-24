@@ -2446,6 +2446,15 @@ static int runLiveConfigTests() {
 }
 
 int wmain(int argc, wchar_t** argv) {
+    if (argc > 1 && (wcscmp(argv[1], L"--help") == 0 || wcscmp(argv[1], L"-h") == 0)) {
+        wprintf(L"usage: AsioHostHarness.exe <JockeyBox.Asio.dll> [--attach <bus> [hostFrames]]\n");
+        wprintf(L"       AsioHostHarness.exe <JockeyBox.Asio.dll> [--keep]\n");
+        wprintf(L"  --attach <bus>   read-only watch of Local\\JockeyBox.Bus.<bus>,\n");
+        wprintf(L"                   falling back to Global\\JockeyBox.Bus.<bus>\n");
+        wprintf(L"  hostFrames       128, 256, 512 or 1024 (default: ring block size)\n");
+        return 0;
+    }
+
     wchar_t dllPath[MAX_PATH] = {};
     if (argc > 1 && wcscmp(argv[1], L"--soak") != 0 &&
         wcscmp(argv[1], L"--soak-one") != 0 &&
