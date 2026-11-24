@@ -88,8 +88,10 @@ trap tmp_cleanup EXIT
 #   libvlc/                core + plugins, kept loose and resolved on disk
 #                          (JockeyBox.csproj KeepLibVlcPayloadLoose;
 #                           Core.Initialize() in Playback/PreviewStreamPlayer.cs)
-#   AnalysisScripts/       bpm_scan.py + key_scan.py, read from AppContext.BaseDirectory
-#                          (Audio/Beat/BpmAnalysisService.cs; key_scan imported by bpm_scan.py)
+#   AnalysisScripts/       bpm_scan.py + key_scan.py + lyric_align.py, read from
+#                          AppContext.BaseDirectory (Audio/Beat/BpmAnalysisService.cs;
+#                          key_scan imported by bpm_scan.py; lyric_align.py spawned by
+#                          Lyrics/LyricAlignmentService.cs)
 is_scratch() {
   case "$1" in
     *.pdb|*.pyc) return 0 ;;

@@ -1,5 +1,6 @@
 AnalysisScripts/analysis/bpm_scan.py
 AnalysisScripts/analysis/key_scan.py
+AnalysisScripts/analysis/lyric_align.py
 JockeyBox.exe
 libvlc/win-x64/hrtfs/dodeca_and_7channel_3DSL_HRTF.sofa
 libvlc/win-x64/libvlc.dll
