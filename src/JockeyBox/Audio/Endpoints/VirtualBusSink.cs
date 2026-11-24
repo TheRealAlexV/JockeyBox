@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.IO;
 using System.Threading;
 using JockeyBox.Ipc;
 using JockeyBox.Tools;
@@ -110,7 +111,7 @@ public sealed class VirtualBusSink : IAudioSink
         try
         {
             VirtualBusWriter writer;
-            if (BusLayout.GlobalSectionExists(sectionName))
+            if (BusLayout.GlobalSectionExists(sectionName) && !AppWriterOwnsBus(sectionName))
             {
                 // The driver publishes the pair's ring, so the app is the attacher: it adopts
                 // the creator's geometry and never writes a header byte. A section that exists
@@ -145,6 +146,45 @@ public sealed class VirtualBusSink : IAudioSink
                 Log.Warn($"virtual ASIO ring '{sectionName}' not opened: {ex.Message}; " +
                          "rendering continues without it");
             return null;
+        }
+    }
+
+    /// <summary>
+    /// Whether a live app writer owns this bus, which means the section the Global probe
+    /// found above is <b>not</b> the driver's.
+    ///
+    /// <para><b>Why the claim file decides.</b> The driver never creates one: only
+    /// <see cref="VirtualBusWriter.Open"/> takes <c>&lt;name&gt;.lock</c>, with
+    /// <see cref="FileShare.None"/>. So a claim that is <i>held</i> is positive proof
+    /// that an app created the section. That matters because <c>Local\</c> and
+    /// <c>Global\</c> are the same namespace for a session 0 process (an elevated or
+    /// service-hosted instance): the Global probe then finds our own Local ring, and
+    /// attaching to it would skip the one-writer claim and let two producers publish the
+    /// same ring. Attaching is only right when the driver owns the section and no app
+    /// writer is claiming it.</para>
+    ///
+    /// <para>The <i>existence</i> of the file is not the question: it is never deleted
+    /// when a writer closes, so a stale file would refuse a legitimate attach to the
+    /// driver's ring and silence every real user. The exclusive share lock is what
+    /// separates a live writer from a stale file; it is released immediately and the
+    /// real claim is still taken by <see cref="VirtualBusWriter.Open"/> on the create
+    /// path.</para>
+    /// </summary>
+    private static bool AppWriterOwnsBus(string sectionName)
+    {
+        try
+        {
+            using var probe = new FileStream(BusLayout.LockPathFor(sectionName),
+                FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+            return false; // nobody holds it: the section is the driver's, attach is right
+        }
+        catch (IOException)
+        {
+            return true;  // a live writer holds the claim, so an app owns this bus
+        }
+        catch (Exception)
+        {
+            return false; // no claim file at all: the driver's own section
         }
     }
 

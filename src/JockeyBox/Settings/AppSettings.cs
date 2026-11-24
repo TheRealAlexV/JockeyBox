@@ -929,15 +929,6 @@ public class AppSettings
         }
     }
 
-    /// <summary>
-    /// The virtual device's ordered lines. Empty means it has never been configured,
-    /// which keeps the legacy stereo pair. The channel geometry is the sum of the line
-    /// widths and is published to the native driver through
-    /// <see cref="JockeyBox.Audio.Virtual.VirtualDeviceConfig"/>; changing the list
-    /// needs a restart of the ASIO host.
-    /// </summary>
-    public List<JockeyBox.Audio.Virtual.VirtualLine> VirtualDeviceLines { get; set; } = new();
-
     public void Save() => Save(_home);
 
     /// <summary>

@@ -13,6 +13,7 @@ namespace JockeyBox.Tests;
 /// driver-side harness reads too: changing the writer without the fixture (or the
 /// reader without the fixture) fails one side or the other.
 /// </summary>
+[Collection(DeviceConfigOwnershipCollection.Name)]
 public sealed class VirtualDeviceConfigTests
 {
     private const string GoldenRelativePath =
@@ -195,8 +196,8 @@ public sealed class VirtualDeviceConfigTests
         var path = Path.Combine(tempDir, "virtual-device.json");
         try
         {
-            var saved = VirtualDeviceConfig.TrySaveEffective(Array.Empty<VirtualLine>(), path);
-            Assert.True(saved);
+            var created = VirtualDeviceConfig.CreateIfAbsent(path);
+            Assert.True(created);
             Assert.True(File.Exists(path));
 
             var loaded = VirtualDeviceConfig.Load(path);
@@ -217,8 +218,7 @@ public sealed class VirtualDeviceConfigTests
         try
         {
             var sample = Sample(); // 3 stereo (6) + 2 mono (2) = 8
-            var saved = VirtualDeviceConfig.TrySaveEffective(sample, path);
-            Assert.True(saved);
+            VirtualDeviceConfig.Save(sample, path);
 
             var loaded = VirtualDeviceConfig.Load(path);
             var expectedChannels = VirtualDeviceConfig.ChannelCount(sample);
@@ -235,22 +235,23 @@ public sealed class VirtualDeviceConfigTests
     }
 
     [Fact]
-    public void Stray_8_channel_file_is_overwritten_on_effective_save_to_match_empty_lines()
+    public void An_existing_8_channel_file_is_never_rewritten_by_the_bootstrap()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), $"jb-cfg-{Guid.NewGuid():N}");
         var path = Path.Combine(tempDir, "virtual-device.json");
         try
         {
-            // Write a stray 8-channel file first (simulating what was left on disk)
+            // What an earlier install or the operator left on disk.
             VirtualDeviceConfig.Save(Sample(), path);
+            var before = File.ReadAllBytes(path);
             Assert.Equal(8, VirtualDeviceConfig.ChannelCount(VirtualDeviceConfig.Load(path)));
 
-            // App boots or saves with empty lines -> overwrites stray file with legacy 2-channel config
-            var saved = VirtualDeviceConfig.TrySaveEffective(Array.Empty<VirtualLine>(), path);
-            Assert.True(saved);
+            // A launch finds the file present: the bootstrap declines instead of
+            // normalising it back to the legacy pair, and the bytes are untouched.
+            Assert.False(VirtualDeviceConfig.CreateIfAbsent(path));
 
-            var loaded = VirtualDeviceConfig.Load(path);
-            Assert.Equal(2, VirtualDeviceConfig.ChannelCount(loaded));
+            Assert.Equal(before, File.ReadAllBytes(path));
+            Assert.Equal(8, VirtualDeviceConfig.ChannelCount(VirtualDeviceConfig.Load(path)));
         }
         finally
         {
@@ -259,19 +260,18 @@ public sealed class VirtualDeviceConfigTests
     }
 
     [Fact]
-    public void Failing_write_logs_warning_and_does_not_throw()
+    public void Failing_bootstrap_logs_an_error_and_does_not_throw()
     {
-        // Point to an invalid path or a directory that cannot be created/written
-        var invalidPath = Path.Combine(Path.GetTempPath(), $"jb-invalid-{Guid.NewGuid():N}", "sub", "deep", "virtual-device.json");
-        // Create a file where directory is expected so creating directory fails
+        // Create a file where a directory is expected so creating the directory fails.
         var blockingFile = Path.Combine(Path.GetTempPath(), $"jb-invalid-{Guid.NewGuid():N}");
         File.WriteAllText(blockingFile, "not a dir");
         var badPath = Path.Combine(blockingFile, "virtual-device.json");
 
         try
         {
-            var result = VirtualDeviceConfig.TrySaveEffective(Sample(), badPath);
+            var result = VirtualDeviceConfig.CreateIfAbsent(badPath);
             Assert.False(result);
+            Assert.False(File.Exists(badPath));
         }
         finally
         {
@@ -293,8 +293,8 @@ public sealed class VirtualDeviceConfigTests
             Assert.Equal(overridePath, VirtualDeviceConfig.DefaultPath);
             Assert.Equal(tempDir, VirtualDeviceConfig.DirectoryPath);
 
-            var saved = VirtualDeviceConfig.TrySaveEffective(Array.Empty<VirtualLine>());
-            Assert.True(saved);
+            var created = VirtualDeviceConfig.CreateIfAbsent(VirtualDeviceConfig.DefaultPath);
+            Assert.True(created);
             Assert.True(File.Exists(overridePath));
             Assert.StartsWith(Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
                               VirtualDeviceConfig.DefaultPath, StringComparison.OrdinalIgnoreCase);

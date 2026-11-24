@@ -94,6 +94,14 @@ public partial class App : Application
             return;
         }
 
+        // The device file is created here, once, because this is the only code that knows
+        // it owns the machine-wide path. `CreateIfAbsent` takes that path as an argument
+        // and has no ambient default, so no transport construction - in the app or in a
+        // test - can reach a production write. Write-if-absent only: a file that exists
+        // belongs to the operator and is never touched.
+        JockeyBox.Audio.Virtual.VirtualDeviceConfig.CreateIfAbsent(
+            JockeyBox.Audio.Virtual.VirtualDeviceConfig.DefaultPath);
+
         // The per-second audio trace is opt-in (a normal launch leaves it off: one
         // line a second is 86 000 lines a day). The headless probes were built on
         // it - --audiotrace prints it by design, the capture modes and the selftest
