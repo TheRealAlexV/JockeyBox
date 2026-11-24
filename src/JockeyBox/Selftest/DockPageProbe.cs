@@ -8,8 +8,14 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Threading;
+using JockeyBox.Audio.Graph;
+using JockeyBox.Lyrics;
+using JockeyBox.Playback;
+using JockeyBox.Settings;
 using JockeyBox.Tools;
+using JockeyBox.ViewModels;
 using JockeyBox.Views;
+using JockeyBox.YouTube;
 
 namespace JockeyBox.Selftest;
 
@@ -100,12 +106,76 @@ internal static class DockPageProbe
 
                 line($"  dock-page {page.Name}: ok");
             }
+
+            CaptureDialogs(line);
         }
         finally
         {
             window.Close();
         }
     }
+
+    // ------------------------------------------------------------------ dialogs
+
+    /// <summary>
+    /// The windows <c>MainWindow</c> opens. Unlike the tabs and flyouts these are not
+    /// reachable from its logical tree, so there is nothing to walk and the list is
+    /// written out. They carry the same defect class: a <c>StaticResource</c> inside a
+    /// <c>ControlTemplate</c> is resolved when the template is applied, and nothing
+    /// applied one of these until an operator clicked. Each is built from a null or
+    /// empty view model, laid out, and dropped - nothing is shown.
+    /// </summary>
+    private static void CaptureDialogs(Action<string> line)
+    {
+        var settings = AppSettings.Load();
+        var google = new GoogleOAuthService();
+        var api = new YouTubeDataApi(google);
+
+        // The diagnostics window owns its engine's lifetime; it is never started, so
+        // no device is opened.
+        using var audio = new AudioEngine();
+
+        var dialogs = new (string Name, Func<Window> Create)[]
+        {
+            ("dialog:renametrack", () => new RenameTrackDialog(@"C:\Music\Artist - Title.mp3")),
+            ("dialog:movetrack", () => new MoveTrackDialog(@"Artist\Album\Artist - Title.mp3")),
+            ("dialog:settings", () => new SettingsWindow(settings)),
+            ("dialog:diagnostics", () => new DiagnosticsWindow(audio, settings)),
+            ("dialog:spotify-setup", () => new SpotifySetupDialog(settings, new SpotifyOAuthService(settings))),
+            ("dialog:youtube-auth", () => new YouTubeAuthDialog(google, api)),
+            ("dialog:youtube-search", () => new YouTubeSearchWindow(SearchViewModel(settings))),
+        };
+
+        foreach (var (name, create) in dialogs)
+        {
+            Window? dialog = null;
+            try
+            {
+                dialog = create();
+                var face = dialog.Content as FrameworkElement
+                           ?? throw new InvalidOperationException("dialog has no content to lay out");
+                Settle(dialog, face);
+            }
+            catch (Exception ex)
+            {
+                line($"  dock-page {name}: FAILED");
+                throw Fail(name, ex);
+            }
+            finally
+            {
+                // Never shown, so there is no HWND to release; Close on an unshown
+                // window is still the documented teardown and must not mask the
+                // failure above.
+                try { dialog?.Close(); }
+                catch (InvalidOperationException) { }
+            }
+
+            line($"  dock-page {name}: ok");
+        }
+    }
+
+    private static YouTubeSearchViewModel SearchViewModel(AppSettings settings) =>
+        new(settings, new StreamPreviewTransport(new PreviewStreamPlayer(settings)), "dock-page probe");
 
     private static IReadOnlyList<Page> Enumerate(MainWindow window)
     {
@@ -230,7 +300,12 @@ internal static class DockPageProbe
     /// </summary>
     private static void Settle(Window window, FrameworkElement content)
     {
-        var size = new Size(window.Width, window.Height);
+        // Dialogs declare their own size; a Window that declares none measures to
+        // zero and would realise nothing, so the fallback is a size every dialog in
+        // this app fits inside.
+        var size = new Size(
+            window.Width  > 0 ? window.Width  : 1000,
+            window.Height > 0 ? window.Height : 800);
         content.Measure(size);
         content.Arrange(new Rect(size));
         window.UpdateLayout();

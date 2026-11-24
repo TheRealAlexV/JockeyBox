@@ -20,7 +20,7 @@ namespace JockeyBox.Tests;
 /// channel, because the media clock versus the audible clock is the whole point of
 /// a cue.
 /// </summary>
-[Collection(nameof(UiThreadCollection))]
+[Collection(UiThreadCollection.Name)]
 public sealed class DeckUiTests
 {
     private sealed class Rig : IDisposable

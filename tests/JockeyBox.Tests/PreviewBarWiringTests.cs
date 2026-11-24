@@ -26,7 +26,7 @@ namespace JockeyBox.Tests;
 /// from <c>Themes/Dark.xaml</c>, which that Application does not load (it is
 /// created bare), so <see cref="EnsureThemeResources"/> merges them once.</para>
 /// </summary>
-[Collection(nameof(UiThreadCollection))]
+[Collection(UiThreadCollection.Name)]
 public sealed class PreviewBarWiringTests
 {
     private const double Duration = 300.0;

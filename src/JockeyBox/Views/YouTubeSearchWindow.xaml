@@ -12,7 +12,7 @@
             <ResourceDictionary.MergedDictionaries>
                 <!-- Read-only: the shared cell styles, so a result row uses the
                      same type sizes and colours as every other track list. -->
-                <ResourceDictionary Source="/Views/Shared/TrackRows.xaml"/>
+                <ResourceDictionary Source="/JockeyBox;component/Views/Shared/TrackRows.xaml"/>
             </ResourceDictionary.MergedDictionaries>
 
             <!-- Card around the result list. Same border, radius and tone as the

@@ -26,7 +26,7 @@ namespace JockeyBox.Tests;
 /// notification reaches the rebuild on the UI thread, that the rebuild changes
 /// only lists, and that teardown unregisters.</para>
 /// </summary>
-[Collection(nameof(UiThreadCollection))]
+[Collection(UiThreadCollection.Name)]
 public sealed class DeviceWatcherTests
 {
     // ---- seams --------------------------------------------------------------

@@ -83,7 +83,7 @@ public class LyricsSectionSelectorTests
 /// selection that starts on a marker is named after the real line it resolved
 /// to instead of the marker's raw index.
 /// </summary>
-[Collection(nameof(UiThreadCollection))]
+[Collection(UiThreadCollection.Name)]
 public sealed class LyricsSectionSelectorViewModelTests : IDisposable
 {
     private readonly string? _previousHome;

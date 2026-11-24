@@ -8,7 +8,7 @@ namespace JockeyBox.Tests;
 /// silently fails looks exactly like a working slider, so these tests drive the
 /// view model rather than the XAML: both directions, and both link states.
 /// </summary>
-[Collection(nameof(UiThreadCollection))]
+[Collection(UiThreadCollection.Name)]
 public sealed class MonitorGainTests
 {
     [Fact]
