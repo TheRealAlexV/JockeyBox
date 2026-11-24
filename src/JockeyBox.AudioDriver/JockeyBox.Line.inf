@@ -1,0 +1,60 @@
+; JockeyBox Virtual Line 1 - phase 1 skeleton audio function driver.
+;
+; Root-enumerated WDM function driver. One wave filter factory (WaveRT, silent
+; capture) plus one topology filter factory, exposed as one capture endpoint.
+; The audio class registration comes from wdmaudio.inf, as the design document
+; describes; the driver itself has no hardware resources.
+
+[Version]
+Signature   = "$Windows NT$"
+Class       = MEDIA
+ClassGuid   = {4d36e96c-e325-11ce-bfc1-08002be10318}
+Provider    = %JbxProvider%
+CatalogFile = JockeyBox.Line.cat
+DriverVer   = 11/23/2026,1.0.0.0
+PnpLockdown = 1
+
+[DestinationDirs]
+DefaultDestDir = 12
+
+[SourceDisksNames]
+1 = %JbxDiskName%,,,""
+
+[SourceDisksFiles]
+JockeyBox.Line.sys = 1,,
+
+[Manufacturer]
+%JbxManufacturer% = JockeyBox,NTamd64
+
+[JockeyBox.NTamd64]
+%JbxDeviceDesc% = JockeyBox_Install, Root\JockeyBoxVirtualLine
+
+[JockeyBox_Install.NT]
+Include   = ks.inf,wdmaudio.inf
+Needs     = KS.Registration,WDMAUDIO.Registration
+CopyFiles = JockeyBox.CopyFiles
+AddReg    = JockeyBox_AddReg
+
+[JockeyBox_Install.NT.Services]
+Include    = wdmaudio.inf
+Needs      = WDMAUDIO.Services
+AddService = JockeyBoxLine,0x00000002,JockeyBox_Service_Install
+
+[JockeyBox.CopyFiles]
+JockeyBox.Line.sys
+
+[JockeyBox_AddReg]
+HKR,,FriendlyName,,%JbxDeviceDesc%
+
+[JockeyBox_Service_Install]
+DisplayName   = %JbxDeviceDesc%
+ServiceType   = 1
+StartType     = 3
+ErrorControl  = 1
+ServiceBinary = %12%\JockeyBox.Line.sys
+
+[Strings]
+JbxProvider     = "JockeyBox"
+JbxManufacturer = "JockeyBox"
+JbxDeviceDesc   = "JockeyBox Virtual Line 1"
+JbxDiskName     = "JockeyBox Virtual Audio Driver"
