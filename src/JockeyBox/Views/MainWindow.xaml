@@ -1264,6 +1264,12 @@
                 </Style.Triggers>
             </Style>
 
+
+            <Style x:Key="RackCaption" TargetType="TextBlock">
+                <Setter Property="FontSize" Value="9"/>
+                <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+                <Setter Property="VerticalAlignment" Value="Center"/>
+            </Style>
             <!-- One definition for a CHAIN/PAD cell, used by the strip header and by
                  every channel row. Written twice by hand, the two grids drifted: the
                  header put its unit inside a 40 px right-aligned value ("0 f"), the row
@@ -1288,11 +1294,6 @@
                 </Grid>
             </ControlTemplate>
 
-            <Style x:Key="RackCaption" TargetType="TextBlock">
-                <Setter Property="FontSize" Value="9"/>
-                <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
-                <Setter Property="VerticalAlignment" Value="Center"/>
-            </Style>
 
             <Style x:Key="RackRow" TargetType="DockPanel">
                 <Setter Property="Margin" Value="0,3,0,0"/>
