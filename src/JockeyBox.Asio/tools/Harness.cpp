@@ -429,12 +429,25 @@ struct LiveBus {
     int channels = 0;
     int blockFrames = 0;
     int capacity = 0;
+    wchar_t scope[8] = {};
 
     bool attach(const wchar_t* busName) {
+        // The app creates Local\JockeyBox.Bus.<name>; when a kernel driver owns the
+        // pair, the sink attaches to the driver's Global\JockeyBox.Bus.<pair>.
+        // Try both, Local first so a plain app run is unchanged.
         wchar_t mapName[192];
-        if (swprintf_s(mapName, L"Local\\JockeyBox.Bus.%s", busName) <= 0) return false;
-        map = OpenFileMappingW(FILE_MAP_READ, FALSE, mapName);
-        if (!map) return false;
+        const wchar_t* scopes[] = { L"Local", L"Global" };
+        bool opened = false;
+        for (const wchar_t* candidate : scopes) {
+            if (swprintf_s(mapName, L"%s\\JockeyBox.Bus.%s", candidate, busName) <= 0) continue;
+            map = OpenFileMappingW(FILE_MAP_READ, FALSE, mapName);
+            if (map) {
+                wcscpy_s(scope, candidate);
+                opened = true;
+                break;
+            }
+        }
+        if (!opened) return false;
         base = static_cast<uint8_t*>(MapViewOfFile(map, FILE_MAP_READ, 0, 0, 0));
         if (!base) return false;
 
@@ -492,14 +505,15 @@ int runAttachMode(const wchar_t* busNameW) {
 
     LiveBus live;
     if (!live.attach(busNameW)) {
-        wprintf(L"FATAL: no live section Local\\JockeyBox.Bus.%s; start the app with the "
-                L"virtual ASIO flag on first\n", busNameW);
+        wprintf(L"FATAL: no live section Local\\JockeyBox.Bus.%s or Global\\JockeyBox.Bus.%s; "
+                L"start the app with the "
+                L"virtual ASIO flag on first\n", busNameW, busNameW);
         live.close();
         return 1;
     }
 
     wprintf(L"\n== live ring watch (read-only) ==\n");
-    wprintf(L"section           : Local\\JockeyBox.Bus.%s\n", busNameW);
+    wprintf(L"section           : %s\\JockeyBox.Bus.%s\n", live.scope, busNameW);
     wprintf(L"geometry          : %d Hz, %d ch, block %d frames, %d blocks (%.0f ms)\n",
             live.sampleRate, live.channels, live.blockFrames, live.capacity,
             1000.0 * live.capacity * live.blockFrames / live.sampleRate);

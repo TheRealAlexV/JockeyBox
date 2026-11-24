@@ -55,11 +55,16 @@ if (-not (Test-Path $Dll)) {
 $out = & $exe $Dll --attach $Bus 512 2>&1 | Out-String
 $out | Set-Content -Path $raw -Encoding ascii
 
-if ($out -notmatch 'section\s+:\s+Global\\JockeyBox\.Bus\.') {
-    Write-Verdict 'NO RING' ("Global\JockeyBox.Bus.$Bus does not exist. JockeyBox is not " +
-        'running, is a build that predates the ring publisher, has no virtual bus ' +
-        'ticked in Settings, or the kernel driver that creates the pair section is not ' +
-        'installed. The driver has nothing to read and serves silence.')
+# The app publishes Local\JockeyBox.Bus.<name>. When a kernel driver owns the
+# pair, the sink attaches to the driver's Global\JockeyBox.Bus.<pair> instead.
+# Either is a live ring; the harness names the one it opened.
+$section = if ($out -match 'section\s+:\s+((?:Local|Global)\\JockeyBox\.Bus\.\S+)') { $Matches[1] } else { $null }
+
+if (-not $section) {
+    Write-Verdict 'NO RING' ("neither Local\JockeyBox.Bus.$Bus nor Global\JockeyBox.Bus.$Bus " +
+        'exists. JockeyBox is not running, is a build that predates the ring publisher, has ' +
+        'no virtual bus ticked in Settings, or the kernel driver that creates the pair ' +
+        'section is not installed. The driver has nothing to read and serves silence.')
     exit 1
 }
 
