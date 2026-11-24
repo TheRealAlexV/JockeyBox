@@ -258,7 +258,9 @@ public sealed class VirtualRingGuardTests
                 Assert.NotNull(after);
                 Assert.Same(first.Sink, after!.Sink);
                 Assert.Equal(live, after.Sink.SectionName);
-                Assert.Equal(BusKind.Monitor, after.Bus);
+                // The plan is what identifies the publishing bus now: a legacy route has
+                // no single-bus field, it has one tap per channel naming its source bus.
+                Assert.Equal(BusKind.Monitor, after.Taps.Taps[0].Bus);
                 Assert.False(engine.VirtualRingFailed);
 
                 Assert.True(SpinWait.SpinUntil(() => first.Sink.BlocksPublished > before,
@@ -309,7 +311,7 @@ public sealed class VirtualRingGuardTests
         Assert.NotNull(after);
         Assert.NotSame(before.Sink, after!.Sink);
         Assert.Equal(second, after.Sink.SectionName);
-        Assert.Equal(BusKind.DeckA, after.Bus);
+        Assert.Equal(BusKind.DeckA, after.Taps.Taps[0].Bus);
         Assert.Equal(1, before.Sink.DisposeCount);
         Assert.Equal(0, after.Sink.DisposeCount);
 
@@ -352,7 +354,7 @@ public sealed class VirtualRingGuardTests
         var second = engine.Ring;
         Assert.NotNull(second);
         Assert.Same(first!.Sink, second!.Sink);
-        Assert.Equal(BusKind.DeckA, second.Bus);
+        Assert.Equal(BusKind.DeckA, second.Taps.Taps[0].Bus);
         Assert.Equal(0, first.Sink.DisposeCount);
         Assert.False(engine.VirtualRingFailed);
     }
