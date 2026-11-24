@@ -31,13 +31,18 @@ internal static class LyricAlignCli
         if (File.Exists(spec))
         {
             var fi = new FileInfo(spec);
-            var title = Path.GetFileNameWithoutExtension(fi.Name);
-            var artist = "";
-            int dash = title.IndexOf(" - ", StringComparison.Ordinal);
-            if (dash > 0)
+            var tagCache = new TagCache();
+            var cached = tagCache.GetTags(fi.FullName);
+            var title = !string.IsNullOrWhiteSpace(cached.Title) ? cached.Title : Path.GetFileNameWithoutExtension(fi.Name);
+            var artist = !string.IsNullOrWhiteSpace(cached.Artist) ? cached.Artist : "";
+            if (string.IsNullOrWhiteSpace(artist))
             {
-                artist = title[..dash].Trim();
-                title = title[(dash + 3)..].Trim();
+                int dash = title.IndexOf(" - ", StringComparison.Ordinal);
+                if (dash > 0)
+                {
+                    artist = title[..dash].Trim();
+                    title = title[(dash + 3)..].Trim();
+                }
             }
 
             track = new TrackEntry
