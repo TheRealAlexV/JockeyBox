@@ -69,6 +69,13 @@ public static class BusLayout
     public const int ReaderSlotSize = 64;
     public const int ReaderSlotBase = 64;
 
+    /// <summary>
+    /// The widest device the transport and the ASIO driver both accept. The device
+    /// geometry itself is derived from its Line list (see VirtualDeviceConfig), but no
+    /// path has storage for more than this.
+    /// </summary>
+    public const int MaxChannels = 32;
+
     public const int MagicOffset = 0;
     public const int VersionOffset = 4;
     public const int HeaderSizeOffset = 8;
@@ -236,11 +243,12 @@ public static class BusLayout
         int channels = Unsafe.ReadUnaligned<int>(region + ChannelsOffset);
         int blockFrames = Unsafe.ReadUnaligned<int>(region + BlockFramesOffset);
         int capacityBlocks = Unsafe.ReadUnaligned<int>(region + CapacityBlocksOffset);
-        if (sampleRate <= 0 || channels <= 0 || blockFrames <= 0 || capacityBlocks <= 0)
+        if (sampleRate <= 0 || channels <= 0 || channels > MaxChannels || blockFrames <= 0 ||
+            capacityBlocks <= 0)
         {
             throw new VirtualBusException(
                 $"Bus '{name}' has invalid geometry: sampleRate={sampleRate}, channels={channels}, " +
-                $"blockFrames={blockFrames}, capacityBlocks={capacityBlocks}.");
+                $"blockFrames={blockFrames}, capacityBlocks={capacityBlocks}. Channels are 1..{MaxChannels}.");
         }
 
         long needed = RegionSize(sampleRate, channels, blockFrames, capacityBlocks);

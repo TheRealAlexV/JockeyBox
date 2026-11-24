@@ -76,6 +76,25 @@ ULONG JB_COM_CALL VirtualAsioDriver::Release() {
 AsioBool JB_ASIO_CALL VirtualAsioDriver::init(void* sysHandle) {
     m_sysHandle = sysHandle;  // unused in v1: there is no window to parent
     resolveBusName();         // so getErrorMessage names the bus before start()
+
+    // The device geometry is the app's Line list, not a constant. A missing file
+    // means "never configured" and keeps the legacy stereo pair; a file that will
+    // not parse leaves the stereo default and is reported, never guessed at.
+    config::loadForHost(m_device);
+    m_channels = m_device.channels;
+    m_configErrorLogged = false;
+    m_geometryMismatchLogged = false;
+    m_restartRequiredLogged = false;
+    if (m_device.error[0]) {
+        char line[256];
+        _snprintf_s(line, sizeof(line), _TRUNCATE,
+                    "virtual-device.json rejected (%s); using %ld channels and serving "
+                    "silence until it is fixed",
+                    m_device.error, m_channels);
+        logOnce(line);
+        m_configErrorLogged = true;
+    }
+
     m_initialised = true;
     return kAsioTrue;
 }
@@ -100,6 +119,17 @@ void JB_ASIO_CALL VirtualAsioDriver::getErrorMessage(char* text) {
             _snprintf_s(text, 124, _TRUNCATE,
                         "JockeyBox Virtual ASIO: JOCKEYBOX_ASIO_BUS is longer than 63 "
                         "characters; bus not attached, serving silence");
+            break;
+        case kBusGeometryMismatch:
+            // The one failure that looks like a healthy driver but is silence:
+            // the app publishes a different width than the line list this driver
+            // was configured with. Never read across the mismatch.
+            _snprintf_s(text, 124, _TRUNCATE,
+                        "JockeyBox Virtual ASIO: bus '%s' publishes %d channels but the "
+                        "device is configured for %ld; restart OBS after fixing the line "
+                        "list, serving silence",
+                        m_busName, static_cast<int>(m_ring.lastSeenChannels()),
+                        m_channels);
             break;
         default:
             _snprintf_s(text, 124, _TRUNCATE,
@@ -133,25 +163,80 @@ void VirtualAsioDriver::resolveBusName() noexcept {
 
 void VirtualAsioDriver::attachBus() noexcept {
     if (m_busState.load(std::memory_order_relaxed) == kBusNameInvalid) return;
+
+    // Re-read the line list on every attempt, not only in init(): the retry runs
+    // once a second and is the only place a driver that started before the app can
+    // learn the geometry. A malformed file never becomes audio.
+    config::Device latest;
+    config::loadForHost(latest);
+    if (latest.error[0]) {
+        if (!m_configErrorLogged) {
+            char line[256];
+            _snprintf_s(line, sizeof(line), _TRUNCATE,
+                        "virtual-device.json rejected (%s); bus not attached, serving "
+                        "silence",
+                        latest.error);
+            logOnce(line);
+            m_configErrorLogged = true;
+        }
+        m_busState.store(kBusAbsent, std::memory_order_relaxed);
+        return;
+    }
+
+    // Once the host has been told a channel count, a different config can only be
+    // applied by restarting it. Say so instead of swapping bytes underneath it.
+    if (m_negotiatedChannels > 0 && latest.channels != m_negotiatedChannels) {
+        if (!m_restartRequiredLogged) {
+            char line[256];
+            _snprintf_s(line, sizeof(line), _TRUNCATE,
+                        "virtual-device.json now asks for %d channels but the host opened "
+                        "%ld; restart OBS to apply, serving silence",
+                        latest.channels, m_negotiatedChannels);
+            logOnce(line);
+            m_restartRequiredLogged = true;
+        }
+        m_ring.detach();
+        m_busState.store(kBusGeometryMismatch, std::memory_order_relaxed);
+        return;
+    }
+
+    m_device = latest;
+    m_channels = latest.channels;
+
     // Join a cushion sized from the host buffer: `3 * bufferSize` frames, floored
     // at three ring blocks and capped two blocks below capacity by
     // RingReader::attach. Scaling with bufferSize keeps a 1024-frame host more
     // than two callbacks of slack behind the writer; the old capacity/2 ceiling
     // gave a default 8-block ring only 4 blocks and starved on one late wake.
     const int32_t prefill = static_cast<int32_t>(3 * m_bufferSize);
-    if (m_ring.attach(m_busName, prefill)) {
+    if (m_ring.attach(m_busName, prefill, static_cast<int32_t>(m_channels))) {
         const int32_t cushion = m_ring.cushionFrames();
         m_cushionFrames.store(cushion, std::memory_order_relaxed);
         const int32_t blockFrames = m_ring.blockFrames();
         char line[200];
         _snprintf_s(line, sizeof(line), _TRUNCATE,
-                    "bus '%s' attached: cushion %ld frames (%ld blocks of %ld), "
-                    "host buffer %ld",
-                    m_busName, static_cast<long>(cushion),
+                    "bus '%s' attached: %ld channels, cushion %ld frames (%ld blocks of "
+                    "%ld), host buffer %ld",
+                    m_busName, m_channels, static_cast<long>(cushion),
                     static_cast<long>(blockFrames > 0 ? cushion / blockFrames : 0),
                     static_cast<long>(blockFrames), static_cast<long>(m_bufferSize));
         logOnce(line);
         m_busState.store(kBusAttached, std::memory_order_relaxed);
+        m_geometryMismatchLogged = false;
+    } else if (m_ring.lastSeenChannels() > 0 &&
+               m_ring.lastSeenChannels() != m_channels) {
+        // The bus exists but publishes a different width. Reading it would use the
+        // wrong stride, so serve silence until the app and the line list agree.
+        if (!m_geometryMismatchLogged) {
+            char line[256];
+            _snprintf_s(line, sizeof(line), _TRUNCATE,
+                        "bus '%s' publishes %d channels but the device is configured for "
+                        "%ld; serving silence",
+                        m_busName, m_ring.lastSeenChannels(), m_channels);
+            logOnce(line);
+            m_geometryMismatchLogged = true;
+        }
+        m_busState.store(kBusGeometryMismatch, std::memory_order_relaxed);
     } else {
         m_busState.store(kBusAbsent, std::memory_order_relaxed);
     }
@@ -200,8 +285,11 @@ AsioError JB_ASIO_CALL VirtualAsioDriver::stop() {
 AsioError JB_ASIO_CALL VirtualAsioDriver::getChannels(long* numInputChannels,
                                                       long* numOutputChannels) {
     if (!numInputChannels || !numOutputChannels) return kAseInvalidParameter;
-    *numInputChannels = kChannelsPerDirection;
-    *numOutputChannels = kChannelsPerDirection;
+    // One geometry for the whole device: inputs and outputs are the same width,
+    // derived from the app's Line list at init().
+    m_negotiatedChannels = m_channels;
+    *numInputChannels = m_channels;
+    *numOutputChannels = m_channels;
     return kAseOk;
 }
 
@@ -290,7 +378,7 @@ AsioError JB_ASIO_CALL VirtualAsioDriver::getSamplePosition(
 
 AsioError JB_ASIO_CALL VirtualAsioDriver::getChannelInfo(AsioChannelInfo* info) {
     if (!info) return kAseInvalidParameter;
-    if (info->channel < 0 || info->channel >= kChannelsPerDirection)
+    if (info->channel < 0 || info->channel >= m_channels)
         return kAseInvalidParameter;
 
     const long ch = info->channel;
@@ -314,26 +402,31 @@ AsioError JB_ASIO_CALL VirtualAsioDriver::createBuffers(
     AsioBufferInfo* bufferInfos, long numChannels, long bufferSize,
     AsioCallbacks* callbacks) {
     if (!bufferInfos || !callbacks) return kAseInvalidParameter;
-    if (numChannels <= 0 || numChannels > 2 * kChannelsPerDirection)
+    if (m_channels < kMinChannels || m_channels > kMaxChannels) return kAseInvalidMode;
+    if (numChannels <= 0 || numChannels > 2 * m_channels)
         return kAseInvalidParameter;
     if (!isAcceptableBufferSize(bufferSize)) return kAseInvalidMode;
     if (m_running.load()) return kAseInvalidMode;
 
     disposeBuffers();
 
-    for (long i = 0; i < kChannelsPerDirection; ++i) {
+    // Allocated here, before start(), so no code on the callback path allocates.
+    m_in = std::make_unique<float[]>(static_cast<size_t>(m_channels) * 2 * kMaxBufferSize);
+    m_out = std::make_unique<float[]>(static_cast<size_t>(m_channels) * 2 * kMaxBufferSize);
+
+    for (long i = 0; i < kMaxChannels; ++i) {
         m_activeIn[i] = false;
         m_activeOut[i] = false;
     }
 
     for (long i = 0; i < numChannels; ++i) {
         AsioBufferInfo& info = bufferInfos[i];
-        if (info.channelNum < 0 || info.channelNum >= kChannelsPerDirection) {
+        if (info.channelNum < 0 || info.channelNum >= m_channels) {
             disposeBuffers();
             return kAseInvalidParameter;
         }
-        float* base = info.isInput ? &m_in[info.channelNum][0][0]
-                                   : &m_out[info.channelNum][0][0];
+        float* base = info.isInput ? inputChannel(info.channelNum)
+                                   : outputChannel(info.channelNum);
         info.buffers[0] = base;
         info.buffers[1] = base + kMaxBufferSize;
         if (info.isInput)
@@ -342,6 +435,7 @@ AsioError JB_ASIO_CALL VirtualAsioDriver::createBuffers(
             m_activeOut[info.channelNum] = true;
     }
 
+    m_negotiatedChannels = m_channels;
     m_bufferSize = bufferSize;
     m_callbacks = callbacks;
     m_buffersCreated.store(true);
@@ -352,7 +446,9 @@ AsioError JB_ASIO_CALL VirtualAsioDriver::disposeBuffers() {
     if (m_running.load()) stop();
     m_callbacks = nullptr;
     m_buffersCreated.store(false);
-    for (long i = 0; i < kChannelsPerDirection; ++i) {
+    m_in.reset();
+    m_out.reset();
+    for (long i = 0; i < kMaxChannels; ++i) {
         m_activeIn[i] = false;
         m_activeOut[i] = false;
     }
@@ -493,8 +589,11 @@ void VirtualAsioDriver::fire(long bufferIndex) {
     // blocks, allocates or throws: no block in the ring leaves the buffers
     // silent and ticks the reader slot's underrun counter.
     const int frames = static_cast<int>(m_bufferSize);
-    float* dst[kChannelsPerDirection] = {m_in[0][bufferIndex], m_in[1][bufferIndex]};
-    m_ring.read(dst, static_cast<int>(kChannelsPerDirection), frames);
+    if (!m_in) return;
+    float* dst[config::kMaxChannels] = {};
+    for (long c = 0; c < m_channels; ++c)
+        dst[c] = inputChannel(c) + bufferIndex * kMaxBufferSize;
+    m_ring.read(dst, static_cast<int>(m_channels), frames);
 
     callbacks->bufferSwitch(bufferIndex, kAsioFalse);
 }

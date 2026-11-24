@@ -1,10 +1,12 @@
 #pragma once
 
 #include "JockeyBoxAsioAbi.h"
+#include "DeviceConfig.h"
 #include "RingReader.h"
 
 #include <atomic>
 #include <cstdint>
+#include <memory>
 #include <thread>
 
 namespace jb::asio {
@@ -14,7 +16,11 @@ namespace jb::asio {
 // before start(), so a running driver never allocates.
 class VirtualAsioDriver final : public IASIO {
 public:
-    static constexpr long kChannelsPerDirection = 2;
+    // The driver has no fixed geometry: it is derived from the app-written line
+    // list at init() and re-read on the once-a-second re-attach retry. These are
+    // the bounds both sides agree on.
+    static constexpr long kMinChannels = config::kMinChannels;
+    static constexpr long kMaxChannels = config::kMaxChannels;
     static constexpr long kMinBufferSize = 128;
     static constexpr long kMaxBufferSize = 1024;
     static constexpr long kPreferredBufferSize = 128;
@@ -94,20 +100,44 @@ private:
     void* m_sysHandle = nullptr;
     bool m_initialised = false;
 
-    bool m_activeIn[kChannelsPerDirection] = {};
-    bool m_activeOut[kChannelsPerDirection] = {};
+    bool m_activeIn[kMaxChannels] = {};
+    bool m_activeOut[kMaxChannels] = {};
 
-    // Zeroed once at construction. The input halves are filled from the ring on
-    // every buffer switch; the output halves are never written, so the ASIO
-    // outputs stay silent (this driver is an input path, not a playback path).
-    float m_in[kChannelsPerDirection][2][kMaxBufferSize] = {};
-    float m_out[kChannelsPerDirection][2][kMaxBufferSize] = {};
+    // Input halves are filled from the ring on every buffer switch; the output
+    // halves are never written, so the ASIO outputs stay silent (this driver is an
+    // input path, not a playback path). Sized for m_channels in createBuffers,
+    // which runs before start(), so the callback never allocates.
+    std::unique_ptr<float[]> m_in;
+    std::unique_ptr<float[]> m_out;
+
+    // Geometry from the app-written line list. m_channels is the count this driver
+    // presents; m_negotiatedChannels is what the host was actually told, so a
+    // config edit under a running host can be reported as "restart to apply"
+    // instead of silently disagreeing.
+    config::Device m_device;
+    long m_channels = kMinChannels;
+    long m_negotiatedChannels = 0;
+    bool m_configErrorLogged = false;
+    bool m_geometryMismatchLogged = false;
+    bool m_restartRequiredLogged = false;
+
+    float* inputChannel(long channel) noexcept {
+        return m_in.get() + channel * 2 * kMaxBufferSize;
+    }
+    float* outputChannel(long channel) noexcept {
+        return m_out.get() + channel * 2 * kMaxBufferSize;
+    }
 
     // Read by the clock thread after start(), so no locking is needed. Only the
     // clock thread calls read()/attachBus(); start/stop own the lifetime.
     bus::RingReader m_ring;
     char m_busName[72] = {};
-    enum BusState : long { kBusAbsent = 0, kBusAttached = 1, kBusNameInvalid = 2 };
+    enum BusState : long {
+        kBusAbsent = 0,
+        kBusAttached = 1,
+        kBusNameInvalid = 2,
+        kBusGeometryMismatch = 3,
+    };
     std::atomic<long> m_busState{kBusAbsent};
     // Effective ring cushion in frames, published by attachBus() from the
     // reader. getLatencies() reports it on top of one host buffer.

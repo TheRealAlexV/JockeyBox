@@ -14,6 +14,7 @@
 //     built against the driver header would do.
 
 #include "JockeyBoxAsioAbi.h"
+#include "../src/DeviceConfig.h"
 #include "../src/RingReader.h"
 
 #include <windows.h>
@@ -22,7 +23,9 @@
 
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <vector>
@@ -48,8 +51,26 @@ struct Captures {
     float block[kMaxCaptures][kBusChannels][kBusFrames];
 };
 
+// The line-model test runs at 8 channels: three Stereo Lines plus two Mono
+// Lines. Every channel carries its own frequency, so a swap between two channels
+// or a wrong interleave stride changes the samples, not just the phase.
+constexpr int kGeometryChannels = 8;
+
+struct GeometryCaptures {
+    std::atomic<long> count{0};
+    float block[kMaxCaptures][kGeometryChannels][kBusFrames];
+};
+
 Captures* g_capture = nullptr;
-const float* g_inBuf[kBusChannels][2] = {};
+const float* g_inBuf[jb::asio::config::kMaxChannels][2] = {};
+GeometryCaptures* g_geometry = nullptr;
+
+float toneFor(int64_t block, int frame, int channel) {
+    const int64_t n = block * kBusFrames + frame;
+    const double t = double(n) / double(kBusSampleRate);
+    const double frequency = 110.0 * double(channel + 1);  // distinct per channel
+    return static_cast<float>(0.25 * std::sin(6.283185307179586 * frequency * t));
+}
 
 // --- soak marker reference --------------------------------------------------
 // The writer stamps every input frame with its absolute index (mod 65536), so
@@ -188,6 +209,21 @@ void onBufferSwitch(long doubleBufferIndex, jb::asio::AsioBool directProcess) {
         return;
     }
 
+    GeometryCaptures* geo = g_geometry;
+    if (geo) {
+        const long seq = geo->count.load(std::memory_order_relaxed);
+        if (seq >= kMaxCaptures) return;
+        for (int ch = 0; ch < kGeometryChannels; ++ch) {
+            const float* src = g_inBuf[ch][doubleBufferIndex & 1];
+            if (src)
+                memcpy(geo->block[seq][ch], src, sizeof(float) * kBusFrames);
+            else
+                memset(geo->block[seq][ch], 0, sizeof(float) * kBusFrames);
+        }
+        geo->count.store(seq + 1, std::memory_order_release);
+        return;
+    }
+
     Captures* cap = g_capture;
     if (!cap) return;
     const long seq = cap->count.load(std::memory_order_relaxed);
@@ -254,15 +290,18 @@ struct TestBus {
     int64_t blockBytes = 0;
     int blockFrames = kBusFrames;
     int capacityBlocks = kBusCapacity;
+    int channels = kBusChannels;
+    float (*sampler)(int64_t, int, int) = &sampleFor;
     wchar_t mapName[160] = {};
 
     bool create(const wchar_t* busName, int framesPerBlock = kBusFrames,
-                int capacity = kBusCapacity) {
+                int capacity = kBusCapacity, int channelCount = kBusChannels) {
         blockFrames = framesPerBlock;
         capacityBlocks = capacity;
+        channels = channelCount;
         swprintf_s(mapName, L"Local\\JockeyBox.Bus.%s", busName);
         const int64_t size = jb::asio::bus::kPayloadOffset +
-                             int64_t(capacityBlocks) * blockFrames * kBusChannels * 4;
+                             int64_t(capacityBlocks) * blockFrames * channels * 4;
         map = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE,
                                  static_cast<DWORD>(size >> 32),
                                  static_cast<DWORD>(size & 0xffffffffu), mapName);
@@ -278,7 +317,7 @@ struct TestBus {
         put32(jb::asio::bus::kVersionOffset, jb::asio::bus::kVersion);
         put32(jb::asio::bus::kHeaderSizeOffset, jb::asio::bus::kHeaderSize);
         put32(jb::asio::bus::kSampleRateOffset, kBusSampleRate);
-        put32(jb::asio::bus::kChannelsOffset, kBusChannels);
+        put32(jb::asio::bus::kChannelsOffset, channels);
         put32(jb::asio::bus::kBlockFramesOffset, blockFrames);
         put32(jb::asio::bus::kCapacityBlocksOffset, capacityBlocks);
         put32(jb::asio::bus::kReaderSlotCountFieldOffset, jb::asio::bus::kReaderSlotCount);
@@ -288,7 +327,7 @@ struct TestBus {
             base + jb::asio::bus::kWriteBlockIndexOffset);
         write->store(0, std::memory_order_release);
         payload = base + jb::asio::bus::kPayloadOffset;
-        blockBytes = int64_t(blockFrames) * kBusChannels * 4;
+        blockBytes = int64_t(blockFrames) * channels * 4;
         return true;
     }
 
@@ -298,10 +337,10 @@ struct TestBus {
         float* dst = reinterpret_cast<float*>(
             payload + (block % capacityBlocks) * blockBytes);
         for (int f = 0; f < blockFrames; ++f)
-            for (int c = 0; c < kBusChannels; ++c)
-                dst[f * kBusChannels + c] =
+            for (int c = 0; c < channels; ++c)
+                dst[f * channels + c] =
                     marker ? static_cast<float>((block * blockFrames + f) % 65536)
-                           : sampleFor(block, f, c);
+                           : sampler(block, f, c);
         write->store(block + 1, std::memory_order_release);
     }
 
@@ -1448,16 +1487,317 @@ static bool parseSoakOneArgs(int argc, wchar_t** argv, double& seconds, int& ppm
     return false;
 }
 
+// ---- line model: three Stereo Lines plus two Mono Lines ---------------------
+//
+// The fixture is the same file the app's writer test pins byte for byte. If the
+// app's writer and this reader disagree about the file, one of the two tests
+// fails; neither side is allowed to guess and present the disagreement as audio.
+
+bool sameBits(float a, float b) {
+    return std::memcmp(&a, &b, sizeof(float)) == 0;
+}
+
+int runChannelGeometryTest(const wchar_t* configPath) {
+    int failures = 0;
+    wprintf(L"\n== line model: config -> N channels -> ASIO inputs ==\n");
+    wprintf(L"config            : %s\n", configPath);
+
+    jb::asio::config::Device device;
+    const bool loaded = jb::asio::config::load(configPath, device);
+    const bool shape =
+        loaded && device.loaded && device.channels == kGeometryChannels &&
+        device.lineCount == 5 &&
+        std::strcmp(device.lines[0].id, "deck-a") == 0 && device.lines[0].channels == 2 &&
+        std::strcmp(device.lines[1].id, "deck-b") == 0 && device.lines[1].channels == 2 &&
+        std::strcmp(device.lines[2].id, "deck-c") == 0 && device.lines[2].channels == 2 &&
+        std::strcmp(device.lines[3].id, "mic-1") == 0 && device.lines[3].channels == 1 &&
+        std::strcmp(device.lines[4].id, "mic-2") == 0 && device.lines[4].channels == 1;
+    if (!shape) {
+        wprintf(L"config parse      : WRONG (%d lines, %d channels, error '%hs')\n",
+                device.lineCount, device.channels, device.error);
+        return 1;
+    }
+    wprintf(L"config parse      : 5 lines (3 stereo + 2 mono) = %d channels OK\n",
+            device.channels);
+
+    SetEnvironmentVariableW(jb::asio::config::kEnvOverride, configPath);
+
+    wchar_t busName[64];
+    char busNameA[64];
+    swprintf_s(busName, L"lines-%lu", GetCurrentProcessId());
+    sprintf_s(busNameA, "lines-%lu", GetCurrentProcessId());
+
+    TestBus bus;
+    if (!bus.create(busName, kBusFrames, kBusCapacity, kGeometryChannels)) {
+        wprintf(L"FATAL: could not create the 8-channel section\n");
+        return 1;
+    }
+    bus.sampler = &toneFor;
+
+    auto captures = std::unique_ptr<GeometryCaptures>(new GeometryCaptures());
+    jb::asio::IASIO* driver = openDriver(busNameA);
+    if (!driver) {
+        wprintf(L"FATAL: could not create the driver\n");
+        bus.close();
+        return 1;
+    }
+
+    jb::asio::AsioCallbacks callbacks = {onBufferSwitch, onSampleRateChanged,
+                                         onAsioMessage, onBufferSwitchTimeInfo};
+    jb::asio::AsioBufferInfo infos[kGeometryChannels * 2] = {};
+    for (long i = 0; i < kGeometryChannels; ++i) {
+        infos[i].isInput = jb::asio::kAsioTrue;
+        infos[i].channelNum = i;
+        infos[kGeometryChannels + i].isInput = jb::asio::kAsioFalse;
+        infos[kGeometryChannels + i].channelNum = i;
+    }
+
+    long inChannels = 0, outChannels = 0;
+    driver->getChannels(&inChannels, &outChannels);
+    const bool channelsOk =
+        inChannels == kGeometryChannels && outChannels == kGeometryChannels;
+    wprintf(L"getChannels       : in %ld, out %ld (expected %d) %s\n", inChannels,
+            outChannels, kGeometryChannels, channelsOk ? L"OK" : L"WRONG");
+    if (!channelsOk) failures++;
+
+    if (driver->createBuffers(infos, kGeometryChannels * 2, kBusFrames, &callbacks) !=
+        jb::asio::kAseOk) {
+        wprintf(L"FATAL: createBuffers failed for 8 channels\n");
+        driver->Release();
+        bus.close();
+        return 1;
+    }
+    for (long ch = 0; ch < kGeometryChannels; ++ch) {
+        g_inBuf[ch][0] = static_cast<const float*>(infos[ch].buffers[0]);
+        g_inBuf[ch][1] = static_cast<const float*>(infos[ch].buffers[1]);
+    }
+
+    // Pre-publish the cushion so the first callbacks are not starved, then join.
+    for (int64_t block = 0; block < 3; ++block) bus.publish(block);
+
+    g_geometry = captures.get();
+    if (driver->start() != jb::asio::kAseOk) {
+        wprintf(L"FATAL: start failed\n");
+        g_geometry = nullptr;
+        driver->Release();
+        bus.close();
+        return 1;
+    }
+
+    {
+        long inLat = 0, outLat = 0;
+        driver->getLatencies(&inLat, &outLat);
+        const long expected = kBusFrames + 3 * kBusFrames;
+        const bool ok = std::labs(inLat - expected) <= kBusFrames &&
+                        outLat == kBusFrames;
+        wprintf(L"reported latency  : in %ld (measured %ld, one block tolerance), out %ld %s\n",
+                inLat, expected, outLat, ok ? L"OK" : L"WRONG");
+        if (!ok) failures++;
+    }
+
+    const int64_t wanted = 64;
+    const int64_t last = wanted;   // blocks 0..2 were pre-published; publish 3..63 now
+    int timeouts = 0;
+    int claimedSlot = -1;
+    LARGE_INTEGER freq;
+    QueryPerformanceFrequency(&freq);
+    for (int64_t block = 3; block < last; ++block) {
+        bus.publish(block);
+        const int slot = bus.activeSlot();
+        if (slot < 0) {
+            timeouts++;
+            break;
+        }
+        claimedSlot = slot;
+        const long long limit = qpcTicks() + freq.QuadPart / 5;  // 200 ms
+        while (bus.slotValue(slot, jb::asio::bus::kSlotReadBlockIndex) < block + 1 &&
+               qpcTicks() < limit) {
+            Sleep(0);
+        }
+        if (bus.slotValue(slot, jb::asio::bus::kSlotReadBlockIndex) < block + 1)
+            timeouts++;
+    }
+
+    const long long trims =
+        claimedSlot >= 0 ? bus.slotValue(claimedSlot, jb::asio::bus::kSlotTrims) : -1;
+    const long long underruns =
+        claimedSlot >= 0 ? bus.slotValue(claimedSlot, jb::asio::bus::kSlotUnderruns) : -1;
+    const long long corrections =
+        claimedSlot >= 0 ? bus.slotValue(claimedSlot, jb::asio::bus::kSlotCorrections) : -1;
+    driver->stop();
+    g_geometry = nullptr;
+
+    const long captured = captures->count.load(std::memory_order_acquire);
+    long matched = 0, mismatched = 0, silent = 0;
+    int64_t expect = 0;
+    for (long i = 0; i < captured && expect < last; ++i) {
+        bool blockSilentNow = true;
+        bool blockMatches = true;
+        for (int ch = 0; ch < kGeometryChannels; ++ch) {
+            for (int f = 0; f < kBusFrames; ++f) {
+                const float value = captures->block[i][ch][f];
+                if (value != 0.0f) blockSilentNow = false;
+                if (!sameBits(value, toneFor(expect, f, ch))) blockMatches = false;
+            }
+        }
+        if (blockMatches) {
+            matched++;
+            expect++;
+        } else if (blockSilentNow) {
+            silent++;
+        } else {
+            mismatched++;
+            expect++;
+        }
+    }
+
+    const bool streamOk = matched == wanted && mismatched == 0 && timeouts == 0;
+    wprintf(L"stream            : %ld/%ld blocks bit-exact, %ld mismatched, %ld silent "
+            L"lead-in, %d timeouts %s\n",
+            matched, static_cast<long>(wanted), mismatched, silent, timeouts,
+            streamOk ? L"OK" : L"WRONG");
+    if (!streamOk) failures++;
+
+    const bool countersOk = trims == 0 && underruns == 0 && corrections == 0;
+    wprintf(L"counters          : trims %lld, underruns %lld, corrections %lld %s\n",
+            trims, underruns, corrections, countersOk ? L"OK" : L"WRONG");
+    if (!countersOk) failures++;
+
+    driver->disposeBuffers();
+    driver->Release();
+    bus.close();
+
+    // --- a bus of the wrong width is refused, never interpreted ----------------
+    {
+        wchar_t narrowName[64];
+        char narrowNameA[64];
+        swprintf_s(narrowName, L"lines-narrow-%lu", GetCurrentProcessId());
+        sprintf_s(narrowNameA, "lines-narrow-%lu", GetCurrentProcessId());
+        TestBus narrow;
+        if (narrow.create(narrowName, kBusFrames, kBusCapacity, 2)) {
+            auto narrowCaptures =
+                std::unique_ptr<GeometryCaptures>(new GeometryCaptures());
+            jb::asio::IASIO* bad = openDriver(narrowNameA);
+            if (bad) {
+                jb::asio::AsioBufferInfo narrowInfos[kGeometryChannels * 2] = {};
+                for (long i = 0; i < kGeometryChannels; ++i) {
+                    narrowInfos[i].isInput = jb::asio::kAsioTrue;
+                    narrowInfos[i].channelNum = i;
+                    narrowInfos[kGeometryChannels + i].isInput = jb::asio::kAsioFalse;
+                    narrowInfos[kGeometryChannels + i].channelNum = i;
+                }
+                bad->createBuffers(narrowInfos, kGeometryChannels * 2, kBusFrames,
+                                   &callbacks);
+                for (long ch = 0; ch < kGeometryChannels; ++ch) {
+                    g_inBuf[ch][0] =
+                        static_cast<const float*>(narrowInfos[ch].buffers[0]);
+                    g_inBuf[ch][1] =
+                        static_cast<const float*>(narrowInfos[ch].buffers[1]);
+                }
+                g_geometry = narrowCaptures.get();
+                bad->start();
+                for (int i = 0; i < 8; ++i) {
+                    narrow.publish(i);
+                    Sleep(4);
+                }
+                const int slot = narrow.activeSlot();
+                char error[124] = {};
+                bad->getErrorMessage(error);
+                bad->stop();
+                g_geometry = nullptr;
+
+                bool silent = true;
+                const long count = narrowCaptures->count.load();
+                for (long i = 0; i < count; ++i)
+                    for (int ch = 0; ch < kGeometryChannels; ++ch)
+                        for (int f = 0; f < kBusFrames; ++f)
+                            if (narrowCaptures->block[i][ch][f] != 0.0f) silent = false;
+
+                const bool mismatchOk =
+                    slot < 0 && silent && count > 0 && std::strstr(error, "channels");
+                wprintf(L"width mismatch    : slot %d, %ld callbacks all silent, error "
+                        L"'%hs' %s\n",
+                        slot, count, error, mismatchOk ? L"OK" : L"WRONG");
+                if (!mismatchOk) failures++;
+                bad->disposeBuffers();
+                bad->Release();
+            }
+            narrow.close();
+        }
+    }
+
+    // --- a config edit is applied by a fresh host instance ---------------------
+    {
+        wchar_t modified[MAX_PATH] = {};
+        wchar_t temp[MAX_PATH] = {};
+        GetTempPathW(MAX_PATH, temp);
+        swprintf_s(modified, L"%sjb-lines-%lu.json", temp, GetCurrentProcessId());
+        const char* text =
+            "{\"version\":1,\"lines\":["
+            "{\"id\":\"l1\",\"name\":\"L1\",\"type\":\"stereo\",\"source\":\"\",\"gain\":1,\"mute\":false},"
+            "{\"id\":\"l2\",\"name\":\"L2\",\"type\":\"stereo\",\"source\":\"\",\"gain\":1,\"mute\":false},"
+            "{\"id\":\"l3\",\"name\":\"L3\",\"type\":\"stereo\",\"source\":\"\",\"gain\":1,\"mute\":false},"
+            "{\"id\":\"l4\",\"name\":\"L4\",\"type\":\"stereo\",\"source\":\"\",\"gain\":1,\"mute\":false},"
+            "{\"id\":\"l5\",\"name\":\"L5\",\"type\":\"mono\",\"source\":\"\",\"gain\":1,\"mute\":false},"
+            "{\"id\":\"l6\",\"name\":\"L6\",\"type\":\"mono\",\"source\":\"\",\"gain\":1,\"mute\":false}"
+            "]}";
+        HANDLE file = CreateFileW(modified, GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                                  FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (file != INVALID_HANDLE_VALUE) {
+            DWORD written = 0;
+            WriteFile(file, text, static_cast<DWORD>(std::strlen(text)), &written, nullptr);
+            CloseHandle(file);
+
+            SetEnvironmentVariableW(jb::asio::config::kEnvOverride, modified);
+            wchar_t restartedName[64];
+            char restartedNameA[64];
+            swprintf_s(restartedName, L"lines-restarted-%lu", GetCurrentProcessId());
+            sprintf_s(restartedNameA, "lines-restarted-%lu", GetCurrentProcessId());
+            jb::asio::IASIO* restarted = openDriver(restartedNameA);
+            if (restarted) {
+                long a = 0, b = 0;
+                restarted->getChannels(&a, &b);
+                const bool ok = a == 10 && b == 10;
+                wprintf(L"config edit       : new host instance sees %ld channels "
+                        L"(expected 10) %s\n",
+                        a, ok ? L"OK" : L"WRONG");
+                if (!ok) failures++;
+                restarted->Release();
+            } else {
+                wprintf(L"config edit       : WRONG (no restart instance)\n");
+                failures++;
+            }
+            DeleteFileW(modified);
+            SetEnvironmentVariableW(jb::asio::config::kEnvOverride, configPath);
+        }
+    }
+
+    wprintf(L"line model        : %s\n", failures == 0 ? L"PASS" : L"FAIL");
+    return failures;
+}
+
 int wmain(int argc, wchar_t** argv) {
     wchar_t dllPath[MAX_PATH] = {};
     if (argc > 1 && wcscmp(argv[1], L"--soak") != 0 &&
-        wcscmp(argv[1], L"--soak-one") != 0) {
+        wcscmp(argv[1], L"--soak-one") != 0 &&
+        wcscmp(argv[1], L"--config-test") != 0) {
         wcscpy_s(dllPath, argv[1]);
     } else {
         GetModuleFileNameW(nullptr, dllPath, MAX_PATH);
         wchar_t* slash = wcsrchr(dllPath, L'\\');
         if (slash) *slash = L'\0';
         wcscat_s(dllPath, L"\\JockeyBox.Asio.dll");
+    }
+
+    // Every pre-existing pass assumes the legacy stereo pair. Point the driver at a
+    // path that does not exist, so whatever the machine's app has configured cannot
+    // change the width under those tests. --config-test sets its own path.
+    {
+        wchar_t temp[MAX_PATH] = {};
+        wchar_t missing[MAX_PATH] = {};
+        GetTempPathW(MAX_PATH, temp);
+        swprintf_s(missing, L"%sjb-no-config-%lu.json", temp, GetCurrentProcessId());
+        SetEnvironmentVariableW(jb::asio::config::kEnvOverride, missing);
     }
 
     wprintf(L"DLL              : %s\n", dllPath);
@@ -1470,6 +1810,13 @@ int wmain(int argc, wchar_t** argv) {
     if (FAILED(hr)) {
         wprintf(L"FATAL: CoInitializeEx 0x%08lX\n", static_cast<unsigned long>(hr));
         return 1;
+    }
+
+    if (argc > 2 && wcscmp(argv[1], L"--config-test") == 0) {
+        const int failures = runChannelGeometryTest(argv[2]);
+        CoUninitialize();
+        unregisterInHkcu();
+        return failures;
     }
 
     double soakSeconds = 0.0;

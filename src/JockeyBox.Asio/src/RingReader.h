@@ -95,7 +95,8 @@ public:
     // multiple of the ring block (512 vs 480) needs that cushion: both sides
     // average the same rate, but the writer publishes in whole blocks, so a
     // zero-cushion reader starves at every block edge. 0 keeps "join at newest".
-    bool attach(const char* busName, int32_t prefillFrames = 0) noexcept {
+    bool attach(const char* busName, int32_t prefillFrames = 0,
+                int32_t expectedChannels = 0) noexcept {
         detach();
         if (!busName || !*busName) return false;
         if (::lstrlenA(busName) > 64) return false;
@@ -131,6 +132,16 @@ public:
         const int32_t blockFrames = *reinterpret_cast<const int32_t*>(base + kBlockFramesOffset);
         const int32_t capacity = *reinterpret_cast<const int32_t*>(base + kCapacityBlocksOffset);
         const int32_t payloadOffset = *reinterpret_cast<const int32_t*>(base + kPayloadOffsetFieldOffset);
+        m_lastSeenChannels = channels;
+
+        // Geometry is agreed before a slot is claimed: a writer publishing 2
+        // channels into a device configured for 8 would be read with a stride the
+        // payload does not have. Refuse the ring instead of reinterpreting bytes.
+        if (expectedChannels > 0 && channels != expectedChannels) {
+            ::UnmapViewOfFile(base);
+            ::CloseHandle(map);
+            return false;
+        }
 
         int slot = -1;
         for (int i = 0; i < kReaderSlotCount; ++i) {
@@ -473,6 +484,9 @@ public:
     }
 
     int32_t channels() const noexcept { return m_channels; }
+    // The last channel count seen in a header, kept even when the ring was
+    // refused: the driver names it in the mismatch message.
+    int32_t lastSeenChannels() const noexcept { return m_lastSeenChannels; }
     int32_t blockFrames() const noexcept { return m_blockFrames; }
     // Whole-block cushion actually used by attach(), in frames. 0 until attached,
     // or when attached at the newest block. getLatencies() adds this to the host
@@ -551,6 +565,7 @@ private:
     std::atomic<int64_t>* m_corrections = nullptr;
     std::atomic<int64_t>* m_underruns = nullptr;
     std::atomic<int32_t>* m_slotActive = nullptr;
+    int32_t m_lastSeenChannels = 0;
 };
 
 }  // namespace jb::asio::bus
