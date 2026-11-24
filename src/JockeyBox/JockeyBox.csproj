@@ -80,13 +80,7 @@
     <ProjectReference Include="..\JockeyBox.Ipc\JockeyBox.Ipc.csproj" />
   </ItemGroup>
 
-  <!-- Ensure Accessibility.dll is copied to publish/output for WPF ToolTip/Popup MSAA bridge.
-       SkipAccessibilityCopy=true is the negative control for the popup probe: a probe that also
-       passes with the copy removed would not prove the copy is what fixes the popup. -->
-  <Target Name="CopyAccessibilityDll" AfterTargets="ResolveReferences"
-          Condition="'$(SkipAccessibilityCopy)' != 'true'">
-    <ItemGroup>
-      <ReferenceCopyLocalPaths Include="@(ReferencePath)" Condition="'%(FileName)' == 'Accessibility'" />
-    </ItemGroup>
-  </Target>
+  <!-- No copy target for Accessibility.dll: the ToolTip/Popup popup path resolves it from the
+       runtime pack either way (verified by the popup probe), and it must never be supplied by a
+       ref-pack copy, so do not re-add a ReferenceCopyLocalPaths shim for it. -->
 </Project>
