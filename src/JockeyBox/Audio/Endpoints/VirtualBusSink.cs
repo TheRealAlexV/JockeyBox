@@ -7,8 +7,14 @@ using JockeyBox.Tools;
 namespace JockeyBox.Audio.Endpoints;
 
 /// <summary>
-/// The app's producer for the virtual ASIO transport ring: one bus, published to
+/// The app's producer for the virtual ASIO transport ring: one bus, published to the driver's
+/// <c>Global\JockeyBox.Bus.&lt;name&gt;</c> when it exists, else to
 /// <c>Local\JockeyBox.Bus.&lt;name&gt;</c> so the native driver has audio to serve.
+///
+/// <para><b>Who owns the ring.</b> With the kernel driver installed, the driver creates the
+/// <c>Global\</c> section and the app attaches: it adopts the creator's geometry and writes no
+/// header byte. Without a driver the app creates its <c>Local\</c> section exactly as before.
+/// A driver section whose geometry does not match this device is refused here, never re-created.</para>
 ///
 /// <para><b>Lifecycle.</b> The writer is opened once when the route is applied and
 /// lives until the route changes or the engine stops. Nothing is created, copied
@@ -103,11 +109,30 @@ public sealed class VirtualBusSink : IAudioSink
 
         try
         {
-            var writer = VirtualBusWriter.Open(sectionName, sampleRate, channels, blockFrames,
-                capacityBlocks);
-            Log.Info($"virtual ASIO ring '{sectionName}': {channels} ch @ {sampleRate} Hz, " +
-                     $"block {blockFrames}, {capacityBlocks} blocks " +
-                     $"({BusLayout.MapNameFor(sectionName, BusScope.Local)})");
+            VirtualBusWriter writer;
+            if (BusLayout.GlobalSectionExists(sectionName))
+            {
+                // The driver publishes the pair's ring, so the app is the attacher: it adopts
+                // the creator's geometry and never writes a header byte. A section that exists
+                // but does not match this device's geometry is refused here rather than
+                // falling back to a Local\ section, which would leave the pair silently mute.
+                writer = VirtualBusWriter.Attach(sectionName, BusScope.Global,
+                    channels: channels, blockFrames: blockFrames, capacityBlocks: capacityBlocks);
+                Log.Info($"virtual ASIO ring '{sectionName}': attached to the driver's " +
+                         $"{BusLayout.MapNameFor(sectionName, BusScope.Global)} " +
+                         $"({writer.Channels} ch @ {writer.SampleRate} Hz, block {writer.BlockFrames}, " +
+                         $"{writer.CapacityBlocks} blocks)");
+            }
+            else
+            {
+                // No driver section: nothing is installed, so create the Local\ ring exactly as
+                // an app-only install always has.
+                writer = VirtualBusWriter.Open(sectionName, sampleRate, channels, blockFrames,
+                    capacityBlocks);
+                Log.Info($"virtual ASIO ring '{sectionName}': {channels} ch @ {sampleRate} Hz, " +
+                         $"block {blockFrames}, {capacityBlocks} blocks " +
+                         $"({BusLayout.MapNameFor(sectionName, BusScope.Local)})");
+            }
             return new VirtualBusSink(sectionName, writer, channels, blockFrames, capacityBlocks);
         }
         catch (Exception ex)

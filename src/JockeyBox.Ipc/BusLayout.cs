@@ -180,6 +180,67 @@ public static class BusLayout
     }
 
     /// <summary>
+    /// Whether the driver has published its <c>Global\</c> section for this bus. Opens it
+    /// read-write as a probe and closes it again: the caller attaches next, and a section this
+    /// probe cannot open read-write is one the sink must not diagnose as absent, so only
+    /// "not there" is answered false. Never creates anything.
+    /// </summary>
+    public static bool GlobalSectionExists(string name)
+    {
+        if (!OperatingSystem.IsWindows())
+            return false;
+
+        ValidateName(name);
+        try
+        {
+            using var probe = MemoryMappedFile.OpenExisting(
+                MapNameFor(name, BusScope.Global), MemoryMappedFileRights.ReadWrite);
+            return true;
+        }
+        catch (FileNotFoundException)
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Refuses an attach whose configured geometry differs from the creator's header.
+    /// The creator owns geometry; an attacher that adopts a different width deinterleaves
+    /// garbage in silence, so each mismatch is named with both values. A null expectation
+    /// means "adopt whatever the header declares", for callers that have no configured device.
+    /// </summary>
+    internal static void RequireGeometry(
+        string name,
+        int channels,
+        int blockFrames,
+        int capacityBlocks,
+        int? expectedChannels,
+        int? expectedBlockFrames,
+        int? expectedCapacityBlocks)
+    {
+        if (expectedChannels is int wantChannels && wantChannels != channels)
+        {
+            throw new VirtualBusException(
+                $"Bus '{name}' is configured for {wantChannels} channels but the section header " +
+                $"declares {channels} channels. Refusing to attach to a geometry the device does not match.");
+        }
+
+        if (expectedBlockFrames is int wantFrames && wantFrames != blockFrames)
+        {
+            throw new VirtualBusException(
+                $"Bus '{name}' is configured for {wantFrames} block frames but the section header " +
+                $"declares {blockFrames} block frames. Refusing to attach to a geometry the device does not match.");
+        }
+
+        if (expectedCapacityBlocks is int wantBlocks && wantBlocks != capacityBlocks)
+        {
+            throw new VirtualBusException(
+                $"Bus '{name}' is configured for {wantBlocks} blocks but the section header " +
+                $"declares {capacityBlocks} blocks. Refusing to attach to a geometry the device does not match.");
+        }
+    }
+
+    /// <summary>
     /// Validates the header of an already-created region and returns its geometry.
     /// Never writes a byte: the creator owns the header.
     /// </summary>
