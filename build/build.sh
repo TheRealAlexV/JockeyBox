@@ -156,3 +156,13 @@ if pub="$(counts "$PUBLISH_LOG")"; then
 fi
 
 echo "==> Done: $OUT/JockeyBox.exe"
+
+# This exe is a single-file bundle: the host unpacks its payload into
+# %TEMP%\.net\JockeyBox\<bundle id>\ before managed code runs, and WPF resolves
+# part of it lazily much later in the session. %TEMP% is deletable by any cleaner,
+# and losing those files fails a popup and then fails the process at exit. The
+# root is moved to %LOCALAPPDATA%\JockeyBox\runtime by scripts/deploy-portable.sh,
+# which is the only step that runs before a launch (no installer, no shortcut).
+# Deploy with that script; a hand copy of this exe alone ships the exposure.
+echo '==> Deploy note: scripts/deploy-portable.sh pins DOTNET_BUNDLE_EXTRACT_BASE_DIR'
+echo '    to %LOCALAPPDATA%\JockeyBox\runtime so the payload is out of reach of a %TEMP% cleaner.'
