@@ -175,9 +175,6 @@ public partial class MainWindow : Window
         Closed += (_, _) => CloseViewModel();
     }
 
-    // ---- TEMPORARY GEOMETRY PROBE (--geo-probe) -------------------------------
-    // Flag-guarded: with the flag absent this subscribes to nothing and the shipped
-    // layout is untouched. Remove before any fix commit.
     private static readonly bool GeoProbe =
         System.Linq.Enumerable.Contains(Environment.GetCommandLineArgs(), "--geo-probe");
 
@@ -194,48 +191,120 @@ public partial class MainWindow : Window
         Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(DumpGeometry));
     }
 
+    // ---- TEMPORARY GEOMETRY PROBE (--geo-probe) -------------------------------
+    // Numbers only: prints the layout inventory and the cell descendants. Flag-guarded.
     private void DumpGeometry()
     {
         var sb = new System.Text.StringBuilder();
         sb.AppendLine("geo: window " + ActualWidth.ToString("0.#") + "x" + ActualHeight.ToString("0.#"));
-        try { WalkGeometry(this, sb); } catch (Exception ex) { sb.AppendLine("geo: walk failed " + ex.GetType().Name + ": " + ex.Message); }
+        HeaderedContentControl? hdrCell = null, rowCell = null;
+        var cells = new System.Collections.Generic.List<HeaderedContentControl>();
+        Collect(this, cells);
+        foreach (var c in cells)
+        {
+            string h = c.Header as string ?? "";
+            if (hdrCell == null && h == "CHAIN") hdrCell = c;
+            else if (rowCell == null && h == "CH") rowCell = c;
+        }
+        DumpTree(this, sb);
+        if (hdrCell != null) { DumpGridOf(hdrCell, "hdrgrid", sb); DumpCell(hdrCell, "hdr", sb); }
+        else sb.AppendLine("geo: header CHAIN cell NOT FOUND");
+        if (rowCell != null) { DumpGridOf(rowCell, "rowgrid", sb); DumpCell(rowCell, "row", sb); }
+        else sb.AppendLine("geo: row CH cell NOT FOUND");
         string path = Environment.GetEnvironmentVariable("GEO_PROBE_OUT") ?? "geo-probe.txt";
         try { System.IO.File.WriteAllText(path, sb.ToString()); } catch { }
         Console.WriteLine(sb.ToString());
     }
 
-    private void WalkGeometry(DependencyObject root, System.Text.StringBuilder sb)
+    private static void Collect(DependencyObject root, System.Collections.Generic.List<HeaderedContentControl> into)
     {
         int n = VisualTreeHelper.GetChildrenCount(root);
         for (int i = 0; i < n; i++)
         {
-            var child = VisualTreeHelper.GetChild(root, i);
-            if (child is HeaderedContentControl hcc && hcc.IsVisible)
-            {
-                var p = hcc.TranslatePoint(new Point(0, 0), this);
-                sb.AppendLine("geo: cell hdr=" + (hcc.Header ?? "") + " x=" + p.X.ToString("0.#")
-                    + " w=" + hcc.ActualWidth.ToString("0.#")
-                    + " desired=" + hcc.DesiredSize.Width.ToString("0.#")
-                    + " margin=" + hcc.Margin.ToString() + " padding=" + hcc.Padding.ToString());
-            }
-            else if (child is FrameworkElement fe && fe.GetType().Name.Contains("Meter") && fe.IsVisible)
-            {
-                var p = fe.TranslatePoint(new Point(0, 0), this);
-                var pad = (fe as Control)?.Padding.ToString() ?? "-";
-                sb.AppendLine("geo: meter type=" + fe.GetType().Name + " x=" + p.X.ToString("0.#")
-                    + " w=" + fe.ActualWidth.ToString("0.#") + " margin=" + fe.Margin.ToString() + " padding=" + pad);
-            }
-            else if (child is Grid g && g.ColumnDefinitions.Count == 5 && g.IsVisible)
-            {
-                var p = g.TranslatePoint(new Point(0, 0), this);
-                var cols = new System.Text.StringBuilder();
-                foreach (ColumnDefinition c in g.ColumnDefinitions) cols.Append(c.ActualWidth.ToString("0.#")).Append('/');
-                sb.AppendLine("geo: grid x=" + p.X.ToString("0.#") + " w=" + g.ActualWidth.ToString("0.#")
-                    + " desired=" + g.DesiredSize.Width.ToString("0.#") + " cols=[" + cols + "]");
-            }
-            WalkGeometry(child, sb);
+            var c = VisualTreeHelper.GetChild(root, i);
+            if (c is HeaderedContentControl h) into.Add(h);
+            Collect(c, into);
         }
     }
+
+    private void DumpTree(DependencyObject root, System.Text.StringBuilder sb)
+    {
+        int n = VisualTreeHelper.GetChildrenCount(root);
+        for (int i = 0; i < n; i++)
+        {
+            var c = VisualTreeHelper.GetChild(root, i);
+            var fe = c as FrameworkElement;
+            string name = fe?.Name ?? "";
+            string dc = (fe?.DataContext?.GetType().Name) ?? "-";
+            if (c is Grid g)
+            {
+                var cols = new System.Text.StringBuilder();
+                foreach (ColumnDefinition cd in g.ColumnDefinitions)
+                {
+                    string unit = cd.Width.IsStar ? "*" : cd.Width.IsAuto ? "auto" : "px";
+                    cols.Append("(").Append(unit).Append(" val=").Append(cd.Width.Value.ToString("0.#"))
+                        .Append(" min=").Append(double.IsPositiveInfinity(cd.MinWidth) ? "inf" : cd.MinWidth.ToString("0.#"))
+                        .Append(" act=").Append(cd.ActualWidth.ToString("0.#")).Append(")");
+                }
+                sb.AppendLine("geo: G name=" + name + " dc=" + dc + " w=" + g.ActualWidth.ToString("0.#")
+                    + " desired=" + g.DesiredSize.Width.ToString("0.#") + " vis=" + g.IsVisible + " cols=" + cols);
+                if (g.ColumnDefinitions.Count > 0 && g.Children.Count > 0 && g.ColumnDefinitions.Count > 0)
+                {
+                    foreach (UIElement child in g.Children)
+                    {
+                        if (child is FrameworkElement cfe && Grid.GetColumn(cfe) == 0 && g.ColumnDefinitions[0].Width.IsStar)
+                            sb.AppendLine("geo:   starcol0 child=" + cfe.GetType().Name + " name=" + cfe.Name
+                                + " desired=" + cfe.DesiredSize.Width.ToString("0.#") + " act=" + cfe.ActualWidth.ToString("0.#"));
+                    }
+                }
+            }
+            else if (c is StackPanel || c is DockPanel || c is UniformGrid || c is WrapPanel)
+            {
+                sb.AppendLine("geo: P type=" + c.GetType().Name + " name=" + name + " dc=" + dc
+                    + " w=" + (fe?.ActualWidth ?? 0).ToString("0.#") + " desired=" + (fe?.DesiredSize.Width ?? 0).ToString("0.#"));
+            }
+            DumpTree(c, sb);
+        }
+    }
+
+    private void DumpGridOf(DependencyObject start, string tag, System.Text.StringBuilder sb)
+    {
+        DependencyObject? cur = start;
+        while (cur != null && !(cur is Grid)) cur = VisualTreeHelper.GetParent(cur);
+        if (cur is not Grid g) { sb.AppendLine("geo: " + tag + " grid NOT FOUND"); return; }
+        var cols = new System.Text.StringBuilder();
+        int i = 0;
+        foreach (ColumnDefinition cd in g.ColumnDefinitions)
+        {
+            string unit = cd.Width.IsStar ? "*" : cd.Width.IsAuto ? "auto" : "px";
+            cols.Append("[").Append(i++).Append(unit).Append(" val=").Append(cd.Width.Value.ToString("0.#"))
+                .Append(" min=").Append(cd.MinWidth.ToString("0.#")).Append(" act=").Append(cd.ActualWidth.ToString("0.#")).Append("]");
+        }
+        sb.AppendLine("geo: " + tag + " w=" + g.ActualWidth.ToString("0.#") + " desired=" + g.DesiredSize.Width.ToString("0.#") + " " + cols);
+    }
+
+    private static void DumpCell(DependencyObject cell, string tag, System.Text.StringBuilder sb)
+    {
+        sb.AppendLine("geo: cellstart " + tag);
+        int n = VisualTreeHelper.GetChildrenCount(cell);
+        for (int i = 0; i < n; i++) DumpDescendant(VisualTreeHelper.GetChild(cell, i), tag, 0, sb);
+    }
+
+    private static void DumpDescendant(DependencyObject d, string tag, int depth, System.Text.StringBuilder sb)
+    {
+        var fe = d as FrameworkElement;
+        var ctl = d as Control;
+        string text = (d as TextBlock)?.Text ?? "";
+        if (text.Length > 40) text = text.Substring(0, 40);
+        string pad = ctl != null ? ctl.Padding.ToString() : "-";
+        sb.AppendLine("geo:  " + tag + " d" + depth + " " + d.GetType().Name + " name=" + (fe?.Name ?? "")
+            + " w=" + (fe?.ActualWidth ?? 0).ToString("0.#") + " h=" + (fe?.ActualHeight ?? 0).ToString("0.#")
+            + " m=" + (fe?.Margin.ToString() ?? "-") + " p=" + pad
+            + " ha=" + (fe?.HorizontalAlignment.ToString() ?? "-") + " text=" + text);
+        int n = VisualTreeHelper.GetChildrenCount(d);
+        for (int i = 0; i < n; i++) DumpDescendant(VisualTreeHelper.GetChild(d, i), tag, depth + 1, sb);
+    }
+
 
 
     /// <summary>
