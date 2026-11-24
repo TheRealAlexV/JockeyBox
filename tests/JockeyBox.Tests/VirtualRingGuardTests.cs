@@ -310,6 +310,91 @@ public sealed class VirtualRingGuardTests
     }
 
     /// <summary>
+    /// The path this fix must not break: a section the driver owns, with no live app
+    /// writer claiming it, still opens. A fix that refused on the mere <i>presence</i> of
+    /// a claim file would refuse every real install the moment a writer had ever run on
+    /// that name, and silence the ring.
+    ///
+    /// <para>The section is stood in for by a writer whose claim handle is released while
+    /// the region stays open: the region is a driver-shaped ring with a stale (unheld)
+    /// claim file, which is the state a driver-created section leaves behind.</para>
+    /// </summary>
+    [Fact]
+    public void A_section_with_an_unheld_claim_file_still_opens()
+    {
+        string name = NewName();
+        var lines = new ConcurrentQueue<string>();
+        void Handler(string line) => lines.Enqueue(line);
+        Log.LineWritten += Handler;
+        try
+        {
+            using var creator = VirtualBusWriter.Open(name, Rate, Channels, Block,
+                VirtualBusSink.DefaultCapacityBlocks);
+
+            // Drop the single-writer claim, keep the region: the driver never creates a
+            // claim file, so this is the driver's own state once a writer has ever run.
+            var claim = typeof(VirtualBusWriter)
+                .GetField("_claim",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+                .GetValue(creator) as FileStream;
+            Assert.NotNull(claim);
+            claim!.Dispose();
+            Assert.True(File.Exists(BusLayout.LockPathFor(name)),
+                "the claim file is left behind, which is why existence cannot be the test");
+
+            bool driverSectionVisible = BusLayout.GlobalSectionExists(name);
+
+            using var sink = VirtualBusSink.TryOpen(name, Rate, Channels, Block, out string? error);
+            Assert.Null(error);
+            Assert.NotNull(sink);
+            Assert.Equal(name, sink!.SectionName);
+
+            // Where the driver's section is what the probe finds, the attach path is the
+            // one that must still be taken (this is the path the fix could have closed).
+            if (driverSectionVisible)
+                Assert.Contains(lines, line => line.Contains("attached to the driver's"));
+        }
+        finally
+        {
+            Log.LineWritten -= Handler;
+        }
+    }
+
+    /// <summary>
+    /// Pins the namespace assumption the ring-guard canary rests on: a <c>Local\</c>
+    /// section created by this process is reachable as <c>Global\</c> exactly when the
+    /// process is in session 0, where the two namespaces alias. If a future host stops
+    /// aliasing (or starts), this fails and the analysis behind the canary has changed.
+    /// </summary>
+    [Fact]
+    public void A_Local_section_is_reachable_as_Global_only_in_session_0()
+    {
+        string name = NewName();
+        using var local = System.IO.MemoryMappedFiles.MemoryMappedFile.CreateNew(
+            BusLayout.MapNameFor(name, BusScope.Local), 4096);
+
+        bool visibleAsGlobal;
+        try
+        {
+            using var global = System.IO.MemoryMappedFiles.MemoryMappedFile.OpenExisting(
+                BusLayout.MapNameFor(name, BusScope.Global));
+            visibleAsGlobal = true;
+        }
+        catch (FileNotFoundException)
+        {
+            visibleAsGlobal = false;
+        }
+
+        int session = System.Diagnostics.Process.GetCurrentProcess().SessionId;
+        if (session == 0)
+            Assert.True(visibleAsGlobal,
+                "session 0 must alias Local\\ and Global\\: the sink's driver check depends on it");
+        else
+            Assert.False(visibleAsGlobal,
+                $"session {session} must keep Local\\ and Global\\ apart; if this fails the namespace assumption has changed");
+    }
+
+    /// <summary>
     /// The success path still swaps: a re-apply that names a different, free bus
     /// installs the new producer, disposes the old one exactly once, and leaves the
     /// old section claimable again (a live writer would still hold it).
