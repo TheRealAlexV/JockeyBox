@@ -47,6 +47,9 @@ internal static class TestHome
         Directory.CreateDirectory(home);
         WriteSilentSettings(home);
         Environment.SetEnvironmentVariable(AppPaths.HomeVariable, home);
+        Environment.SetEnvironmentVariable(
+            JockeyBox.Audio.Virtual.VirtualDeviceConfig.ConfigPathEnvVar,
+            Path.Combine(home, JockeyBox.Audio.Virtual.VirtualDeviceConfig.FileName));
     }
 
     /// <summary>

@@ -56,6 +56,7 @@ public static class VirtualDeviceConfig
 {
     public const int Version = 1;
     public const string FileName = "virtual-device.json";
+    public const string ConfigPathEnvVar = "JOCKEYBOX_DEVICE_CONFIG";
 
     /// <summary>The device always exposes at least a stereo pair.</summary>
     public const int MinChannels = 2;
@@ -73,10 +74,47 @@ public static class VirtualDeviceConfig
     public const string RestartRequiredMessage =
         "Virtual device lines changed. Restart OBS (the ASIO host) to apply.";
 
-    public static string DirectoryPath => Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "JockeyBox");
+    public static string DirectoryPath
+    {
+        get
+        {
+            var env = Environment.GetEnvironmentVariable(ConfigPathEnvVar);
+            if (!string.IsNullOrWhiteSpace(env))
+            {
+                var dir = Path.GetDirectoryName(env.Trim());
+                if (!string.IsNullOrEmpty(dir)) return dir;
+            }
+            return Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "JockeyBox");
+        }
+    }
 
-    public static string DefaultPath => Path.Combine(DirectoryPath, FileName);
+    public static string DefaultPath
+    {
+        get
+        {
+            var env = Environment.GetEnvironmentVariable(ConfigPathEnvVar);
+            if (!string.IsNullOrWhiteSpace(env))
+            {
+                return env.Trim();
+            }
+            return Path.Combine(DirectoryPath, FileName);
+        }
+    }
+
+    /// <summary>
+    /// Builds the legacy stereo pair lines representing an unconfigured or empty line set.
+    /// </summary>
+    public static IReadOnlyList<VirtualLine> LegacyLines => new[]
+    {
+        new VirtualLine { Id = "line-1", Name = "Line 1", Kind = VirtualLineKind.Stereo, Source = "main" }
+    };
+
+    /// <summary>
+    /// Returns the effective line set: if lines is empty or null, returns <see cref="LegacyLines"/>.
+    /// </summary>
+    public static IReadOnlyList<VirtualLine> EffectiveLines(IReadOnlyList<VirtualLine>? lines) =>
+        lines is { Count: > 0 } ? lines : LegacyLines;
 
     /// <summary>Sum of the line widths, clamped to the device's bounds.</summary>
     public static int ChannelCount(IReadOnlyList<VirtualLine> lines)
@@ -100,6 +138,25 @@ public static class VirtualDeviceConfig
         var temporary = path + ".tmp";
         File.WriteAllText(temporary, text, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false));
         File.Move(temporary, path, overwrite: true);
+    }
+
+    /// <summary>
+    /// Saves the effective lines to disk, ensuring a failing write logs once and does not throw into the caller.
+    /// Returns true if saved successfully, false otherwise.
+    /// </summary>
+    public static bool TrySaveEffective(IReadOnlyList<VirtualLine>? lines, string? path = null)
+    {
+        try
+        {
+            var effective = EffectiveLines(lines);
+            Save(effective, path);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            JockeyBox.Tools.Log.Warn($"virtual device config could not be written to '{path ?? DefaultPath}': {ex.Message}");
+            return false;
+        }
     }
 
     public static IReadOnlyList<VirtualLine> Load(string? path = null)

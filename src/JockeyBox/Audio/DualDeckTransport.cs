@@ -7,6 +7,7 @@ using JockeyBox.Audio.Beat;
 using JockeyBox.Audio.Endpoints;
 using JockeyBox.Audio.Graph;
 using JockeyBox.Audio.Transition;
+using JockeyBox.Audio.Virtual;
 using JockeyBox.Playback;
 using JockeyBox.Settings;
 using JockeyBox.Tools;
@@ -919,6 +920,7 @@ public sealed class DualDeckTransport : IDisposable
             await Task.Yield();
 
             var settings = AppSettings.Load();
+            VirtualDeviceConfig.TrySaveEffective(settings.VirtualDeviceLines);
             var route = BuildRouteFromAppSettings(settings);
 
             Engine.MasterVolume = Math.Clamp(settings.MasterVolume, 0f, 1.2f);

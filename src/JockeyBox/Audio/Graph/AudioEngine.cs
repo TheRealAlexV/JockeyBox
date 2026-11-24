@@ -1013,7 +1013,7 @@ public sealed class AudioEngine : IDisposable
         // Persist before publishing: a crash between the two leaves the file and the
         // next launch agreeing, which a restart would fix, rather than a live device
         // that disagrees with its own file.
-        VirtualDeviceConfig.Save(lines);
+        VirtualDeviceConfig.TrySaveEffective(lines);
 
         lock (_sinkLock)
         {

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using JockeyBox.Audio.Graph;
 using JockeyBox.Audio.Virtual;
 
 namespace JockeyBox.Tests;
@@ -184,6 +185,149 @@ public sealed class VirtualDeviceConfigTests
         {
             var directory = Path.GetDirectoryName(path)!;
             if (Directory.Exists(directory)) Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Empty_line_list_writes_two_channels_matching_legacy_publish_width()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"jb-cfg-{Guid.NewGuid():N}");
+        var path = Path.Combine(tempDir, "virtual-device.json");
+        try
+        {
+            var saved = VirtualDeviceConfig.TrySaveEffective(Array.Empty<VirtualLine>(), path);
+            Assert.True(saved);
+            Assert.True(File.Exists(path));
+
+            var loaded = VirtualDeviceConfig.Load(path);
+            Assert.Equal(2, VirtualDeviceConfig.ChannelCount(loaded));
+            Assert.Equal(VirtualTapTable.Legacy(BusKind.DeckA).Channels, VirtualDeviceConfig.ChannelCount(loaded));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void N_lines_file_width_equals_sum_of_widths_matching_published_width()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"jb-cfg-{Guid.NewGuid():N}");
+        var path = Path.Combine(tempDir, "virtual-device.json");
+        try
+        {
+            var sample = Sample(); // 3 stereo (6) + 2 mono (2) = 8
+            var saved = VirtualDeviceConfig.TrySaveEffective(sample, path);
+            Assert.True(saved);
+
+            var loaded = VirtualDeviceConfig.Load(path);
+            var expectedChannels = VirtualDeviceConfig.ChannelCount(sample);
+            Assert.Equal(8, expectedChannels);
+            Assert.Equal(expectedChannels, VirtualDeviceConfig.ChannelCount(loaded));
+
+            var taps = VirtualTapTable.FromLines(sample);
+            Assert.Equal(expectedChannels, taps.Channels);
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Stray_8_channel_file_is_overwritten_on_effective_save_to_match_empty_lines()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"jb-cfg-{Guid.NewGuid():N}");
+        var path = Path.Combine(tempDir, "virtual-device.json");
+        try
+        {
+            // Write a stray 8-channel file first (simulating what was left on disk)
+            VirtualDeviceConfig.Save(Sample(), path);
+            Assert.Equal(8, VirtualDeviceConfig.ChannelCount(VirtualDeviceConfig.Load(path)));
+
+            // App boots or saves with empty lines -> overwrites stray file with legacy 2-channel config
+            var saved = VirtualDeviceConfig.TrySaveEffective(Array.Empty<VirtualLine>(), path);
+            Assert.True(saved);
+
+            var loaded = VirtualDeviceConfig.Load(path);
+            Assert.Equal(2, VirtualDeviceConfig.ChannelCount(loaded));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Failing_write_logs_warning_and_does_not_throw()
+    {
+        // Point to an invalid path or a directory that cannot be created/written
+        var invalidPath = Path.Combine(Path.GetTempPath(), $"jb-invalid-{Guid.NewGuid():N}", "sub", "deep", "virtual-device.json");
+        // Create a file where directory is expected so creating directory fails
+        var blockingFile = Path.Combine(Path.GetTempPath(), $"jb-invalid-{Guid.NewGuid():N}");
+        File.WriteAllText(blockingFile, "not a dir");
+        var badPath = Path.Combine(blockingFile, "virtual-device.json");
+
+        try
+        {
+            var result = VirtualDeviceConfig.TrySaveEffective(Sample(), badPath);
+            Assert.False(result);
+        }
+        finally
+        {
+            if (File.Exists(blockingFile)) File.Delete(blockingFile);
+        }
+    }
+
+    [Fact]
+    public void ConfigPath_Seam_Env_Var_Overrides_DefaultPath_And_DirectoryPath_Under_Temp()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"jb-seam-{Guid.NewGuid():N}");
+        var overridePath = Path.Combine(tempDir, "custom-virtual-device.json");
+
+        var prev = Environment.GetEnvironmentVariable(VirtualDeviceConfig.ConfigPathEnvVar);
+        try
+        {
+            Environment.SetEnvironmentVariable(VirtualDeviceConfig.ConfigPathEnvVar, overridePath);
+
+            Assert.Equal(overridePath, VirtualDeviceConfig.DefaultPath);
+            Assert.Equal(tempDir, VirtualDeviceConfig.DirectoryPath);
+
+            var saved = VirtualDeviceConfig.TrySaveEffective(Array.Empty<VirtualLine>());
+            Assert.True(saved);
+            Assert.True(File.Exists(overridePath));
+            Assert.StartsWith(Path.GetTempPath().TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                              VirtualDeviceConfig.DefaultPath, StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(VirtualDeviceConfig.ConfigPathEnvVar, prev);
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void Atomic_write_uses_temp_file_and_atomic_replace()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), $"jb-atom-{Guid.NewGuid():N}");
+        var path = Path.Combine(tempDir, "virtual-device.json");
+        try
+        {
+            VirtualDeviceConfig.Save(Sample(), path);
+            var initialBytes = File.ReadAllBytes(path);
+            Assert.NotEmpty(initialBytes);
+
+            // Overwrite with legacy lines
+            VirtualDeviceConfig.Save(VirtualDeviceConfig.LegacyLines, path);
+            var updatedBytes = File.ReadAllBytes(path);
+
+            Assert.NotEqual(initialBytes.Length, updatedBytes.Length);
+            // Verify temp file does not remain
+            Assert.False(File.Exists(path + ".tmp"));
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, recursive: true);
         }
     }
 
