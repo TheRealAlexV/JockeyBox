@@ -45,6 +45,7 @@ public sealed class JitterRing : ISampleProvider
 
     /// <summary>Frames actually buffered — the full/empty discriminator.</summary>
     private int _count;
+    private long _readCalls;
     private long _lastCorrectionTicks;
     private long _droppedBlocks;
     private long _insertedBlocks;
@@ -67,6 +68,13 @@ public sealed class JitterRing : ISampleProvider
     public int TargetFrames { get; set; }
     public int LowFrames { get; set; }
     public int HighFrames { get; set; }
+
+    /// <summary>
+    /// How many times <see cref="Read"/> was called. Invocations, never frames: an
+    /// underrunning ring pads silence and still returns, so the frames a consumer
+    /// took read as zero on a perfectly healthy device that is merely starved.
+    /// </summary>
+    public long ReadCalls => Interlocked.Read(ref _readCalls);
 
     public long DroppedBlocks => _droppedBlocks;
     public long InsertedBlocks => _insertedBlocks;
@@ -129,6 +137,7 @@ public sealed class JitterRing : ISampleProvider
 
     public int Read(float[] buffer, int offset, int count)
     {
+        Interlocked.Increment(ref _readCalls);
         if (count % _channels != 0) count -= count % _channels;
         int frames = count / _channels;
         int take = Math.Min(frames, _count);

@@ -956,6 +956,8 @@ public sealed class AudioEngine : IDisposable
 
                 if (firstSink.HasFailed)
                 {
+                    Log.Warn($"output '{firstSink.DeviceName}': {firstSink.FailureReason ?? "failed"}; " +
+                             "dropping this device session - buses routed to it are silent until the audio route is reapplied");
                     OutputFault?.Invoke(firstSink.DeviceName);
                     lock (_sinkLock)
                     {
@@ -1349,6 +1351,28 @@ public sealed class AudioEngine : IDisposable
         DeckA.Dispose();
         DeckB.Dispose();
     }
+
+    // ------------------------------------------------------------ test seam
+
+    /// <summary>
+    /// Point the render loop at fixed sinks. A real route is the only other way to set
+    /// the pacing sink and the virtual-ring snapshot, and a route needs WASAPI; the
+    /// offline loop bypasses RenderLoop and its gate entirely, so the gate itself has
+    /// to be reachable from a test.
+    /// </summary>
+    internal void AttachSinksForTest(IAudioSink? pacer, VirtualBusSink? virtualSink)
+    {
+        lock (_sinkLock)
+        {
+            _firstSink = pacer;
+            _virtualSink = virtualSink;
+            Volatile.Write(ref _virtualRing,
+                virtualSink is null ? null : new VirtualRing(virtualSink, BusKind.Monitor));
+        }
+    }
+
+    /// <summary>The sink the render loop is pacing against (test seam).</summary>
+    internal IAudioSink? FirstSinkForTest => Volatile.Read(ref _firstSink);
 
     /// <summary>Per-frame gain for one deck: crossfader envelope × deck volume × duck.</summary>
 }

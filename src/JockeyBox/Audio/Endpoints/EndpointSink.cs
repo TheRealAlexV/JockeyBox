@@ -24,6 +24,7 @@ public sealed class EndpointSink : IAudioSink
 {
     private readonly MMDevice _device;
     private readonly WasapiOut _out;
+    private readonly DrainMonitor _drain;
     private bool _disposed;
 
     private EndpointSink(MMDevice device, WasapiOut output, JitterRing ring, string deviceName,
@@ -31,6 +32,7 @@ public sealed class EndpointSink : IAudioSink
     {
         _device = device;
         _out = output;
+        _drain = new DrainMonitor(Environment.TickCount64);
         Ring = ring;
         DeviceName = deviceName;
         DeviceRate = deviceRate;
@@ -108,8 +110,39 @@ public sealed class EndpointSink : IAudioSink
     /// <summary>Drift correction; the engine calls this about once a second.</summary>
     public void Maintain(int blockFrames) => Ring.Maintain(blockFrames);
 
-    /// <summary>True when the device has stopped (unplugged, session lost).</summary>
-    public bool HasFailed => !_disposed && _out.PlaybackState == PlaybackState.Stopped;
+    /// <summary>
+    /// How long a device may report Running while pulling nothing from its ring
+    /// before it counts as failed. The pacing sink's target depth is 120 ms, so 250 ms
+    /// clears a GC stop or late wake-up with 130 ms to spare, and the resulting hole
+    /// in virtual publishing (at most ~25 blocks) stays inside the ASIO ring's
+    /// ~52-block cushion.
+    /// </summary>
+    public const int StallTimeoutMs = 250;
+
+    /// <summary>
+    /// True when the device has stopped (unplugged, session lost) or reports Playing
+    /// while its consumer pulls no audio at all. The second case is the one that used
+    /// to be invisible: the session stays up, the ring fills, and pacing against it
+    /// stalls every bus in the graph.
+    /// </summary>
+    public bool HasFailed => !_disposed && (Stopped() || NotDraining());
+
+    /// <summary>Why the sink failed; null while healthy. Set once, on first detection.</summary>
+    public string? FailureReason { get; private set; }
+
+    private bool Stopped()
+    {
+        if (_out.PlaybackState != PlaybackState.Stopped) return false;
+        FailureReason ??= "the device stopped (unplugged or session lost)";
+        return true;
+    }
+
+    private bool NotDraining()
+    {
+        if (!_drain.Stalled(Ring.ReadCalls, Environment.TickCount64, StallTimeoutMs)) return false;
+        FailureReason ??= _drain.Reason;
+        return true;
+    }
 
     public void Dispose()
     {
@@ -118,5 +151,36 @@ public sealed class EndpointSink : IAudioSink
         try { _out.Stop(); } catch { }
         try { _out.Dispose(); } catch { }
         try { _device.Dispose(); } catch { }
+    }
+}
+
+/// <summary>
+/// "Is the consumer still pulling?" as a predicate over two numbers, so it can be
+/// tested without WASAPI, a device, or a thread. It watches
+/// <see cref="JitterRing.ReadCalls"/> — invocations, never frames — because an
+/// underrunning ring pads silence and still returns: a healthy but starved device
+/// consumes zero frames and would look dead if frames were the signal.
+/// </summary>
+internal sealed class DrainMonitor
+{
+    private long _lastCalls;
+    private long _lastProgressTicks;
+
+    public DrainMonitor(long now) => _lastProgressTicks = now;
+
+    /// <summary>Why the last <see cref="Stalled"/> call reported a stall; null until one does.</summary>
+    public string? Reason { get; private set; }
+
+    public bool Stalled(long readCalls, long now, int stallMs)
+    {
+        if (readCalls != _lastCalls)
+        {
+            _lastCalls = readCalls;
+            _lastProgressTicks = now;
+            return false;
+        }
+        if (now - _lastProgressTicks < stallMs) return false;
+        Reason ??= $"the device reported Playing but pulled no audio for {stallMs} ms";
+        return true;
     }
 }

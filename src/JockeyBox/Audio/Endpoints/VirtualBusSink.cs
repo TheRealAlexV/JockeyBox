@@ -127,6 +127,10 @@ public sealed class VirtualBusSink : IAudioSink
     /// <summary>True once a Write failed; the engine then drops this sink like a dead device.</summary>
     public bool HasFailed => Volatile.Read(ref _quiet) != 0;
 
+    /// <summary>Why <see cref="HasFailed"/> is true; null while healthy.</summary>
+    public string? FailureReason =>
+        HasFailed ? "the ring write failed (the driver stopped reading the section)" : null;
+
     /// <summary>Blocks published by this instance (the ring's own counter survives a restart).</summary>
     public long BlocksPublished => Interlocked.Read(ref _blocks);
 

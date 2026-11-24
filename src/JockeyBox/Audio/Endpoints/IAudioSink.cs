@@ -24,6 +24,12 @@ public interface IAudioSink : IDisposable
     /// </summary>
     bool HasFailed { get; }
 
+    /// <summary>
+    /// Why <see cref="HasFailed"/> is true; null while healthy. Set once, on first
+    /// detection, so the log names the cause instead of the bare fact of failure.
+    /// </summary>
+    string? FailureReason { get; }
+
     /// <summary>Append one rendered block. Never throws: a failure is logged once and the sink goes quiet.</summary>
     void Write(float[] interleaved, int offset, int frames);
 }
