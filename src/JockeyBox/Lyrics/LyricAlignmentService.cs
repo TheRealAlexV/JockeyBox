@@ -217,6 +217,13 @@ public sealed class LyricAlignmentService : IDisposable
             using var proc = new Process { StartInfo = psi };
             proc.Start();
 
+            // Drain both pipes immediately. The sidecar (and the ffmpeg children it
+            // spawns) can emit more than a pipe buffer of stderr while still writing a
+            // valid result; if the parent only reads after exit, the child blocks on a
+            // full stderr pipe and the run dies at the timeout with no output.
+            var stdoutTask = proc.StandardOutput.ReadToEndAsync();
+            var stderrTask = proc.StandardError.ReadToEndAsync();
+
             var timeoutTask = Task.Delay(TimeSpan.FromMinutes(5), ct);
             var processTask = proc.WaitForExitAsync(ct);
 
@@ -225,6 +232,14 @@ public sealed class LyricAlignmentService : IDisposable
             {
                 try { proc.Kill(true); } catch { }
                 return null;
+            }
+
+            await processTask;
+            var stdout = await stdoutTask;
+            var stderr = await stderrTask;
+            if (proc.ExitCode != 0)
+            {
+                Tools.Log.Warn("lyric align sidecar exited " + proc.ExitCode + ": " + stderr.Trim());
             }
 
             if (!File.Exists(outputJsonPath))
