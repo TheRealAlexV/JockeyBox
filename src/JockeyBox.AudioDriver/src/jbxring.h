@@ -31,7 +31,14 @@ static const ULONG JBX_RING_OFF_WRITE_BLOCK_INDEX = 32;
 static const ULONG JBX_RING_OFF_OVERRUN_COUNT = 40;
 static const ULONG JBX_RING_OFF_READER_SLOT_COUNT = 48;
 static const ULONG JBX_RING_OFF_PAYLOAD_OFFSET = 52;
-static const ULONG JBX_RING_OFF_SLOT_ACTIVE = 24;   // inside a reader slot
+// Reader slot fields, identical to BusLayout's Slot* constants. The driver only
+// reads SlotActive; the rest are declared so the contract is visible in one
+// place and the next field cannot silently land on 32 (rateTrims).
+static const ULONG JBX_RING_SLOT_READ_BLOCK_INDEX = 0;
+static const ULONG JBX_RING_SLOT_CORRECTIONS = 8;
+static const ULONG JBX_RING_SLOT_UNDERRUNS = 16;
+static const ULONG JBX_RING_SLOT_ACTIVE = 24;
+static const ULONG JBX_RING_SLOT_RATE_TRIMS = 32;
 
 // Geometry chosen for the pair: 10 ms blocks, eight blocks of slack.
 static const ULONG JBX_RING_BLOCK_FRAMES = 480;

@@ -214,6 +214,10 @@ void CJbxRing::InitializeHeader()
 {
     PUCHAR base = (PUCHAR)m_pBase;
 
+    // Whole header first: the reserved bytes (28, 56..95) and all eight reader
+    // slots must read zero even when a previous load left the object behind.
+    RtlZeroMemory(base, JBX_RING_HEADER_SIZE);
+
     *(ULONG *)(base + JBX_RING_OFF_MAGIC) = JBX_RING_MAGIC;
     *(LONG *)(base + JBX_RING_OFF_VERSION) = JBX_RING_VERSION;
     *(LONG *)(base + JBX_RING_OFF_HEADER_SIZE) = (LONG)JBX_RING_HEADER_SIZE;
@@ -227,11 +231,7 @@ void CJbxRing::InitializeHeader()
     InterlockedExchange64((volatile LONG64 *)(base + JBX_RING_OFF_WRITE_BLOCK_INDEX), 0);
     InterlockedExchange64((volatile LONG64 *)(base + JBX_RING_OFF_OVERRUN_COUNT), 0);
 
-    // Reader slots and payload start free and silent, also when adopting an
-    // object left behind by a previous load.
-    RtlZeroMemory(
-        base + JBX_RING_READER_SLOT_BASE,
-        JBX_RING_READER_SLOTS * JBX_RING_READER_SLOT_SIZE);
+    // Payload starts silent, also when adopting an object from a previous load.
     RtlZeroMemory(base + JBX_RING_PAYLOAD_OFFSET, m_PayloadBytes);
 }
 
@@ -246,7 +246,7 @@ BOOLEAN CJbxRing::AnyReaderActive() const
     for (ULONG slot = 0; slot < JBX_RING_READER_SLOTS; slot++)
     {
         volatile LONG *active = (volatile LONG *)(base + JBX_RING_READER_SLOT_BASE +
-            slot * JBX_RING_READER_SLOT_SIZE + JBX_RING_OFF_SLOT_ACTIVE);
+            slot * JBX_RING_READER_SLOT_SIZE + JBX_RING_SLOT_ACTIVE);
         if (*active != 0)
         {
             return TRUE;
