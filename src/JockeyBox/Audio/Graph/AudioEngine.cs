@@ -720,7 +720,7 @@ public sealed class AudioEngine : IDisposable
         }).ConfigureAwait(false);
 
         List<DeviceOutput> old;
-        IDisposable? oldVirtual;
+        VirtualBusSink? oldVirtual;
         lock (_sinkLock)
         {
             old = new List<DeviceOutput>(_outputs);
@@ -728,8 +728,7 @@ public sealed class AudioEngine : IDisposable
 
             // The ring is not a device: one producer per route, attached to the one
             // bus flagged for it. Created here, never per block.
-            oldVirtual = _virtualSink;
-            _virtualSink = OpenVirtualBus(route, out _virtualBus);
+            oldVirtual = ReplaceVirtualBusLocked(route);
             Volatile.Write(ref _virtualRing,
                 _virtualSink is null ? null : new VirtualRing(_virtualSink, _virtualBus));
 
@@ -844,18 +843,83 @@ public sealed class AudioEngine : IDisposable
     }
 
     /// <summary>
-    /// Open the virtual ring producer for a route, or null when no bus is flagged.
-    /// Device sessions are plural; the ring is one section, so with several buses
-    /// flagged the first in routing order publishes and the rest are named in the log.
+    /// Point the ring producer at <paramref name="route"/>, on the sink lock, and
+    /// return the sink the caller must dispose once it is off the lock (or null).
+    ///
+    /// <para><b>Ordering.</b> A failed open must not cost a ring that works, so the
+    /// new writer is opened while the old one is still in place and the old sink is
+    /// only retired once the new one exists. Disposing first would be simpler, but
+    /// the open can fail for the single-writer claim (another process, a driver
+    /// restart), and then the old producer is gone too - the failure this method
+    /// exists to prevent. The one case that cannot open first is a re-apply naming
+    /// the bus already in use: our own claim is the refusal, and one writer per bus
+    /// means the open is not needed - that writer is already publishing to exactly
+    /// that section.</para>
     /// </summary>
-    private VirtualBusSink? OpenVirtualBus(AudioRoute route, out BusKind bus)
+    private VirtualBusSink? ReplaceVirtualBusLocked(AudioRoute route)
     {
-        bus = BusKind.Monitor;
-        if (route.VirtualBuses == null || route.VirtualBuses.Count == 0)
+        var previous = _virtualSink;
+        bool haveWorkingRing = previous is { HasFailed: false };
+
+        // No bus flagged: the ring is off, and that is not a failure.
+        if (route.VirtualBuses is not { Count: > 0 })
         {
+            _virtualSink = null;
+            Volatile.Write(ref _virtualRingFailed, 0);
+            return previous;
+        }
+
+        // Same section as the one already publishing: keep it and only re-point the
+        // source bus. Tearing it down would glitch a host reading the ring, and
+        // reopening it would be refused by the claim this sink already holds.
+        if (haveWorkingRing && string.Equals(previous!.SectionName, route.VirtualBusName,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            _virtualBus = route.VirtualBuses![0];
             Volatile.Write(ref _virtualRingFailed, 0);
             return null;
         }
+
+        var opened = OpenVirtualBus(route, out var bus, out var failure);
+        if (opened != null)
+        {
+            _virtualSink = opened;
+            _virtualBus = bus;
+            Volatile.Write(ref _virtualRingFailed, 0);
+            return previous;
+        }
+
+        if (failure != null && haveWorkingRing)
+        {
+            // The route could not be re-pointed. Losing that is recoverable at the
+            // next attempt; losing a live ring is silence nobody gets told about, so
+            // keep the producer, say why once, and leave the ring-failed flag clear.
+            Volatile.Write(ref _virtualRingFailed, 0);
+            Log.Warn($"{failure}; keeping the ring on bus {_virtualBus} " +
+                     $"('{previous!.SectionName}')");
+            return null;
+        }
+
+        // Nothing working to keep: report a failed ring rather than a bus set to None.
+        _virtualSink = null;
+        Volatile.Write(ref _virtualRingFailed, failure == null ? 0 : 1);
+        if (failure != null) Log.Warn(failure);
+        return previous;
+    }
+
+    /// <summary>
+    /// Open the virtual ring producer for a route, or null when no bus is flagged.
+    /// Device sessions are plural; the ring is one section, so with several buses
+    /// flagged the first in routing order publishes and the rest are named in the log.
+    /// State-free on purpose: the caller owns the ring-failed flag and the one
+    /// failure line, because only it knows whether an old producer survives.
+    /// </summary>
+    private VirtualBusSink? OpenVirtualBus(AudioRoute route, out BusKind bus, out string? failure)
+    {
+        bus = BusKind.Monitor;
+        failure = null;
+        if (route.VirtualBuses == null || route.VirtualBuses.Count == 0)
+            return null;
 
         bus = route.VirtualBuses[0];
         if (route.VirtualBuses.Count > 1)
@@ -868,23 +932,20 @@ public sealed class AudioEngine : IDisposable
         var nameError = AppSettings.ValidateVirtualAsioBusName(route.VirtualBusName);
         if (nameError != null)
         {
-            Volatile.Write(ref _virtualRingFailed, 1);
-            Log.Warn($"virtual ASIO ring: bus {bus} cannot publish to " +
-                     $"'{route.VirtualBusName}': {nameError}");
+            failure = $"virtual ASIO ring: bus {bus} cannot publish to " +
+                      $"'{route.VirtualBusName}': {nameError}";
             return null;
         }
 
         var sink = VirtualBusSink.TryOpen(route.VirtualBusName, Rate, Channels, BlockFrames,
-            out var error);
+            out var error, logFailure: false);
         if (sink == null)
         {
-            Volatile.Write(ref _virtualRingFailed, 1);
-            Log.Warn($"virtual ASIO ring: bus {bus} could not publish to " +
-                     $"'{route.VirtualBusName}': {error}");
+            failure = $"virtual ASIO ring: bus {bus} could not publish to " +
+                      $"'{route.VirtualBusName}': {error}";
             return null;
         }
 
-        Volatile.Write(ref _virtualRingFailed, 0);
         return sink;
     }
 

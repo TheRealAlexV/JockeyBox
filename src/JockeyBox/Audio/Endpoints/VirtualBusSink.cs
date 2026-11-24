@@ -83,7 +83,8 @@ public sealed class VirtualBusSink : IAudioSink
     /// failed open is never mistaken for "no bus flagged" (see AudioEngine.Start).
     /// </summary>
     public static VirtualBusSink? TryOpen(string sectionName, int sampleRate, int channels,
-        int blockFrames, out string? error, int capacityBlocks = DefaultCapacityBlocks)
+        int blockFrames, out string? error, int capacityBlocks = DefaultCapacityBlocks,
+        bool logFailure = true)
     {
         error = null;
 
@@ -112,9 +113,12 @@ public sealed class VirtualBusSink : IAudioSink
         catch (Exception ex)
         {
             // Once per route, on the route thread - never per block on the render thread.
+            // A caller that has its own line to write (the engine, naming the bus it
+            // kept instead) suppresses this one so the operator sees the failure once.
             error = ex.Message;
-            Log.Warn($"virtual ASIO ring '{sectionName}' not opened: {ex.Message}; " +
-                     "rendering continues without it");
+            if (logFailure)
+                Log.Warn($"virtual ASIO ring '{sectionName}' not opened: {ex.Message}; " +
+                         "rendering continues without it");
             return null;
         }
     }
@@ -186,8 +190,18 @@ public sealed class VirtualBusSink : IAudioSink
     /// <summary>Frames per block this sink was opened for.</summary>
     public int BlockFrames => _blockFrames;
 
+    /// <summary>
+    /// Times this sink has been disposed. A replaced or abandoned producer must be
+    /// disposed exactly once, and a double dispose must not release a writer twice.
+    /// </summary>
+    private int _disposed;
+
+    /// <summary>Test seam: 1 once disposed, so a swap can assert "exactly once".</summary>
+    internal int DisposeCount => Volatile.Read(ref _disposed);
+
     public void Dispose()
     {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
         var writer = _writer;
         _writer = null;
         try { writer?.Dispose(); } catch { }
