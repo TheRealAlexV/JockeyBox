@@ -21,7 +21,7 @@ namespace JockeyBox.Tests;
 /// request the lyrics itself. Both are silent when they regress: the header
 /// keeps the previous song's key and the panel stays blank or stale.
 /// </summary>
-[Collection(nameof(UiThreadCollection))]
+[Collection(UiThreadCollection.Name)]
 public sealed class KaraokePairLyricsTests
 {
     [Fact]

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Runtime.ExceptionServices;
@@ -146,8 +147,10 @@ internal static class DockPageProbe
             ("dialog:youtube-search", () => new YouTubeSearchWindow(SearchViewModel(settings))),
         };
 
+        var timings = DialogTimings;
         foreach (var (name, create) in dialogs)
         {
+            var clock = Stopwatch.StartNew();
             Window? dialog = null;
             try
             {
@@ -170,12 +173,24 @@ internal static class DockPageProbe
                 catch (InvalidOperationException) { }
             }
 
-            line($"  dock-page {name}: ok");
+            clock.Stop();
+            line(timings
+                ? $"  dock-page {name}: ok ({clock.ElapsedMilliseconds} ms)"
+                : $"  dock-page {name}: ok");
         }
     }
 
     private static YouTubeSearchViewModel SearchViewModel(AppSettings settings) =>
         new(settings, new StreamPreviewTransport(new PreviewStreamPlayer(settings)), "dock-page probe");
+
+    /// <summary>
+    /// Set <c>JOCKEYBOX_DIALOG_TIMINGS=1</c> to print how long each dialog took. The
+    /// dialog pass is the expensive part of this case in testhost (window and font
+    /// work that the app process pays once at startup), and the cost has to be
+    /// attributable without a rebuild.
+    /// </summary>
+    private static bool DialogTimings =>
+        !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("JOCKEYBOX_DIALOG_TIMINGS"));
 
     private static IReadOnlyList<Page> Enumerate(MainWindow window)
     {
