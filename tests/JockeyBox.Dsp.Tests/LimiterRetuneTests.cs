@@ -24,12 +24,16 @@ public class LimiterRetuneTests
 
         var block = TestSignals.Sine(LookaheadFrames, 1000, SampleRate, 2.0);
 
-        // Warm the setter once so tiered JIT work is not charged to the allocation measurement.
-        limiter.CeilingDb = 0;
-        long beforeBytes = GC.GetAllocatedBytesForCurrentThread();
-        limiter.CeilingDb = -6;
-        limiter.Process(block);
-        long allocated = GC.GetAllocatedBytesForCurrentThread() - beforeBytes;
+        // Both passes go through the real retune path: the first sets -3 dB, the counted second
+        // sets -6 dB, so neither the setter's coefficient rebuild nor its tiered JIT is charged
+        // to the measurement. Warming with the current value would only exercise the no-op path.
+        double ceiling = -3;
+        long allocated = AllocationAssert.Measure(() =>
+        {
+            limiter.CeilingDb = ceiling;
+            ceiling = -6;
+            limiter.Process(block);
+        });
 
         // A no-op setter leaves the output at ~0 dBFS and this assertion fails.
         double after = MaxAbs(block);

@@ -627,6 +627,22 @@ public sealed class MixerApiRouter
                 p => p.Compressor.MakeupDb,
                 (p, v) => p with { Compressor = p.Compressor with { MakeupDb = v } }),
 
+            new("deess.on", "De-esser", "Dynamics", ControlKind.Toggle, 0, 1, 1, 0, "",
+                p => p.DeEsser.Enabled ? 1 : 0,
+                (p, v) => p with { DeEsser = p.DeEsser with { Enabled = v > 0.5 } }),
+
+            new("deess.threshold", "Threshold", "Dynamics", ControlKind.Continuous, -60, 0, 0.5, -28, "dB",
+                p => p.DeEsser.ThresholdDb,
+                (p, v) => p with { DeEsser = p.DeEsser with { ThresholdDb = v } }),
+
+            new("deess.amount", "Amount", "Dynamics", ControlKind.Continuous, 1, 20, 0.1, 4, ":1",
+                p => p.DeEsser.Ratio,
+                (p, v) => p with { DeEsser = p.DeEsser with { Ratio = v } }),
+
+            new("deess.split", "Split", "Dynamics", ControlKind.Continuous, 1000, 20000, 10, 6000, "Hz",
+                p => p.DeEsser.FrequencyHz,
+                (p, v) => p with { DeEsser = p.DeEsser with { FrequencyHz = v } }),
+
             new("limiter.on", "Limiter", "Dynamics", ControlKind.Toggle, 0, 1, 1, 0, "",
                 p => p.Limiter.Enabled ? 1 : 0,
                 (p, v) => p with { Limiter = p.Limiter with { Enabled = v > 0.5 } }),

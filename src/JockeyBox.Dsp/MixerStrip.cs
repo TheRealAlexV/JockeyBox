@@ -3,7 +3,8 @@ namespace JockeyBox.Dsp;
 /// <summary>
 /// A live channel strip for one capture endpoint: one mono chain of
 /// <see cref="HighPassFilter"/>, <see cref="LowPassFilter"/>, <see cref="TenBandEq"/>,
-/// <see cref="NoiseGate"/>, <see cref="Compressor"/> and an optional <see cref="Limiter"/>.
+/// <see cref="NoiseGate"/>, <see cref="Compressor"/>, <see cref="DeEsser"/> and an optional
+/// <see cref="Limiter"/>.
 /// <para>
 /// <b>Latency:</b> the limiter is the only stage here that carries latency (240 frames at
 /// 48 kHz, 5 ms of lookahead). The operator's requirement is zero added latency by default, so
@@ -33,6 +34,7 @@ public sealed class MixerStrip
     private readonly TenBandEq _eq;
     private readonly NoiseGate _gate;
     private readonly Compressor _compressor;
+    private readonly DeEsser _deEsser;
 
     private Limiter? _limiter;
 
@@ -57,6 +59,7 @@ public sealed class MixerStrip
         _eq = new TenBandEq(sampleRate, id: $"{id}.eq");
         _gate = new NoiseGate(sampleRate, id: $"{id}.gate");
         _compressor = new Compressor(sampleRate, id: $"{id}.compressor");
+        _deEsser = new DeEsser(sampleRate, id: $"{id}.deesser");
 
         ApplyInternal(StripParameters.Neutral);
     }
@@ -78,11 +81,13 @@ public sealed class MixerStrip
 
     public Compressor Compressor => _compressor;
 
+    public DeEsser DeEsser => _deEsser;
+
     /// <summary>The limiter, or null while it has never been switched on.</summary>
     public Limiter? Limiter => _limiter;
 
     /// <summary>Processors in the chain, limiter included only once it exists.</summary>
-    public int ProcessorCount => _limiter is null ? 5 : 6;
+    public int ProcessorCount => _limiter is null ? 6 : 7;
 
     /// <summary>Latency this strip adds, in frames: the limiter's 240, or 0 when it is off.</summary>
     public int LatencyFrames => _limiter is not null && !_limiter.Bypass ? _limiter.LatencyFrames : 0;
@@ -99,6 +104,7 @@ public sealed class MixerStrip
          (_eq.Bypass || _eq.IsFlat) &&
          (_gate.Bypass || _gate.IsNeutral) &&
          _compressor.Bypass &&
+         (_deEsser.Bypass || _deEsser.IsNeutral) &&
          (_limiter is null || _limiter.Bypass));
 
     /// <summary>
@@ -145,6 +151,9 @@ public sealed class MixerStrip
         _compressor.KneeDb = p.Compressor.KneeDb;
         _compressor.MakeupDb = p.Compressor.MakeupDb;
 
+        _deEsser.Bypass = bypassAll || !p.DeEsser.Enabled;
+        _deEsser.Parameters = p.DeEsser;
+
         // Lazy by design: a neutral strip must not carry the limiter's 240 frames of latency.
         if (p.Limiter.Enabled && _limiter is null)
         {
@@ -173,6 +182,7 @@ public sealed class MixerStrip
         _eq.Process(samples);
         _gate.Process(samples);
         _compressor.Process(samples);
+        _deEsser.Process(samples);
 
         if (_limiter is not null && !_limiter.Bypass)
         {
@@ -208,6 +218,7 @@ public sealed class MixerStrip
         _eq.Reset();
         _gate.Reset();
         _compressor.Reset();
+        _deEsser.Reset();
         _limiter?.Reset();
     }
 }

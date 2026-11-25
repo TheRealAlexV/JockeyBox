@@ -111,11 +111,11 @@ public class PadRingTests
         pad.SetPadding(500);
 
         var block = TestSignals.WhiteNoise(512 * Channels, seed: 23);
-        for (int i = 0; i < 64; i++) pad.Process(block, 0, Channels, 512);
 
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 64; i++) pad.Process(block, 0, Channels, 512);
-        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        long allocated = AllocationAssert.Measure(() =>
+        {
+            for (int i = 0; i < 64; i++) pad.Process(block, 0, Channels, 512);
+        });
 
         Assert.Equal(0, allocated);
     }

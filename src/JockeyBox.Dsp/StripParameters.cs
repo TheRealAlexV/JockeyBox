@@ -107,6 +107,34 @@ public readonly record struct GateParameters(
         Ranges.Fix(FloorDb, -120, 0, -60));
 }
 
+/// <summary>
+/// De-esser settings. Disabled is the neutral state.
+/// </summary>
+public readonly record struct DeEsserParameters(
+    bool Enabled,
+    double FrequencyHz = 6000,
+    double ThresholdDb = -28,
+    double Ratio = 4,
+    double AttackMs = 0.5,
+    double ReleaseMs = 50,
+    double MaxReductionDb = 12,
+    double SidechainLowHz = 4500,
+    double SidechainHighHz = 9000)
+{
+    public static readonly DeEsserParameters Neutral = new(Enabled: false);
+
+    public DeEsserParameters Clamp() => new(
+        Enabled,
+        Ranges.Fix(FrequencyHz, 1000, 20000, 6000),
+        Ranges.Fix(ThresholdDb, -60, 0, -28),
+        Ranges.Fix(Ratio, 1, 20, 4),
+        Ranges.Fix(AttackMs, 0.01, 1000, 0.5),
+        Ranges.Fix(ReleaseMs, 0.01, 5000, 50),
+        Ranges.Fix(MaxReductionDb, 0, 60, 12),
+        Ranges.Fix(SidechainLowHz, 20, 20000, 4500),
+        Ranges.Fix(SidechainHighHz, 20, 24000, 9000));
+}
+
 /// <summary>Compressor settings. Disabled is the neutral state.</summary>
 public readonly record struct CompressorParameters(
     bool Enabled,
@@ -155,6 +183,7 @@ public readonly record struct StripParameters(
     GateParameters Gate,
     CompressorParameters Compressor,
     LimiterParameters Limiter,
+    DeEsserParameters DeEsser,
     bool MasterBypass = false)
 {
     /// <summary>
@@ -168,7 +197,8 @@ public readonly record struct StripParameters(
         new FilterParameters(Enabled: true, LowPassFilter.TransparentFrequencyHz),
         GateParameters.Neutral,
         CompressorParameters.Neutral,
-        LimiterParameters.Neutral);
+        LimiterParameters.Neutral,
+        DeEsserParameters.Neutral);
 
     /// <summary>
     /// Returns this value with every field inside its valid range. Never throws: NaN becomes
@@ -182,6 +212,7 @@ public readonly record struct StripParameters(
         Gate = Gate.Clamp(),
         Compressor = Compressor.Clamp(),
         Limiter = Limiter.Clamp(),
+        DeEsser = DeEsser.Clamp(),
     };
 
     /// <summary>Alias for <see cref="Clamp"/>: the spelling used by callers that mean "make this safe to apply".</summary>

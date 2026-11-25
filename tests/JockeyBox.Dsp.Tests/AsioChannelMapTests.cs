@@ -123,18 +123,17 @@ public class AsioChannelMapTests
         float[] source = Interleaved(frames: 480, channels: 4);
         var destination = new float[480 * 2];
 
-        // Warm every branch and let the JIT settle before the measurement.
-        AsioChannelMap.Map(source, 480, 4, 0, AsioChannelMode.Mono, destination);
-        AsioChannelMap.Map(source, 480, 4, 2, AsioChannelMode.StereoPair, destination);
-
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 1_000; i++)
+        // The helper's first pass covers all four offsets and both modes, so every branch and
+        // the JIT are warm before the counted pass.
+        long allocated = AllocationAssert.Measure(() =>
         {
-            AsioChannelMap.Map(source, 480, 4, i % 4, AsioChannelMode.Mono, destination);
-            AsioChannelMap.Map(source, 480, 4, i % 3, AsioChannelMode.StereoPair, destination);
-        }
-        long after = GC.GetAllocatedBytesForCurrentThread();
+            for (int i = 0; i < 1_000; i++)
+            {
+                AsioChannelMap.Map(source, 480, 4, i % 4, AsioChannelMode.Mono, destination);
+                AsioChannelMap.Map(source, 480, 4, i % 3, AsioChannelMode.StereoPair, destination);
+            }
+        });
 
-        Assert.Equal(before, after);
+        Assert.Equal(0, allocated);
     }
 }

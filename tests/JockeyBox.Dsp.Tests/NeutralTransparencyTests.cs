@@ -77,6 +77,14 @@ public class NeutralTransparencyTests
         AssertTransparent(new NoiseGate(SampleRate, thresholdDb: -40, floorDb: 0), "gate with a 0 dB floor");
 
     [Fact]
+    public void De_esser_at_neutral_is_bit_transparent() =>
+        // Unlike the gate, the de-esser cannot be transparent while armed: the split-band
+        // reconstruction (low + gain * (x - low)) rounds in the last bit even at unity gain.
+        // Its neutral state is therefore "disabled", and Process returns before touching the
+        // buffer, which is the guard this checks.
+        AssertTransparent(new DeEsser(SampleRate), "de-esser at neutral");
+
+    [Fact]
     public void Whole_neutral_chain_is_bit_transparent()
     {
         // Every processor the milestone's neutral strip owns, constructed and left on.
@@ -86,7 +94,8 @@ public class NeutralTransparencyTests
             .Add(new TenBandEq(SampleRate))
             .Add(new HighPassFilter(SampleRate, 20))
             .Add(new LowPassFilter(SampleRate, 20000))
-            .Add(new NoiseGate(SampleRate, thresholdDb: -40, floorDb: 0));
+            .Add(new NoiseGate(SampleRate, thresholdDb: -40, floorDb: 0))
+            .Add(new DeEsser(SampleRate));
 
         var input = TestSignals.WhiteNoise(8192, seed: 22);
         var output = (float[])input.Clone();

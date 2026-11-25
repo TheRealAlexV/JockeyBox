@@ -16,6 +16,7 @@ public class ResetContractTests
         { "PeakingEq", () => new PeakingEq(SampleRate, frequencyHz: 1000, q: 1.41, gainDb: 9) },
         { "TenBandEq", TenBandEqWithBoost },
         { "Compressor", () => new Compressor(SampleRate, thresholdDb: -30, ratio: 4, attackMs: 5, releaseMs: 100, kneeDb: 6, makeupDb: 3) },
+        { "DeEsser", () => new DeEsser(SampleRate, DeEsserParameters.Neutral with { Enabled = true, ThresholdDb = -40 }) },
         { "NoiseGate", () => new NoiseGate(SampleRate, thresholdDb: -30, hysteresisDb: 3, attackMs: 5, releaseMs: 100, holdMs: 200, floorDb: -60) },
         { "Limiter", () => new Limiter(SampleRate, thresholdDb: -6, lookaheadMs: 5, releaseMs: 50) },
     };

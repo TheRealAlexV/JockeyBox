@@ -42,6 +42,9 @@ public class MixerSettingsStoreTests : IDisposable
             new CompressorParameters(Enabled: true, ThresholdDb: -18, Ratio: 3.5, AttackMs: 8,
                 ReleaseMs: 120, KneeDb: 4, MakeupDb: 2),
             new LimiterParameters(Enabled: true, CeilingDb: -1, ReleaseMs: 80),
+            new DeEsserParameters(Enabled: true, FrequencyHz: 7200, ThresholdDb: -22, Ratio: 6,
+                AttackMs: 1.5, ReleaseMs: 65, MaxReductionDb: 9, SidechainLowHz: 5000,
+                SidechainHighHz: 10000),
             MasterBypass: true);
     }
 
@@ -57,6 +60,9 @@ public class MixerSettingsStoreTests : IDisposable
             new CompressorParameters(Enabled: false, ThresholdDb: -40, Ratio: 12, AttackMs: 30,
                 ReleaseMs: 300, KneeDb: 12, MakeupDb: -3),
             LimiterParameters.Neutral,
+            new DeEsserParameters(Enabled: false, FrequencyHz: 5200, ThresholdDb: -35, Ratio: 2,
+                AttackMs: 0.2, ReleaseMs: 25, MaxReductionDb: 6, SidechainLowHz: 3800,
+                SidechainHighHz: 11000),
             MasterBypass: false);
     }
 
@@ -256,5 +262,34 @@ public class MixerSettingsStoreTests : IDisposable
         Assert.Equal(StripParameters.Neutral, loaded.Devices["{capture-broken}"]);
         Assert.Equal(40, loaded.Devices["{capture-a}"].HighPass.FrequencyHz);
         Assert.True(loaded.HasProblem);
+    }
+
+    [Fact]
+    public void Deesser_settings_round_trip_through_the_mixer_store()
+    {
+        // Every field deliberately off its default, so a dropped or reordered field fails here.
+        var deEsser = new DeEsserParameters(
+            Enabled: true,
+            FrequencyHz: 7100,
+            ThresholdDb: -24.5,
+            Ratio: 5.5,
+            AttackMs: 0.75,
+            ReleaseMs: 65,
+            MaxReductionDb: 9.5,
+            SidechainLowHz: 4200,
+            SidechainHighHz: 10500);
+        var strip = StripParameters.Neutral with { DeEsser = deEsser };
+
+        Store().Save(new Dictionary<string, StripParameters> { ["{capture-a}"] = strip });
+
+        var loaded = Store().Load();
+
+        Assert.Null(loaded.Reason);
+        Assert.Equal(deEsser, loaded.Devices["{capture-a}"].DeEsser);
+        Assert.Equal(strip, loaded.Devices["{capture-a}"]);
+
+        var text = File.ReadAllText(Path.Combine(_dir.FullName, MixerSettingsStore.FileName));
+        Assert.Contains("\"DeEsser\":", text);
+        Assert.Contains("\"SidechainHighHz\":", text);
     }
 }

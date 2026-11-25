@@ -15,7 +15,7 @@ public class MixerStripTests
         Assert.Equal(StripParameters.Neutral, strip.Parameters);
         Assert.True(strip.IsPassthrough);
         Assert.Equal(0, strip.LatencyFrames);
-        Assert.Equal(5, strip.ProcessorCount);
+        Assert.Equal(6, strip.ProcessorCount);
 
         var input = TestSignals.WhiteNoise(4096, seed: 31);
         var output = (float[])input.Clone();
@@ -107,14 +107,14 @@ public class MixerStripTests
 
         Assert.Null(strip.Limiter);
         Assert.Equal(0, strip.LatencyFrames);
-        Assert.Equal(5, strip.ProcessorCount);
+        Assert.Equal(6, strip.ProcessorCount);
 
         strip.Apply(StripParameters.Neutral with { Limiter = new LimiterParameters(Enabled: true) });
 
         Assert.NotNull(strip.Limiter);
         Assert.Equal(240, strip.Limiter!.LatencyFrames);
         Assert.Equal(240, strip.LatencyFrames);
-        Assert.Equal(6, strip.ProcessorCount);
+        Assert.Equal(7, strip.ProcessorCount);
 
         // Switching it back off restores zero latency and the transparent fast path, without
         // freeing the limiter (so toggling does not churn the heap).
@@ -182,8 +182,8 @@ public class MixerStripTests
     [Fact]
     public void Process_and_Apply_allocate_nothing()
     {
-        // Method: GC.GetAllocatedBytesForCurrentThread() around a warmed loop. Warm-up runs the
-        // same calls first so JIT and first-touch costs land outside the measured window.
+        // Method: AllocationAssert.Measure runs the loop twice and counts the second run, so
+        // JIT and first-touch costs land outside the measured window.
         var strip = new MixerStrip(SampleRate);
 
         // The limiter is the one legitimately allocating path (built off the render thread), so
@@ -198,23 +198,54 @@ public class MixerStripTests
 
         var buffer = TestSignals.WhiteNoise(512, seed: 5);
 
-        for (int i = 0; i < 64; i++)
+        // Both measured paths are warmed by the helper's first pass.
+        long allocated = AllocationAssert.Measure(() =>
         {
-            strip.Apply(i % 2 == 0 ? boosted : StripParameters.Neutral);
-            strip.Process(buffer, 0, buffer.Length);
-            strip.Process(buffer.AsSpan());
-        }
-
-        long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 64; i++)
-        {
-            strip.Apply(i % 2 == 0 ? boosted : StripParameters.Neutral);
-            strip.Process(buffer, 0, buffer.Length);
-            strip.Process(buffer.AsSpan());
-        }
-        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+            for (int i = 0; i < 64; i++)
+            {
+                strip.Apply(i % 2 == 0 ? boosted : StripParameters.Neutral);
+                strip.Process(buffer, 0, buffer.Length);
+                strip.Process(buffer.AsSpan());
+            }
+        });
 
         Assert.Equal(0, allocated);
+    }
+
+    [Fact]
+    public void De_esser_on_hands_the_limiter_less_high_band_energy()
+    {
+        // Sibilant-heavy: full-scale white noise has as much energy at 6-9 kHz as anywhere else.
+        var input = TestSignals.WhiteNoise(SampleRate * 2, seed: 63);
+
+        var off = new MixerStrip(SampleRate);
+        var on = new MixerStrip(SampleRate);
+        on.Apply(StripParameters.Neutral with
+        {
+            DeEsser = new DeEsserParameters(Enabled: true, ThresholdDb: -30),
+        });
+
+        var offOutput = (float[])input.Clone();
+        var onOutput = (float[])input.Clone();
+        off.Process(offOutput, 0, offOutput.Length);
+        on.Process(onOutput, 0, onOutput.Length);
+
+        // Every other stage is neutral and no limiter exists, so each output *is* what the
+        // limiter would receive.
+        double offHighDb = HighBandRmsDb(offOutput);
+        double onHighDb = HighBandRmsDb(onOutput);
+
+        Assert.True(onHighDb < offHighDb - 3,
+            $"the de-esser only took {offHighDb - onHighDb:F1} dB off the high band " +
+            $"(off {offHighDb:F1} dBFS, on {onHighDb:F1} dBFS)");
+    }
+
+    /// <summary>RMS of the band above 5 kHz, after a second of settling.</summary>
+    private static double HighBandRmsDb(float[] samples)
+    {
+        var filter = new HighPassFilter(SampleRate, 5000);
+        filter.Process(samples);
+        return TestSignals.RmsDb(samples.AsSpan(SampleRate / 4));
     }
 
     private static double Peak(ReadOnlySpan<float> samples)

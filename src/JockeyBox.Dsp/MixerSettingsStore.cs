@@ -167,6 +167,7 @@ public sealed class MixerSettingsStore
             dto.Gate?.ToParameters(neutral.Gate) ?? neutral.Gate,
             dto.Comp?.ToParameters(neutral.Compressor) ?? neutral.Compressor,
             dto.Limiter?.ToParameters(neutral.Limiter) ?? neutral.Limiter,
+            dto.DeEsser?.ToParameters(neutral.DeEsser) ?? neutral.DeEsser,
             dto.Bypass ?? false).Clamp();
     }
 
@@ -197,6 +198,7 @@ public sealed class MixerSettingsStore
         public GateDto? Gate { get; set; }
         public CompDto? Comp { get; set; }
         public LimiterDto? Limiter { get; set; }
+        public DeEsserDto? DeEsser { get; set; }
         public bool? Bypass { get; set; }
 
         public static DeviceDto From(StripParameters strip) => new()
@@ -213,6 +215,7 @@ public sealed class MixerSettingsStore
             Gate = GateDto.From(strip.Gate),
             Comp = CompDto.From(strip.Compressor),
             Limiter = LimiterDto.From(strip.Limiter),
+            DeEsser = DeEsserDto.From(strip.DeEsser),
             Bypass = strip.MasterBypass,
         };
     }
@@ -296,5 +299,42 @@ public sealed class MixerSettingsStore
             On ?? fallback.Enabled,
             CeilingDb ?? fallback.CeilingDb,
             ReleaseMs ?? fallback.ReleaseMs);
+    }
+
+    private sealed class DeEsserDto
+    {
+        public bool? On { get; set; }
+        public double? FrequencyHz { get; set; }
+        public double? ThresholdDb { get; set; }
+        public double? Ratio { get; set; }
+        public double? AttackMs { get; set; }
+        public double? ReleaseMs { get; set; }
+        public double? MaxReductionDb { get; set; }
+        public double? SidechainLowHz { get; set; }
+        public double? SidechainHighHz { get; set; }
+
+        public static DeEsserDto From(DeEsserParameters deEsser) => new()
+        {
+            On = deEsser.Enabled,
+            FrequencyHz = deEsser.FrequencyHz,
+            ThresholdDb = deEsser.ThresholdDb,
+            Ratio = deEsser.Ratio,
+            AttackMs = deEsser.AttackMs,
+            ReleaseMs = deEsser.ReleaseMs,
+            MaxReductionDb = deEsser.MaxReductionDb,
+            SidechainLowHz = deEsser.SidechainLowHz,
+            SidechainHighHz = deEsser.SidechainHighHz,
+        };
+
+        public DeEsserParameters ToParameters(DeEsserParameters fallback) => new(
+            On ?? fallback.Enabled,
+            FrequencyHz ?? fallback.FrequencyHz,
+            ThresholdDb ?? fallback.ThresholdDb,
+            Ratio ?? fallback.Ratio,
+            AttackMs ?? fallback.AttackMs,
+            ReleaseMs ?? fallback.ReleaseMs,
+            MaxReductionDb ?? fallback.MaxReductionDb,
+            SidechainLowHz ?? fallback.SidechainLowHz,
+            SidechainHighHz ?? fallback.SidechainHighHz);
     }
 }
