@@ -1,6 +1,7 @@
 using System;
 using System.Threading.Tasks;
 using NAudio.Wave;
+using JockeyBox.Dsp;
 using JockeyBox.Tools;
 
 namespace JockeyBox.Audio.Graph;
@@ -138,7 +139,7 @@ public sealed class DeckSource : ISampleProvider, IDisposable
         _karaokeScratch = new float[channels * 8192];
         _vocalsScratch = new float[channels * 8192];
         _sum = new SumProvider(this);
-        _tempo = new TempoStage(_sum);
+        _tempo = new TempoStage(_sum, TempoLatencyTable.Measured);
         Position = new DeckPosition(sampleRate);
         Commands = new RenderCommands();
     }
@@ -578,8 +579,8 @@ public sealed class DeckSource : ISampleProvider, IDisposable
         if (!_splitRequested || _karaoke == null || _primary == null) return false;
         if (_splitActive) return true;
 
-        _splitKaraoke ??= new TempoStage(new StemOnlyProvider(this, karaoke: true));
-        _splitOriginal ??= new TempoStage(new StemOnlyProvider(this, karaoke: false));
+        _splitKaraoke ??= new TempoStage(new StemOnlyProvider(this, karaoke: true), TempoLatencyTable.Measured);
+        _splitOriginal ??= new TempoStage(new StemOnlyProvider(this, karaoke: false), TempoLatencyTable.Measured);
 
         _splitKaraoke.SetRatio(_tempoRequested);
         _splitOriginal.SetRatio(_tempoRequested);

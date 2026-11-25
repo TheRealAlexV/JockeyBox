@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Threading;
 using NAudio.Wave;
 using SoundTouch;
+using JockeyBox.Dsp;
 using JockeyBox.Tools;
 
 namespace JockeyBox.Audio.Graph;
@@ -50,12 +51,20 @@ public sealed class TempoStage : ISampleProvider
     private volatile bool _flushRequested;
     private Exception? _failure;
 
-    public TempoStage(ISampleProvider source)
+    /// <summary>
+    /// <paramref name="latencyTable"/> is the measured ratio → group-delay curve.
+    /// Defaulting it to <see cref="TempoLatencyTable.Default"/> keeps a stage that
+    /// is built without one byte-identical to the old behaviour: unity is still a
+    /// true passthrough and an engaged stage still reports the zero it always did.
+    /// The deck passes <see cref="TempoLatencyTable.Measured"/> so an engaged
+    /// stage stops claiming zero latency.
+    /// </summary>
+    public TempoStage(ISampleProvider source, TempoLatencyTable? latencyTable = null)
     {
         _source = source;
         _rate = source.WaveFormat.SampleRate;
         _channels = source.WaveFormat.Channels;
-        LatencyTable = TempoLatencyTable.Default;
+        LatencyTable = latencyTable ?? TempoLatencyTable.Default;
     }
 
     public WaveFormat WaveFormat => _source.WaveFormat;
@@ -205,61 +214,5 @@ public sealed class TempoStage : ISampleProvider
             // on the next block if it really is broken.
             Array.Clear(buffer, offset + produced * _channels, (framesWanted - produced) * _channels);
         }
-    }
-}
-
-/// <summary>
-/// Ratio → group-delay curve for the stretcher, in frames at a reference rate.
-///
-/// SoundTouch has no API to report its buffered length, and its internal
-/// sequence/seek windows mean the delay is not constant across ratios. The table
-/// is filled by <c>--calibrate</c> (render a click train, measure the peak
-/// offset per ratio) and interpolated linearly here. With no samples the table
-/// honestly reports zero — alignment then degrades to no worse than the 1.x
-/// behaviour instead of inventing a number.
-/// </summary>
-public sealed class TempoLatencyTable
-{
-    private readonly (double Ratio, int FramesAt48k)[] _points;
-
-    public TempoLatencyTable((double Ratio, int FramesAt48k)[] points) => _points = points;
-
-    /// <summary>Empty until calibrated: no compensation, never a wrong one.</summary>
-    public static TempoLatencyTable Default { get; } = new(Array.Empty<(double, int)>());
-
-    /// <summary>True once a real measurement has been loaded.</summary>
-    public bool IsCalibrated => _points.Length > 0;
-
-    /// <summary>Interpolated group delay in frames for the given ratio and rate.</summary>
-    public int FramesFor(double ratio, int sampleRate)
-    {
-        if (_points.Length == 0) return 0;
-
-        double at48;
-        if (ratio <= _points[0].Ratio) at48 = _points[0].FramesAt48k;
-        else if (ratio >= _points[^1].Ratio) at48 = _points[^1].FramesAt48k;
-        else
-        {
-            at48 = _points[^1].FramesAt48k;
-            for (int i = 1; i < _points.Length; i++)
-            {
-                if (ratio > _points[i].Ratio) continue;
-                var (r0, f0) = _points[i - 1];
-                var (r1, f1) = _points[i];
-                double t = (ratio - r0) / Math.Max(1e-9, r1 - r0);
-                at48 = f0 + (f1 - f0) * t;
-                break;
-            }
-        }
-
-        return (int)Math.Round(at48 * sampleRate / 48000.0);
-    }
-
-    /// <summary>Build a table from measured (ratio, frames) samples sorted by ratio.</summary>
-    public static TempoLatencyTable FromMeasurements(IEnumerable<(double Ratio, int Frames)> measured)
-    {
-        var list = new List<(double, int)>(measured);
-        list.Sort((a, b) => a.Item1.CompareTo(b.Item1));
-        return new TempoLatencyTable(list.ToArray());
     }
 }
