@@ -880,8 +880,9 @@ public partial class MainWindow : Window
         }
 
         if (PanelHost.DetachContent(id) is not { } content) return;
+        if (PanelHost.Definition(id) is not { } definition) return;
 
-        var window = new PanelWindow(PanelCatalog.Get(id), content, PanelHost, _vm.SettingsRef)
+        var window = new PanelWindow(definition, content, PanelHost, _vm.SettingsRef)
         {
             Owner = this,
             // The panel binds to the console's view model, and a window is a new root:

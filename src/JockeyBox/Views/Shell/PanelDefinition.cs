@@ -44,9 +44,15 @@ public static class PanelCatalog
     /// strip.</summary>
     private const double LibraryMinWidth = 300;
 
-    private static readonly Dictionary<ShellPanelId, PanelDefinition> All = new()
+    /// <summary>
+    /// The production panel set, in the order the shell offers them. This is a value
+    /// handed to a <see cref="DockPanelHost"/>; the host itself knows nothing about
+    /// this list, so a test can build a host from two synthetic panes and adding a
+    /// pane here is one entry rather than an edit to the control.
+    /// </summary>
+    public static IReadOnlyList<PanelDefinition> Registered { get; } = new[]
     {
-        [ShellPanelId.Library] = new PanelDefinition(
+        new PanelDefinition(
             ShellPanelId.Library,
             "LIBRARY",
             "Library panel",
@@ -55,14 +61,4 @@ public static class PanelCatalog
             AllowsPopOut: true,
             () => new LibraryPanel()),
     };
-
-    public static bool IsRegistered(ShellPanelId id) => All.ContainsKey(id);
-
-    public static PanelDefinition Get(ShellPanelId id) =>
-        All.TryGetValue(id, out var definition)
-            ? definition
-            : throw new InvalidOperationException(
-                $"shell panel {id} is not registered; phases 3 and 4 add the remaining six to {nameof(PanelCatalog)}");
-
-    public static IReadOnlyCollection<PanelDefinition> Registered => All.Values;
 }

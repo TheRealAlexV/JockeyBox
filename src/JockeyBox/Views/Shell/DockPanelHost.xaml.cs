@@ -36,11 +36,35 @@ public partial class DockPanelHost : UserControl
     /// <summary>Content per panel, kept whether the panel is docked, closed or popped out.</summary>
     private readonly Dictionary<ShellPanelId, FrameworkElement> _live = new();
 
+    /// <summary>
+    /// The panels this host may show, keyed by id. Registered by whoever builds the
+    /// host rather than read from a static list, so "the dock holds these panes" is a
+    /// property of this instance: a test can hand it two trivial panes, and phase 3
+    /// adds MIX by adding one entry to the production list rather than by editing
+    /// the host.
+    /// </summary>
+    private readonly Dictionary<ShellPanelId, PanelDefinition> _panels = new();
+
+    /// <summary>
+    /// Panels currently out in their own window. Recorded here because the dock has
+    /// no content for them: without it a second pop-out would rebuild a pane that a
+    /// window already holds, or silently steal it back into the column.
+    /// </summary>
+    private readonly HashSet<ShellPanelId> _poppedOut = new();
+
     private AppSettings? _settings;
 
+    /// <summary>Production: the XAML-created instance shows the real panel set.</summary>
     public DockPanelHost()
+        : this(PanelCatalog.Registered)
+    {
+    }
+
+    /// <summary>Every panel this host may show. XAML keeps the parameterless form.</summary>
+    public DockPanelHost(IEnumerable<PanelDefinition> definitions)
     {
         InitializeComponent();
+        foreach (var definition in definitions) _panels[definition.Id] = definition;
     }
 
     /// <summary>The panel on show, or null when the dock is closed.</summary>
@@ -60,12 +84,27 @@ public partial class DockPanelHost : UserControl
     /// </summary>
     public void Bind(AppSettings settings) => _settings = settings;
 
+    /// <summary>Every panel this host can show.</summary>
+    public IEnumerable<PanelDefinition> Registered => _panels.Values;
+
+    /// <summary>The definition for a panel, whether or not it is registered.</summary>
+    public PanelDefinition? Definition(ShellPanelId id) =>
+        _panels.TryGetValue(id, out var definition) ? definition : null;
+
     /// <summary>Open a panel, or replace the one on show. Content is built once, on first use.</summary>
     public void Show(ShellPanelId id)
     {
-        if (!PanelCatalog.IsRegistered(id)) return;
+        if (!_panels.TryGetValue(id, out var definition)) return;
 
-        PanelDefinition definition = PanelCatalog.Get(id);
+        // A panel out in its own window owns its content: reparenting it back into the
+        // column would empty the window while the operator was looking at it. Ask the
+        // window layer to focus what it already has instead.
+        if (_poppedOut.Contains(id))
+        {
+            PoppedOut?.Invoke(this, id);
+            return;
+        }
+
         if (!_live.TryGetValue(id, out var content))
         {
             content = definition.Create();
@@ -101,9 +140,26 @@ public partial class DockPanelHost : UserControl
     /// <summary>Ask for the current panel in its own window. The window itself is the listener's job.</summary>
     public void PopOutCurrent()
     {
-        if (Current is not { } id) return;
-        if (!PanelCatalog.Get(id).AllowsPopOut) return;
-        PoppedOut?.Invoke(this, id);
+        // An already-popped panel answers again rather than being rebuilt: the window
+        // layer may have lost the event (a second press of the button, a restart of the
+        // window) and focusing the surface it holds is cheaper than a second copy.
+        if (Current is { } id && _panels.TryGetValue(id, out var docked) && docked.AllowsPopOut)
+        {
+            PoppedOut?.Invoke(this, id);
+            return;
+        }
+
+        if (Current is null && _poppedOut.Count > 0)
+        {
+            foreach (var popped in _poppedOut)
+            {
+                if (_panels.TryGetValue(popped, out var definition) && definition.AllowsPopOut)
+                {
+                    PoppedOut?.Invoke(this, popped);
+                    return;
+                }
+            }
+        }
     }
 
     /// <summary>
@@ -116,6 +172,7 @@ public partial class DockPanelHost : UserControl
         if (!_live.TryGetValue(id, out var content)) return null;
 
         if (ReferenceEquals(ContentHost.Content, content)) ContentHost.Content = null;
+        _poppedOut.Add(id);
         if (Current == id) Close();
         return content;
     }
@@ -124,6 +181,7 @@ public partial class DockPanelHost : UserControl
     public void ReturnContent(ShellPanelId id, FrameworkElement content)
     {
         _live[id] = content;
+        _poppedOut.Remove(id);
         Show(id);
     }
 
@@ -153,8 +211,19 @@ public partial class DockPanelHost : UserControl
     public void FitToWindow()
     {
         if (Current is not { } id) return;
-        ApplyWidth(PanelCatalog.Get(id));
+        if (_panels.TryGetValue(id, out var definition)) ApplyWidth(definition);
     }
+
+    /// <summary>
+    /// Client width of the shell the dock sits in, or NaN to read it from the owning
+    /// window. Set directly by a host-level test: the clamp's whole job is arithmetic
+    /// against this number, and a test that had to build a <c>Window</c> to supply it
+    /// would be exercising WPF's layout rather than the rule.
+    /// </summary>
+    internal double AvailableWidth { get; set; } = double.NaN;
+
+    private double WindowWidth =>
+        double.IsNaN(AvailableWidth) ? Window.GetWindow(this)?.ActualWidth ?? 0 : AvailableWidth;
 
     private void ApplyWidth(PanelDefinition definition)
     {
@@ -174,7 +243,7 @@ public partial class DockPanelHost : UserControl
 
     private double ClampWidth(double wanted, PanelDefinition definition)
     {
-        double windowWidth = Window.GetWindow(this)?.ActualWidth ?? 0;
+        double windowWidth = WindowWidth;
         double ceiling = windowWidth > 0
             ? Math.Max(definition.MinWidth, windowWidth - CentreFloor)
             : definition.DefaultWidth;
@@ -194,10 +263,11 @@ public partial class DockPanelHost : UserControl
     private void OnSplitterDrag(object sender, DragDeltaEventArgs e)
     {
         if (Current is not { } id) return;
+        if (!_panels.TryGetValue(id, out var definition)) return;
 
         // Dragging right narrows the dock: the splitter is on the inner edge, so the
         // delta is subtracted from the width rather than added to it.
-        Width = ClampWidth(Width - e.HorizontalChange, PanelCatalog.Get(id));
+        Width = ClampWidth(Width - e.HorizontalChange, definition);
         e.Handled = true;
     }
 
