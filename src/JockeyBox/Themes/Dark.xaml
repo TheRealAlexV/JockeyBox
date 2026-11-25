@@ -881,4 +881,61 @@
         </Grid>
     </ControlTemplate>
 
+    <!-- ================= Panel-root styles =================
+         ROUTE, SRC, VIRT and DEV are independent XAML roots now, so a style
+         they name is resolved against this dictionary, not against
+         MainWindow.xaml. RackCaption lived at window scope once and a detached
+         mixer panel found no caption at all; these six plus the device row are
+         the same class of resource, so they live here.
+
+         ORDER IS THE CONTRACT. StaticResource resolves at load, so a style that
+         names another must come after it: RackRowLabel and RackUnit stand on
+         RackCaption (above, line ~854), RackBandGate stands on MicToggle
+         (line ~616), and the whole block stands after both. Appending in the
+         other direction was a real defect at 7b687b4. -->
+
+    <!-- Shared by ROUTE's four bus boxes and DEV's three device boxes: the
+         friendly name, trimmed rather than clipped, because "Microphone
+         (Realtek Audio)" does not fit a 128 px strip. -->
+    <DataTemplate x:Key="DeviceChoiceRow">
+        <TextBlock Text="{Binding FriendlyName}" TextTrimming="CharacterEllipsis"/>
+    </DataTemplate>
+
+    <Style x:Key="RackRow" TargetType="DockPanel">
+        <Setter Property="Margin" Value="0,3,0,0"/>
+    </Style>
+
+    <Style x:Key="RackValue" TargetType="TextBlock">
+        <Setter Property="Width" Value="34"/>
+        <Setter Property="TextAlignment" Value="Right"/>
+        <Setter Property="FontFamily" Value="Consolas"/>
+        <Setter Property="FontSize" Value="10"/>
+        <Setter Property="VerticalAlignment" Value="Center"/>
+    </Style>
+
+    <Style x:Key="RackRowLabel" TargetType="TextBlock" BasedOn="{StaticResource RackCaption}">
+        <Setter Property="Width" Value="30"/>
+    </Style>
+
+    <Style x:Key="RackUnit" TargetType="TextBlock" BasedOn="{StaticResource RackCaption}">
+        <Setter Property="Width" Value="14"/>
+        <Setter Property="Margin" Value="2,0,0,0"/>
+    </Style>
+
+    <Style x:Key="RackGroupTitle" TargetType="TextBlock">
+        <Setter Property="FontSize" Value="9"/>
+        <Setter Property="FontWeight" Value="Bold"/>
+        <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+    </Style>
+
+    <Style x:Key="RackBandGate" TargetType="ToggleButton" BasedOn="{StaticResource MicToggle}">
+        <Setter Property="Width" Value="26"/>
+        <Setter Property="Content" Value="OFF"/>
+        <Style.Triggers>
+            <Trigger Property="IsChecked" Value="True">
+                <Setter Property="Content" Value="ON"/>
+            </Trigger>
+        </Style.Triggers>
+    </Style>
+
 </ResourceDictionary>
