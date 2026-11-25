@@ -107,8 +107,12 @@ public sealed class LatencyLedger
 /// </summary>
 public sealed class PadRing
 {
-    /// <summary>Hard ceiling on alignment padding: 20 ms at 48 kHz.</summary>
-    public const int MaxFrames = 960;
+    /// <summary>
+    /// Hard ceiling on alignment padding: 40 ms at 48 kHz. The AFX frame is 480 frames and the
+    /// limiter carries 240, so a 960 ceiling left exactly zero headroom; 1920 covers AFX plus
+    /// the limiter with room to spare.
+    /// </summary>
+    public const int MaxFrames = 1920;
 
     /// <summary>A ramp covers 480 frames, so a pad change slides over 10 ms at 48 kHz.</summary>
     private const int FadeFrames = 480;

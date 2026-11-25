@@ -13,7 +13,7 @@ public class PadRingTests
         pad.SetPadding(500);
 
         Assert.Equal(500, pad.TargetFrames);
-        Assert.False(pad.Clamped, "500 frames is below the 960-frame ceiling");
+        Assert.False(pad.Clamped, $"500 frames is below the {PadRing.MaxFrames}-frame ceiling");
         Assert.True(pad.CapacityFrames >= 500, "the ring must grow to hold the pad it was given");
 
         // Let the ramp settle first: a pad change slides over 480 frames instead of stepping.
@@ -68,12 +68,14 @@ public class PadRingTests
         Assert.True(pad.Clamped, "a clamped pad must be visible to diagnostics, never silent");
         Assert.Equal(PadRing.MaxFrames, pad.TargetFrames);
 
-        pad.Process(new float[1024 * Channels], 0, Channels, 1024);
+        // The block must outlast the ceiling, or the delayed impulse falls outside it.
+        int blockFrames = PadRing.MaxFrames + 64;
+        pad.Process(new float[blockFrames * Channels], 0, Channels, blockFrames);
 
-        var block = new float[1024 * Channels];
+        var block = new float[blockFrames * Channels];
         block[0] = 1f;
         block[1] = 1f;
-        pad.Process(block, 0, Channels, 1024);
+        pad.Process(block, 0, Channels, blockFrames);
 
         Assert.Equal(PadRing.MaxFrames, FirstNonZeroFrame(block));
     }
