@@ -3,8 +3,8 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:vm="clr-namespace:JockeyBox.ViewModels"
              AutomationProperties.Name="Lyrics panel">
-    <!-- One lyrics surface, hosted by the main window and by each pop-out
-         LyricsWindow. It reads the MainViewModel through the inherited DataContext
+    <!-- One lyrics surface, hosted by the shell's LYRIC dock panel and by the window it
+         opens. It reads the MainViewModel through the inherited DataContext
          and owns no per-track state: both hosts show the same LyricLines.
 
          The bouncing ball is the exception to "no view state here": only the

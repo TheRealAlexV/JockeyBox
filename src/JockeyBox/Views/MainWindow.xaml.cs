@@ -138,10 +138,6 @@ public partial class MainWindow : Window
         SeekBar.AddHandler(Thumb.DragCompletedEvent,
             new DragCompletedEventHandler((_, _) => _vm.EndSeek(SeekBar.Value)));
 
-        // Lyrics panel: the control owns its own scroll/ball wiring so the pop-out
-        // window gets the same behaviour without a second copy here.
-        LyricsHost.PopOutRequested += (_, _) => OpenLyricsWindow();
-
         // Karaoke generation flows that need dialogs.
         _vm.SettingsRequested += () => OpenSettings();
         _vm.EngineInstallRequested += OnEngineInstallRequested;
@@ -176,7 +172,6 @@ public partial class MainWindow : Window
         PreviewKeyDown += OnSoundboardHotkeyCapture;
         PreviewKeyDown += OnShellEscape;
 
-        Closed += (_, _) => CloseLyricsWindow();
         Closed += (_, _) => CloseViewModel();
     }
 
@@ -258,48 +253,6 @@ public partial class MainWindow : Window
                                         - shellRows[0].ActualHeight
                                         - ShellScroll.Padding.Top - ShellScroll.Padding.Bottom);
         PanelHost.SetBodyHeight(bodyHeight);
-    }
-
-    /// <summary>The single pop-out lyrics window, if one is open.</summary>
-    private LyricsWindow? _lyricsWindow;
-
-    /// <summary>
-    /// Open (or bring forward) the pop-out lyrics window. One instance for the
-    /// session: the panel holds no per-track state, so re-opening only re-activates
-    /// the window that already exists.
-    /// </summary>
-    private void OpenLyricsWindow()
-    {
-        if (_lyricsWindow != null)
-        {
-            if (_lyricsWindow.WindowState == WindowState.Minimized)
-                _lyricsWindow.WindowState = WindowState.Normal;
-            _lyricsWindow.Activate();
-            return;
-        }
-
-        var window = new LyricsWindow(_vm, _vm.SettingsRef) { Owner = this };
-        // A second window must not survive its owner: closing the main window
-        // closes this one first, and the reference goes with it.
-        window.Closed += (_, _) => _lyricsWindow = null;
-        _lyricsWindow = window;
-        window.Show();
-    }
-
-    /// <summary>Close the pop-out with the main window, without letting a failure stop the close.</summary>
-    private void CloseLyricsWindow()
-    {
-        var window = _lyricsWindow;
-        _lyricsWindow = null;
-        if (window == null) return;
-        try
-        {
-            window.Close();
-        }
-        catch
-        {
-            // The window is going away with the process anyway.
-        }
     }
 
     /// <summary>
@@ -855,16 +808,38 @@ public partial class MainWindow : Window
     /// instead of stacking an identical duplicate.</summary>
     private readonly Dictionary<ShellPanelId, PanelWindow> _panelWindows = new();
 
-    private void OnLibraryToggleClick(object sender, RoutedEventArgs e) => SetLibraryOpen(LibraryToggle.IsChecked == true);
+    private void OnLibraryToggleClick(object sender, RoutedEventArgs e) => SetPanelOpen(ShellPanelId.Library, LibraryToggle.IsChecked == true);
+
+    private void OnLyricsToggleClick(object sender, RoutedEventArgs e) => SetPanelOpen(ShellPanelId.Lyrics, LyricsToggle.IsChecked == true);
 
     /// <summary>Open or close the library pane. Public so the capture harness can show
     /// a state a pointer would have to click through.</summary>
-    public void SetLibraryOpen(bool open)
+    public void SetLibraryOpen(bool open) => SetPanelOpen(ShellPanelId.Library, open);
+
+    /// <summary>
+    /// Open or close one rail panel. The dock holds one panel at a time, so the rail's
+    /// toggles are re-read from the host instead of trusted: opening LYRIC while LIB is
+    /// up has to leave exactly one pill lit.
+    ///
+    /// <para>Public for the same reason <see cref="SetLibraryOpen"/> is: the capture
+    /// harness has to show a state a pointer would have to click through.</para>
+    /// </summary>
+    public void SetPanelOpen(ShellPanelId id, bool open)
     {
-        LibraryToggle.IsChecked = open;
-        if (open) PanelHost.Show(ShellPanelId.Library);
-        else PanelHost.Close();
+        if (open) PanelHost.Show(id);
+        else if (PanelHost.Current == id) PanelHost.Close();
+        SyncRailToggles();
     }
+
+    private void SyncRailToggles()
+    {
+        LibraryToggle.IsChecked = PanelHost.Current == ShellPanelId.Library;
+        LyricsToggle.IsChecked = PanelHost.Current == ShellPanelId.Lyrics;
+    }
+
+    /// <summary>The library pane's control, or null before it has ever been shown.
+    /// The capture harness selects the LIB tabs (SPOTIFY, YOUTUBE) through it.</summary>
+    public LibraryPanel? LibraryPane => PanelHost.ContentOf<LibraryPanel>(ShellPanelId.Library);
 
     /// <summary>
     /// The dock asked for its current panel in a window. The host does not own windows,

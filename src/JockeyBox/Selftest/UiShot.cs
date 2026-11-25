@@ -90,6 +90,18 @@ internal static class UiShot
             $"uishot: home {AppPaths.Home}, settings {settingsPath}, last-write {settingsStamp}");
         Console.Out.Flush();
 
+        // The private pop-out lyrics window is gone: LYRIC is a dock panel and leaves
+        // through --uishot-popout Lyrics. Keep the retired name loud rather than letting
+        // it fall through to the default and photograph the main window under a name
+        // that claims to be something else.
+        if (target == "lyricswindow")
+        {
+            Console.Error.WriteLine(
+                "uishot: lyricswindow is retired; use --uishot-popout Lyrics (and --uishot-popout-return <file>)");
+            Console.Error.Flush();
+            return 3;
+        }
+
         Window window = target switch
         {
             "settings" => new SettingsWindow(Settings.AppSettings.Load()),
@@ -99,10 +111,6 @@ internal static class UiShot
             "diag" => new DiagnosticsWindow(new AudioEngine(), Settings.AppSettings.Load()),
             "youtubesearch" => new YouTubeSearchWindow(StubYouTubeSearch(Harness.Flag(args, "--uishot-audition"))),
             "youtubetab" => new MainWindow(),
-            // The pop-out lyrics window with its own view model: the main window
-            // opens it lazily, and a capture must not depend on clicking through
-            // the main surface first.
-            "lyricswindow" => new LyricsWindow(new MainViewModel(), Settings.AppSettings.Load()),
             "spotifytab" => new MainWindow(),
             _ => new MainWindow(),
         };
@@ -584,28 +592,25 @@ internal static class UiShot
         // window rules - one instance however often it is asked for, and no
         // survivor once the main window closes. A capture cannot show this: the
         // pop-out is a second HWND and only one window is ever in the bitmap.
+        // Checked on LYRIC because it is the pane that used to own a private window;
+        // PanelWindow is the single path now, so the rule is verified where it lives.
         if (Harness.Flag(args, "--uishot-popout-check") != null && window is MainWindow popoutMain)
         {
-            if (popoutMain.LyricsHost.FindName("LyricsPopOutButton") is not Button popoutButton)
-            {
-                Console.Error.WriteLine("uishot: pop-out button not found in the lyrics panel");
-                Console.Error.Flush();
-                window.Close();
-                return 2;
-            }
+            int PanelCount() => Application.Current.Windows.OfType<PanelWindow>()
+                .Count(w => w.Title == "LYRIC");
 
-            popoutButton.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            popoutMain.PopOutPanel(ShellPanelId.Lyrics);
             UiPump.Pump(200);
-            int first = Application.Current.Windows.OfType<LyricsWindow>().Count();
+            int first = PanelCount();
 
             // Second ask must focus the existing window, not open another.
-            popoutButton.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent));
+            popoutMain.PopOutPanel(ShellPanelId.Lyrics);
             UiPump.Pump(200);
-            int second = Application.Current.Windows.OfType<LyricsWindow>().Count();
+            int second = PanelCount();
 
             window.Close();
             UiPump.Pump(300);
-            int afterMainClosed = Application.Current.Windows.OfType<LyricsWindow>().Count();
+            int afterMainClosed = PanelCount();
 
             Console.Out.WriteLine(
                 $"uishot: popout first={first} second={second} after-main-close={afterMainClosed}");
@@ -1059,6 +1064,30 @@ internal static class UiShot
         // numbers are laid out - and the capture still renders afterwards.
         string? treeDumpPath = Harness.Flag(args, "--uishot-tree");
         if (!string.IsNullOrWhiteSpace(treeDumpPath)) DumpVisualTree(host, treeDumpPath);
+
+        // A tab that exists but renders nothing must not pass as a capture. The tabs
+        // that moved into LIB are the ones that can go empty without the strip looking
+        // wrong, so they are the ones checked, and an empty root is a hard failure
+        // rather than a note in the log.
+        if (tabHeader != null)
+        {
+            var tabRoot = RealisedTabContent(window, tabHeader);
+            Console.Out.WriteLine(
+                $"uishot: tab {tabHeader} root " +
+                (tabRoot == null
+                    ? "absent"
+                    : $"{OneDecimal(tabRoot.ActualWidth)}x{OneDecimal(tabRoot.ActualHeight)}"));
+            Console.Out.Flush();
+
+            if (tabRoot == null || tabRoot.ActualWidth <= 0 || tabRoot.ActualHeight <= 0)
+            {
+                Console.Error.WriteLine(
+                    $"uishot: tab {tabHeader} realised no content root; the capture is not evidence");
+                Console.Error.Flush();
+                window.Close();
+                return 4;
+            }
+        }
 
         var bitmap = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
         bitmap.Render(host);
@@ -1539,19 +1568,56 @@ internal static class UiShot
     }
 
     /// <summary>
-    /// Select a browser tab by its header text. Header, not index: an inserted tab
-    /// would silently change what a number means, and a capture that photographs
-    /// the wrong tab is worse than no capture.
+    /// The element a LIB tab is showing, so "the tab exists but is empty" cannot pass as
+    /// a capture. Null when the tab is missing or carries no content element.
+    /// </summary>
+    private static FrameworkElement? RealisedTabContent(Window window, string header)
+    {
+        if (window is not MainWindow main) return null;
+        var library = main.LibraryPane;
+        if (library == null) return null;
+
+        foreach (var item in library.LibraryTabs.Items)
+        {
+            if (item is TabItem tab
+                && string.Equals(tab.Header as string, header, StringComparison.Ordinal))
+            {
+                return tab.Content as FrameworkElement;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Select a tab by its header text. Header, not index: an inserted tab would
+    /// silently change what a number means, and a capture that photographs the wrong
+    /// tab is worse than no capture.
+    ///
+    /// <para>SPOTIFY and YOUTUBE are LIB tabs now, so the strip they live in is the
+    /// library pane's, not the centre one - and the pane has to be open before its tabs
+    /// exist to select. LYRICS is not a tab any more: it is the LYRIC dock panel, so
+    /// "select" means open that panel.</para>
     /// </summary>
     private static bool SelectBrowserTab(Window window, string header)
     {
         if (window is not MainWindow main) return false;
 
-        foreach (var item in main.BrowserTabs.Items)
+        if (string.Equals(header, "LYRICS", StringComparison.Ordinal))
+        {
+            main.SetPanelOpen(ShellPanelId.Lyrics, true);
+            return main.PanelHost.Current == ShellPanelId.Lyrics;
+        }
+
+        main.SetPanelOpen(ShellPanelId.Library, true);
+        var library = main.LibraryPane;
+        if (library == null) return false;
+
+        foreach (var item in library.LibraryTabs.Items)
         {
             if (item is TabItem tab && string.Equals(tab.Header as string, header, StringComparison.Ordinal))
             {
-                main.BrowserTabs.SelectedItem = tab;
+                library.LibraryTabs.SelectedItem = tab;
                 return true;
             }
         }

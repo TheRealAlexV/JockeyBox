@@ -1322,6 +1322,13 @@
                                       Content="LIB" Click="OnLibraryToggleClick"
                                       AutomationProperties.Name="Library pane: artists, albums, crates and the queue"
                                       ToolTip="Open the library pane: artists, albums, crates and the queue"/>
+                        <!-- Lyrics used to be a tab in the centre strip. It is a rail
+                             panel now: the dock holds it, its caption carries the
+                             pop-out, and its window geometry is the operator's own. -->
+                        <ToggleButton x:Name="LyricsToggle" Style="{StaticResource RailButton}"
+                                      Content="LYRIC" Click="OnLyricsToggleClick"
+                                      AutomationProperties.Name="Lyrics panel"
+                                      ToolTip="Open the lyrics pane: the current track's lines"/>
                         <ToggleButton x:Name="DockToggle" Style="{StaticResource RailButton}"
                                       Content="MIX" Click="OnDockToggleClick"
                                       AutomationProperties.Name="Mixer dock: strips, soundboard, cue bank, jobs"
@@ -1966,16 +1973,10 @@
         <Grid Grid.Row="3" Grid.Column="0" x:Name="BrowserHost" MinHeight="150" Height="480">
             <Border Style="{StaticResource Card}" Padding="8">
                 <TabControl x:Name="BrowserTabs" Style="{StaticResource BrowserTabControl}">
-                <TabItem Header="SPOTIFY">
-                    <views:SpotifyView DataContext="{Binding Spotify}"/>
-                </TabItem>
-
-                <TabItem Header="YOUTUBE">
-                    <views:YouTubeView DataContext="{Binding YouTube}"/>
-                </TabItem>
-                    <TabItem Header="LYRICS">
-                        <views:LyricsPanel x:Name="LyricsHost" ShowPopOutButton="True"/>
-                    </TabItem>
+                <!-- Spotify, YouTube and Lyrics left this strip in phase 2: the first
+                     two are LIB tabs now and lyrics is the LYRIC dock panel. The strip
+                     itself stays (empty) until phase 3 puts the mixer here, because
+                     the centre column's geometry is measured off this element. -->
                 </TabControl>
             </Border>
         </Grid>

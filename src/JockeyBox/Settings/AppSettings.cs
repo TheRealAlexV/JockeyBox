@@ -550,9 +550,28 @@ public class AppSettings
         if (!PanelLayout.TryGetValue(key, out var entry))
         {
             entry = new PanelLayoutEntry();
+            if (id == Views.Shell.ShellPanelId.Lyrics) SeedLyricsFromWindow(entry);
             PanelLayout[key] = entry;
         }
         return entry;
+    }
+
+    /// <summary>
+    /// Carry the old pop-out lyrics window's place into the LYRIC panel's entry.
+    ///
+    /// <para>The window is gone but the operator's second-screen position is not: on
+    /// the first run after the upgrade the panel would otherwise open on the primary
+    /// monitor at its default size, which reads as a reset rather than a default. Null
+    /// still means "never placed", so a window the operator never moved seeds
+    /// nothing.</para>
+    /// </summary>
+    private void SeedLyricsFromWindow(PanelLayoutEntry entry)
+    {
+        entry.WindowLeft = LyricsWindowLeft;
+        entry.WindowTop = LyricsWindowTop;
+        entry.WindowWidth = LyricsWindowWidth;
+        entry.WindowHeight = LyricsWindowHeight;
+        entry.Topmost = LyricsWindowTopmost;
     }
 
     /// <summary>Preferred provider id for a track, or null when none is stored.</summary>

@@ -11,7 +11,7 @@ using JockeyBox.ViewModels;
 namespace JockeyBox.Views;
 
 /// <summary>
-/// The lyrics surface, shared by the main window and by <see cref="LyricsWindow"/>.
+/// The lyrics surface, shared by the shell's LYRIC panel and by the window it opens.
 ///
 /// <para>
 /// It reads the <see cref="MainViewModel"/> through the inherited DataContext and
@@ -140,7 +140,7 @@ public partial class LyricsPanel : UserControl
     /// from the live viewport on every resize, so a taller window means more lines
     /// visible, never fewer.</para>
     ///
-    /// <para>In the pop-out <see cref="LyricsWindow"/> there is no such scroller and
+    /// <para>In the pop-out window there is no such scroller and
     /// the row is star-sized, so the list is left uncapped there: the window's size
     /// is the bound and a cap would only throw room away. Nothing here is a fixed
     /// height, which is what made an earlier 30 px clamp hide two lines of the

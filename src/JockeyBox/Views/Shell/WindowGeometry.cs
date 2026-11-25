@@ -8,7 +8,7 @@ namespace JockeyBox.Views.Shell;
 /// off-screen on a laptop dock, which reads as "the panel did not open".
 ///
 /// <para>Shared by the lyrics pop-out and the panel windows so the screen test has one
-/// copy; it was private to <see cref="LyricsWindow"/> until the panels needed the same
+/// copy; it was private to the old lyrics window until the panels needed the same
 /// rule.</para>
 /// </summary>
 internal static class WindowGeometry
@@ -43,9 +43,9 @@ internal static class WindowGeometry
 
     /// <summary>
     /// A sliver of the title bar has to be reachable, not the whole rectangle:
-    /// partially off screen is a legitimate placement. Copied verbatim from
-    /// <see cref="LyricsWindow"/>, which owned the only copy until the panels needed
-    /// the same rule; that window now calls this one.
+    /// partially off screen is a legitimate placement. Copied verbatim from the old
+    /// lyrics window, which owned the only copy until the panels needed the same rule;
+    /// that window is gone and both paths call this one now.
     /// </summary>
     public static bool IsOnAnyScreen(Rect candidate)
     {

@@ -25,9 +25,8 @@ public sealed record PanelDefinition(
 /// The panel set, in one place: one registration per pane, so "what can the dock
 /// hold" is answered by reading this file instead of hunting the rail.
 ///
-/// <para>Phase 1 registers <see cref="ShellPanelId.Library"/> only, because it is the
-/// only pane whose content and widths are built. Phases 3 and 4 add a registration
-/// each. <see cref="ShellPanelId"/> already names all seven, so the rail can talk
+/// <para>Phase 1 registered <see cref="ShellPanelId.Library"/>, phase 2 adds
+/// <see cref="ShellPanelId.Lyrics"/>, and phases 3 and 4 add the rest. <see cref="ShellPanelId"/> already names all seven, so the rail can talk
 /// about a panel that is not registered yet; <see cref="IsRegistered"/> is the guard
 /// the host and the rail use rather than guessing.</para>
 /// </summary>
@@ -43,6 +42,14 @@ public static class PanelCatalog
     /// they already do in TrackRows.xaml instead of the whole pane shrinking to a
     /// strip.</summary>
     private const double LibraryMinWidth = 300;
+
+    /// <summary>Lyric lines are the document, so the pane takes the widest column the
+    /// centre floor allows: at 1400 that is about 545 px, the same ceiling LIB opens at.</summary>
+    private const double LyricsDefaultWidth = 545;
+
+    /// <summary>Below this the line text and the bouncing ball collide. The old lyrics
+    /// window refused to shrink past 360; the dock's own caption takes the difference.</summary>
+    private const double LyricsMinWidth = 320;
 
     /// <summary>
     /// The production panel set, in the order the shell offers them. This is a value
@@ -60,5 +67,18 @@ public static class PanelCatalog
             LibraryMinWidth,
             AllowsPopOut: true,
             () => new LibraryPanel()),
+
+        // Lyrics is a document the same way the library is: read, not configured.
+        // Its caption is the operator's word, singular. The panel's own pop-out button
+        // stays off because the dock's caption carries one, and the element is the same
+        // one when it sits in a window, so two pop-out paths can never both be live.
+        new PanelDefinition(
+            ShellPanelId.Lyrics,
+            "LYRIC",
+            "Lyrics panel",
+            LyricsDefaultWidth,
+            LyricsMinWidth,
+            AllowsPopOut: true,
+            () => new LyricsPanel { ShowPopOutButton = false }),
     };
 }

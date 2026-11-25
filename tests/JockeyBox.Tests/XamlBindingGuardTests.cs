@@ -37,7 +37,6 @@ public sealed class XamlBindingGuardTests
         ["MainWindow.xaml"] = typeof(MainViewModel),
         ["LibraryPanel.xaml"] = typeof(MainViewModel),
         ["LyricsPanel.xaml"] = typeof(MainViewModel),
-        ["LyricsWindow.xaml"] = typeof(MainViewModel),
         ["SpotifyView.xaml"] = typeof(SpotifyViewModel),
         ["YouTubeView.xaml"] = typeof(YouTubeViewModel),
 
@@ -94,7 +93,7 @@ public sealed class XamlBindingGuardTests
 
         Assert.Empty(unlisted);
         Assert.True(files >= 10, $"only {files} XAML files were walked; the guard is not reading the views");
-        Assert.True(checkedBindings > 100,
+        Assert.True(checkedBindings >= 403,
                     $"only {checkedBindings} bindings were walked; the guard is not reading the views");
         Assert.Empty(failures);
     }
@@ -231,6 +230,37 @@ public sealed class XamlBindingGuardTests
     private static IEnumerable<(string Path, string Value)> BoundTo(
         List<(string Path, string Value)> bindings, string name)
         => bindings.Where(b => b.Path == name || b.Path == "DataContext." + name);
+
+    /// <summary>
+    /// The LIB tabs that host Spotify and YouTube re-root their context, so everything
+    /// inside them resolves on a different view model than the rest of the pane. Pinned
+    /// by name: if those tabs move again, or lose their DataContext, this fails instead
+    /// of the sweep quietly grading them against MainViewModel - which would report
+    /// false failures on a correct change, or false passes on a broken one.
+    /// </summary>
+    [Fact]
+    public void LibraryTabsReRootToTheirOwnViewModels()
+    {
+        var doc = XDocument.Load(Path.Combine(RepoRoot(), "src", "JockeyBox", "Views", "LibraryPanel.xaml"));
+
+        foreach (var (header, expected) in new (string, Type)[]
+                 {
+                     ("SPOTIFY", typeof(SpotifyViewModel)),
+                     ("YOUTUBE", typeof(YouTubeViewModel)),
+                 })
+        {
+            var tab = doc.Descendants()
+                .Where(e => e.Name.LocalName == "TabItem")
+                .FirstOrDefault(e => (string?)e.Attribute("Header") == header);
+
+            Assert.NotNull(tab);
+            var host = tab!.Elements().FirstOrDefault();
+            Assert.NotNull(host);
+            // The pane's own context is MainViewModel; the tab re-roots it. Passing the
+            // fallback is what the real walk does, and the point of the assertion.
+            Assert.Equal(expected, DataContextType(host!, typeof(MainViewModel)));
+        }
+    }
 
     private static string MainWindowXaml() =>
         Path.Combine(RepoRoot(), "src", "JockeyBox", "Views", "MainWindow.xaml");

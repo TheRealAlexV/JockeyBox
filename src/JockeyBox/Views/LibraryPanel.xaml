@@ -1,7 +1,8 @@
 <UserControl x:Class="JockeyBox.Views.LibraryPanel"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:vm="clr-namespace:JockeyBox.ViewModels">
+             xmlns:vm="clr-namespace:JockeyBox.ViewModels"
+             xmlns:views="clr-namespace:JockeyBox.Views">
     <!-- The catalogue: LIBRARY and QUEUE. It used to be a Border inside MainWindow;
          it is its own view now because the dock builds a panel when it is first shown
          and hands the same element to a window when the operator pops it out.
@@ -22,7 +23,7 @@
     </UserControl.Resources>
 
     <Grid>
-                    <TabControl Style="{StaticResource BrowserTabControl}">
+                    <TabControl x:Name="LibraryTabs" Style="{StaticResource BrowserTabControl}">
                 <TabItem Header="LIBRARY">
                 <DockPanel>
                     <!-- Layout switcher: the ACTIVE mode is the filled pill, the
@@ -694,6 +695,19 @@
                                        Visibility="{Binding IsQueueEmpty, Converter={StaticResource BoolToVisibility}}"/>
                         </Grid>
                     </DockPanel>
+                </TabItem>
+
+                <!-- Spotify and YouTube left the window's centre strip. They are
+                     library-side reading, so they sit beside LIBRARY and QUEUE. Each
+                     tab hosts the same view the centre used to: the control is bound
+                     to the one view-model property it already reads, so nothing inside
+                     those views changed. Headers stay the operator's words. -->
+                <TabItem Header="SPOTIFY">
+                    <views:SpotifyView DataContext="{Binding Spotify}"/>
+                </TabItem>
+
+                <TabItem Header="YOUTUBE">
+                    <views:YouTubeView DataContext="{Binding YouTube}"/>
                 </TabItem>
                     </TabControl>
     </Grid>

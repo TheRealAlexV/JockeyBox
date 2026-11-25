@@ -8,8 +8,8 @@ namespace JockeyBox.Views.Shell;
 
 /// <summary>
 /// One docked panel in its own window. Modeless and owned by the main window, so it
-/// never outlives the console and takes no taskbar slot - the same rules
-/// <see cref="LyricsWindow"/> and <see cref="YouTubeSearchWindow"/> follow.
+/// never outlives the console and takes no taskbar slot - the same rules the old lyrics
+/// pop-out and <see cref="YouTubeSearchWindow"/> follow.
 ///
 /// <para>On close it gives the content back to the dock and the dock reopens on it, so
 /// undocking and redocking are one round trip with no rebuild: the operator's scroll
