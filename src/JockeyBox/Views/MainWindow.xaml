@@ -36,19 +36,13 @@
              filter/sort strip. Referenced by SpotifyView and YouTubeView too,
              so the three lists cannot drift apart again. -->
         <ResourceDictionary.MergedDictionaries>
-            <ResourceDictionary Source="/Views/Shared/TrackRows.xaml"/>
-            <ResourceDictionary Source="/Views/Shared/TrackMenu.xaml"/>
-            <ResourceDictionary Source="/Views/Shared/StatusConsole.xaml"/>
-            <ResourceDictionary Source="/Views/Shared/LibraryTabs.xaml"/>
+            <ResourceDictionary Source="/JockeyBox;component/Views/Shared/TrackRows.xaml"/>
+            <ResourceDictionary Source="/JockeyBox;component/Views/Shared/TrackMenu.xaml"/>
+            <ResourceDictionary Source="/JockeyBox;component/Views/Shared/StatusConsole.xaml"/>
+            <ResourceDictionary Source="/JockeyBox;component/Views/Shared/LibraryTabs.xaml"/>
         </ResourceDictionary.MergedDictionaries>
 
-        <views:ActivityElapsedConverter x:Key="ActivityElapsed"/>
 
-        <!-- The fill a cue toggle lights with when it is engaged. Cyan is what the
-             header MON and the mic strip's MON already light with (deck A's own
-             accent), and each deck card overrides this key beside DeckAccent, so a
-             deck's cue button lights in that deck's colour. One key, one look. -->
-        <SolidColorBrush x:Key="DeckCueBrush" Color="#00C8FF"/>
 
         <!-- One row shape for every device dropdown in this window: the friendly
              name, trimmed rather than clipped, because "Microphone (Realtek Audio)"
@@ -85,132 +79,7 @@
              Nine pads, one row: each takes an equal share of what CLEAR leaves. The
              floor keeps a pad tappable and only engages on a window narrower than the
              card is ever laid out; at 1040 a share is ~37 px. -->
-        <Style x:Key="CuePad" TargetType="Button"
-               BasedOn="{StaticResource {x:Type Button}}">
-            <!-- 15 px: a third of the 44 px pad this used to be, on the operator's
-                 call that the bank was eating the deck card's height. One line of
-                 text instead of two stacked ones, so a 15 px pad still reads. -->
-            <Setter Property="Height" Value="15"/>
-            <Setter Property="MinWidth" Value="30"/>
-            <Setter Property="HorizontalAlignment" Value="Stretch"/>
-            <Setter Property="Padding" Value="0"/>
-            <!-- 5 px between pads, not 3: nine 15 px boxes in a row need a gap the
-                 eye can read as a gap before the dashed edge starts to look like
-                 one continuous dotted rule. -->
-            <Setter Property="Margin" Value="0,0,5,0"/>
-            <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Grid>
-                            <Rectangle x:Name="frame" RadiusX="2" RadiusY="2"
-                                       Stroke="{StaticResource TextDimBrush}"
-                                       StrokeThickness="1" StrokeDashArray="5 2"
-                                       Fill="{TemplateBinding Background}"/>
-                            <StackPanel Orientation="Horizontal"
-                                        VerticalAlignment="Center"
-                                        HorizontalAlignment="Center">
-                                <TextBlock x:Name="slotText" Text="{Binding SlotText}"
-                                           FontSize="9" FontWeight="Bold"
-                                           VerticalAlignment="Center"
-                                           HorizontalAlignment="Center"
-                                           Foreground="{TemplateBinding Foreground}"/>
-                                <!-- The position is only drawn when there is one.
-                                     At 15 px an 8 px en dash between the frame edges
-                                     read as dust on the button, and an empty pad is
-                                     already saying "empty" with its dashed outline. -->
-                                <TextBlock x:Name="posText" Text="{Binding PositionText}"
-                                           FontFamily="Consolas" FontSize="8"
-                                           Margin="4,0,0,0"
-                                           Visibility="Collapsed"
-                                           VerticalAlignment="Center"
-                                           HorizontalAlignment="Center"
-                                           Foreground="{TemplateBinding Foreground}"/>
-                            </StackPanel>
-                        </Grid>
-                        <ControlTemplate.Triggers>
-                            <DataTrigger Binding="{Binding HasPosition}" Value="True">
-                                <Setter TargetName="frame" Property="Stroke"
-                                        Value="{StaticResource TextDimBrush}"/>
-                                <Setter TargetName="frame" Property="StrokeDashArray"
-                                        Value="{x:Null}"/>
-                                <Setter TargetName="frame" Property="Fill"
-                                        Value="{StaticResource PanelAltBrush}"/>
-                                <Setter TargetName="slotText" Property="Foreground"
-                                        Value="{StaticResource TextBrush}"/>
-                                <Setter TargetName="posText" Property="Visibility"
-                                        Value="Visible"/>
-                                <Setter TargetName="posText" Property="Foreground"
-                                        Value="{StaticResource TextBrush}"/>
-                            </DataTrigger>
-                            <DataTrigger Binding="{Binding IsQuick}" Value="True">
-                                <Setter Property="Margin" Value="8,0,5,0"/>
-                            </DataTrigger>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="frame" Property="Stroke"
-                                        Value="{StaticResource TextBrush}"/>
-                            </Trigger>
-                            <Trigger Property="IsKeyboardFocused" Value="True">
-                                <Setter TargetName="frame" Property="Stroke"
-                                        Value="{StaticResource TextBrush}"/>
-                                <Setter TargetName="frame" Property="StrokeThickness" Value="2"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
 
-        <!-- Toggle pill for the cue strips: 18 px, dim until engaged, accent fill
-        while on. One style, three places - the header's MON/MVSYNC, the mic
-        strip's MON/MUTE and each deck card's CUE - so they read as the same kind
-        of switch. It has to be declared before the deck card template: a
-        StaticResource inside a DataTemplate resolves against the dictionary as
-        it stood at that point, so a style defined further down is not found. -->
-        <Style x:Key="MicToggle" TargetType="ToggleButton">
-        <Setter Property="Height" Value="18"/>
-        <Setter Property="Padding" Value="0"/>
-        <Setter Property="FontSize" Value="9"/>
-        <Setter Property="FontWeight" Value="Bold"/>
-        <Setter Property="VerticalAlignment" Value="Center"/>
-        <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
-        <Setter Property="Cursor" Value="Hand"/>
-        <Setter Property="Template">
-        <Setter.Value>
-        <ControlTemplate TargetType="ToggleButton">
-        <Border x:Name="bd" Background="{StaticResource PanelAltBrush}"
-        BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
-        CornerRadius="3">
-        <!-- A TextBlock with its own Foreground, not a presenter:
-        a ContentPresenter does not follow these triggers, so
-        the checked state painted light text on the cyan fill. -->
-        <TextBlock x:Name="label" Text="{TemplateBinding Content}"
-        Foreground="{TemplateBinding Foreground}"
-        HorizontalAlignment="Center"
-        VerticalAlignment="Center"/>
-        </Border>
-        <ControlTemplate.Triggers>
-        <Trigger Property="IsMouseOver" Value="True">
-        <Setter TargetName="bd" Property="Background"
-        Value="{StaticResource HoverBrush}"/>
-        </Trigger>
-        <Trigger Property="IsChecked" Value="True">
-        <Setter TargetName="bd" Property="Background"
-        Value="{DynamicResource DeckCueBrush}"/>
-        <Setter TargetName="label" Property="Foreground" Value="#08131A"/>
-        </Trigger>
-        <!-- Keyboard focus. The pill has no chrome to lose, so without this a
-        tabbed-to MON or CUE looks identical to the one beside it. -->
-        <Trigger Property="IsKeyboardFocused" Value="True">
-        <Setter TargetName="bd" Property="BorderBrush"
-        Value="{StaticResource TextBrush}"/>
-        </Trigger>
-        </ControlTemplate.Triggers>
-        </ControlTemplate>
-        </Setter.Value>
-        </Setter>
-        </Style>
         <DataTemplate x:Key="DeckCardTemplate" DataType="{x:Type vm:DeckViewModel}">
             <!-- Bottom padding matched to the top: 20 px of it hung below the cue
                  bank as an empty band on both cards, which is the slack the review
@@ -777,190 +646,6 @@
             </Setter>
         </Style>
 
-        <!-- ======== Soundboard pad tile ========
-             Same card idiom as the rest of the window: dark panel, 1 px border,
-             6 px radius. While the pad is sounding the border takes the deck-A
-             accent and a soft glow, so the playing pad reads at a glance from
-             across the booth. -->
-        <DataTemplate x:Key="SoundboardPadTile">
-            <Border Width="128" Height="112" Margin="0,0,8,8" CornerRadius="6">
-                <Border.Style>
-                    <Style TargetType="Border">
-                        <Setter Property="Background" Value="{StaticResource PanelAltBrush}"/>
-                        <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
-                        <Setter Property="BorderThickness" Value="1"/>
-                        <Style.Triggers>
-                            <DataTrigger Binding="{Binding IsPlaying}" Value="True">
-                                <Setter Property="BorderBrush" Value="{StaticResource AccentABrush}"/>
-                                <Setter Property="Background" Value="#1B2733"/>
-                                <Setter Property="Effect">
-                                    <Setter.Value>
-                                        <DropShadowEffect Color="#00C8FF" BlurRadius="16"
-                                                          ShadowDepth="0" Opacity="0.5"/>
-                                    </Setter.Value>
-                                </Setter>
-                            </DataTrigger>
-                        </Style.Triggers>
-                    </Style>
-                </Border.Style>
-
-                <Grid Margin="8,7,8,8">
-                    <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="Auto"/>
-                        <RowDefinition Height="*"/>
-                        <RowDefinition Height="Auto"/>
-                    </Grid.RowDefinitions>
-
-                    <DockPanel Grid.Row="0">
-                        <Button DockPanel.Dock="Right" Width="16" Height="16" Padding="0"
-                                FontSize="10" Margin="4,0,0,0" VerticalAlignment="Top"
-                                Foreground="{StaticResource TextDimBrush}"
-                                Content="&#x00D7;"
-                                ToolTip="Remove this sound"
-                                Command="{Binding DataContext.RemoveCommand,
-                                    RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                                CommandParameter="{Binding}"/>
-                        <!-- Bind: captures the next chord for this pad. While
-                             capturing the glyph turns into a dot so the tile says
-                             "waiting for keys" without a dialog. -->
-                        <Button DockPanel.Dock="Right" Width="16" Height="16" Padding="0"
-                                FontSize="9" Margin="0,0,2,0" VerticalAlignment="Top"
-                                Command="{Binding DataContext.BindCommand,
-                                    RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                                CommandParameter="{Binding}"
-                                ToolTip="Bind a hotkey (click, then press the keys)">
-                            <Button.Style>
-                                <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-                                    <Setter Property="Content" Value="&#x2328;"/>
-                                    <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding IsCapturing}" Value="True">
-                                            <Setter Property="Content" Value="&#x25CF;"/>
-                                            <Setter Property="Foreground" Value="{StaticResource AccentABrush}"/>
-                                            <Setter Property="BorderBrush" Value="{StaticResource AccentABrush}"/>
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </Button.Style>
-                        </Button>
-
-                        <!-- A real stop, only while the pad sounds: the big button
-                             below always means "play" and never changes meaning. -->
-                        <Button DockPanel.Dock="Right" Width="16" Height="16" Padding="0"
-                                FontSize="8" Margin="0,0,2,0" VerticalAlignment="Top"
-                                Foreground="{StaticResource AccentABrush}"
-                                Content="&#x25A0;"
-                                ToolTip="Stop this sound"
-                                Command="{Binding DataContext.StopCommand,
-                                    RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                                CommandParameter="{Binding}">
-                            <Button.Style>
-                                <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-                                    <Setter Property="Visibility" Value="Collapsed"/>
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding IsPlaying}" Value="True">
-                                            <Setter Property="Visibility" Value="Visible"/>
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </Button.Style>
-                        </Button>
-                        <TextBlock Text="{Binding Name}" FontSize="11" FontWeight="Bold"
-                                   TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
-                                   ToolTip="{Binding Name}"/>
-                    </DockPanel>
-
-                    <!-- Hotkey, or a quiet "unbound" so the row never jumps.
-                         Clicking the line starts a capture, same as the ⌨ button. -->
-                    <TextBlock Grid.Row="1" Margin="0,2,0,0" FontSize="9" FontFamily="Consolas"
-                               TextTrimming="CharacterEllipsis" Cursor="Hand"
-                               ToolTip="Click to bind a key combination">
-                        <TextBlock.InputBindings>
-                            <MouseBinding MouseAction="LeftClick"
-                                          Command="{Binding DataContext.BindCommand,
-                                              RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                                          CommandParameter="{Binding}"/>
-                        </TextBlock.InputBindings>
-                        <TextBlock.Style>
-                            <Style TargetType="TextBlock">
-                                <Setter Property="Text" Value="{Binding Hotkey, TargetNullValue=unbound}"/>
-                                <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding Hotkey}" Value="">
-                                        <Setter Property="Text" Value="unbound"/>
-                                        <Setter Property="Foreground" Value="#5A6270"/>
-                                    </DataTrigger>
-                                    <DataTrigger Binding="{Binding Hotkey}" Value="{x:Null}">
-                                        <Setter Property="Text" Value="unbound"/>
-                                        <Setter Property="Foreground" Value="#5A6270"/>
-                                    </DataTrigger>
-                                    <DataTrigger Binding="{Binding IsCapturing}" Value="True">
-                                        <Setter Property="Text" Value="press keys…"/>
-                                        <Setter Property="Foreground" Value="{StaticResource AccentABrush}"/>
-                                    </DataTrigger>
-                                    <DataTrigger Binding="{Binding IsBusy}" Value="True">
-                                        <Setter Property="Text" Value="{Binding Status}"/>
-                                        <Setter Property="Foreground" Value="{StaticResource AccentABrush}"/>
-                                    </DataTrigger>
-                                    <DataTrigger Binding="{Binding IsPlaying}" Value="True">
-                                        <Setter Property="Foreground" Value="{StaticResource AccentABrush}"/>
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </TextBlock.Style>
-                    </TextBlock>
-
-                    <!-- Play affordance. It always reads as play; the playing state
-                         shows on the tile border, the accent glyph and the stop
-                         button above. Firing again restarts from the top. -->
-                    <Grid Grid.Row="2" Margin="0,6,0,4">
-                        <Button Padding="0" FontSize="16"
-                                Command="{Binding DataContext.PlayCommand,
-                                    RelativeSource={RelativeSource AncestorType=ItemsControl}}"
-                                CommandParameter="{Binding}"
-                                ToolTip="Play this sound (fires again from the top)">
-                            <Button.Style>
-                                <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-                                    <Setter Property="Content" Value="&#x25B6;"/>
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding IsPlaying}" Value="True">
-                                            <Setter Property="Foreground" Value="{StaticResource AccentABrush}"/>
-                                            <Setter Property="BorderBrush" Value="{StaticResource AccentABrush}"/>
-                                        </DataTrigger>
-                                        <!-- A downloading pad says so instead of pretending
-                                             it can be fired. -->
-                                        <DataTrigger Binding="{Binding IsBusy}" Value="True">
-                                            <Setter Property="Content" Value="&#x2026;"/>
-                                            <Setter Property="IsEnabled" Value="False"/>
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </Button.Style>
-                        </Button>
-                        <ProgressBar Height="3" VerticalAlignment="Bottom" Margin="2,0,2,-2"
-                                     Minimum="0" Maximum="1" Value="{Binding Progress}">
-                            <ProgressBar.Style>
-                                <Style TargetType="ProgressBar">
-                                    <Setter Property="Visibility" Value="Collapsed"/>
-                                    <Setter Property="Foreground" Value="{StaticResource AccentABrush}"/>
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding IsBusy}" Value="True">
-                                            <Setter Property="Visibility" Value="Visible"/>
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </ProgressBar.Style>
-                        </ProgressBar>
-                    </Grid>
-
-                    <Slider Grid.Row="3" Minimum="0" Maximum="1" SmallChange="0.01"
-                            Value="{Binding Volume, Mode=TwoWay}"
-                            ToolTip="Level of this sound"/>
-                </Grid>
-            </Border>
-        </DataTemplate>
-
         <!-- ======== Soundboard expander ========
              Header is a toggle on the left and its actions on the right, so
              STOP ALL never doubles as "collapse". -->
@@ -1086,15 +771,6 @@
 
             <!-- Master gate and the per-group switch: same pill as MON/MUTE, with the word
                  changing rather than colour alone saying on or off. -->
-            <Style x:Key="RackGate" TargetType="ToggleButton" BasedOn="{StaticResource MicToggle}">
-                <Setter Property="Width" Value="40"/>
-                <Setter Property="Content" Value="OFF"/>
-                <Style.Triggers>
-                    <Trigger Property="IsChecked" Value="True">
-                        <Setter Property="Content" Value="ON"/>
-                    </Trigger>
-                </Style.Triggers>
-            </Style>
 
             <Style x:Key="RackBandGate" TargetType="ToggleButton" BasedOn="{StaticResource MicToggle}">
                 <Setter Property="Width" Value="26"/>
@@ -1117,34 +793,6 @@
             </Style>
 
 
-            <Style x:Key="RackCaption" TargetType="TextBlock">
-                <Setter Property="FontSize" Value="9"/>
-                <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
-                <Setter Property="VerticalAlignment" Value="Center"/>
-            </Style>
-            <!-- One definition for a CHAIN/PAD cell, used by the strip header and by
-                 every channel row. Written twice by hand, the two grids drifted: the
-                 header put its unit inside a 40 px right-aligned value ("0 f"), the row
-                 put a bare "0" in the same box, so the digits differed by 11 px and the
-                 right-aligned value never lined up. Here the digit sits right-aligned in
-                 a fixed 34 px box and the unit has its own 12 px box, so the digit's x
-                 depends on nothing but the column. -->
-            <ControlTemplate x:Key="StripCell" TargetType="HeaderedContentControl">
-                <Grid>
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="26"/>
-                        <ColumnDefinition Width="34"/>
-                        <ColumnDefinition Width="12"/>
-                    </Grid.ColumnDefinitions>
-                    <TextBlock Grid.Column="0" Text="{TemplateBinding Header}"
-                               Style="{StaticResource RackCaption}"/>
-                    <TextBlock Grid.Column="1" VerticalAlignment="Center" TextAlignment="Right"
-                               FontFamily="Consolas" FontSize="10"
-                               Text="{Binding Content, RelativeSource={RelativeSource TemplatedParent}}"/>
-                    <TextBlock Grid.Column="2" Text="{TemplateBinding Tag}"
-                               Style="{StaticResource RackCaption}"/>
-                </Grid>
-            </ControlTemplate>
 
 
             <Style x:Key="RackRow" TargetType="DockPanel">

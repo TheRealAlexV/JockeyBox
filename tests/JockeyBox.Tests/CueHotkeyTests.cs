@@ -8,6 +8,10 @@ namespace JockeyBox.Tests;
 /// in CI, so these tests pin the layer underneath: the ids, the shipped chords,
 /// and what happens when a chord is already owned by something else.
 /// </summary>
+// Drives UiThread: it builds a MainViewModel on the process's one Application
+// dispatcher, the static UiThreadCollection serialises. Without this it ran beside
+// the other view-model suites on that single thread.
+[Collection(UiThreadCollection.Name)]
 public sealed class CueHotkeyTests
 {
     [Fact]

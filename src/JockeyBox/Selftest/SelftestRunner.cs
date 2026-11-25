@@ -53,6 +53,7 @@ public static class SelftestRunner
         ("mic-strip-mute-vs-monitor", MicStripMuteVsMonitor),
         ("mixer-off-untouched", MixerOffUntouched),
         ("strip-settings-round-trip", StripSettingsRoundTrip),
+        ("dock-pages", DockPages),
     };
 
     /// <summary>
@@ -74,7 +75,7 @@ public static class SelftestRunner
         int passed = 0;
         foreach (var (name, body) in Cases)
         {
-            var record = new Case(name);
+            var record = new Case(name, output);
             try
             {
                 body(record);
@@ -917,20 +918,47 @@ public static class SelftestRunner
         }
     }
 
+    /// <summary>
+    /// 16. Every page the main window owns comes up in this process with the real
+    /// merged resource dictionaries, and none of them throws while it is realised.
+    ///
+    /// <para>This is the only case that constructs a page. A <c>StaticResource</c>
+    /// inside a <see cref="System.Windows.Controls.ControlTemplate"/> is resolved
+    /// when the template is applied, so a template placed above the style it names
+    /// compiles clean, passes every other case here, and throws the first time its
+    /// page is shown (commit <c>7b687b4</c>: <c>StripCell</c> above
+    /// <c>RackCaption</c>, dock STRIPS dead on first display). One line per page is
+    /// printed so a red run names the page; the inner exception's message is
+    /// carried into the failure because the <c>RackCaption</c> name lives there.</para>
+    /// </summary>
+    private static void DockPages(Case test) => DockPageProbe.Check(test.Line);
+
     // ------------------------------------------------------------------ harness
 
     private sealed class Case
     {
-        public Case(string name) => Name = name;
+        public Case(string name, TextWriter output)
+        {
+            Name = name;
+            Output = output;
+        }
 
         public string Name { get; }
+
+        public TextWriter Output { get; }
 
         public List<string> Notes { get; } = new();
 
         public void Note(params string[] notes) => Notes.AddRange(notes);
+
+        /// <summary>
+        /// A line of the case's own output, for a case that has more than one thing
+        /// to report. A page-at-a-time case prints here so a red run names the page.
+        /// </summary>
+        public void Line(string text) => Output.WriteLine(text);
     }
 
-    private sealed class CaseFailed : Exception
+    internal sealed class CaseFailed : Exception
     {
         public CaseFailed(string message) : base(message) { }
     }

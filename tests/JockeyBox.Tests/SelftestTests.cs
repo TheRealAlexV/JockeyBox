@@ -18,12 +18,24 @@ namespace JockeyBox.Tests;
 /// <para>The suite renders a few seconds of audio per case through
 /// <c>AudioEngine.StartOffline</c> and touches no device, so it is safe on CI.</para>
 /// </summary>
+// Bind by the definition's Name string, not nameof: xunit matches these by string,
+// and nameof(ProcessStaticsCollection) is "ProcessStaticsCollection", which would be
+// an undefined collection - parallelised with everything, exactly the race this
+// collection exists to prevent.
+[Collection(ProcessStaticsCollection.Name)]
 public class SelftestTests
 {
-    private const int CaseCount = 15;
+    private const int CaseCount = 16;
 
     private static readonly Lazy<(int ExitCode, string Output)> Result = new(() =>
     {
+        // The dock-page case builds the real main window, and WPF styles are
+        // thread-affine: it must run on the suite's single Application thread, not
+        // this xunit worker. Starting that thread here (rather than letting the case
+        // create an Application of its own) keeps one Application in the process,
+        // which is all WPF allows.
+        UiThread.Run(() => { });
+
         using var writer = new StringWriter();
         int exitCode = SelftestRunner.Run(writer);
         return (exitCode, writer.ToString());
@@ -59,6 +71,7 @@ public class SelftestTests
                      "deck-output-delay", "eq-flat-bit-exact",
                      "mic-strip-flat-bit-exact", "mic-strip-audible", "mic-strip-sums-aligned",
                      "mic-strip-mute-vs-monitor", "mixer-off-untouched", "strip-settings-round-trip",
+                     "dock-pages",
                  })
         {
             Assert.Contains(passLines, line => line.StartsWith($"PASS {name}", StringComparison.Ordinal));

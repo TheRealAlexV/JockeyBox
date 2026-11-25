@@ -18,6 +18,10 @@ namespace JockeyBox.Tests;
 /// refusals were silent. Each test captures <see cref="Log.LineWritten"/> rather
 /// than the console, because that event is the single route into the LOG list.
 /// </summary>
+// Drives UiThread: it samples the process's one Application and dispatcher, the
+// same static UiThreadCollection exists to serialise. Without this it ran beside
+// the view-model suites on that single dispatcher.
+[Collection(UiThreadCollection.Name)]
 public sealed class ActivityLogTests
 {
     [Fact]

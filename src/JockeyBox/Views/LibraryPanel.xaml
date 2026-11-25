@@ -15,9 +15,9 @@
     <UserControl.Resources>
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
-                <ResourceDictionary Source="/Views/Shared/TrackRows.xaml"/>
-                <ResourceDictionary Source="/Views/Shared/TrackMenu.xaml"/>
-                <ResourceDictionary Source="/Views/Shared/LibraryTabs.xaml"/>
+                <ResourceDictionary Source="/JockeyBox;component/Views/Shared/TrackRows.xaml"/>
+                <ResourceDictionary Source="/JockeyBox;component/Views/Shared/TrackMenu.xaml"/>
+                <ResourceDictionary Source="/JockeyBox;component/Views/Shared/LibraryTabs.xaml"/>
             </ResourceDictionary.MergedDictionaries>
         </ResourceDictionary>
     </UserControl.Resources>
