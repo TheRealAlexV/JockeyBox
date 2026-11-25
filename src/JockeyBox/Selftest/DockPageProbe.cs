@@ -318,6 +318,7 @@ internal static class DockPageProbe
             // context.
             panel.DataContext ??= window.DataContext;
             Realize(panel);
+            RealizeTemplates(panel, name);
             line($"  dock-page {name}: ok");
 
             foreach (var radio in DockRadios(panel))
@@ -335,6 +336,34 @@ internal static class DockPageProbe
                 }
 
                 line($"  dock-page {page}: ok");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Load every <c>ItemTemplate</c> the panel declares, once.
+    ///
+    /// <para><b>Why this is not redundant with <see cref="Realize"/>.</b> A template
+    /// only parses when its control first produces an item, and the interesting lists
+    /// in this shell are empty in a probe: the strip rack waits for a selected strip,
+    /// the device combos wait for a device. Deleting <c>RackGroupTitle</c> from app
+    /// scope therefore still reported <c>panel:sources: ok</c> - the same
+    /// "builds clean, fails on first real show" hole the probe exists to close.
+    /// <see cref="DataTemplate.LoadContent"/> resolves the template's own keys against
+    /// the same dictionaries a real item would, without inventing a data context.</para>
+    /// </summary>
+    private static void RealizeTemplates(FrameworkElement panel, string name)
+    {
+        foreach (var control in Descendants(panel).OfType<ItemsControl>())
+        {
+            if (control.ItemTemplate is not { } template) continue;
+            try
+            {
+                template.LoadContent();
+            }
+            catch (Exception ex)
+            {
+                throw Fail(name + ":template", ex);
             }
         }
     }
