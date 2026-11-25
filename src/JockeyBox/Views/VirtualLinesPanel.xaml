@@ -1,0 +1,42 @@
+<UserControl x:Class="JockeyBox.Views.VirtualLinesPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Focusable="False">
+    <!-- The lines the native ASIO driver serves. These five flags used to live in
+         Settings as well; the lines editor is the only home now, so the two
+         cannot disagree. The handlers moved with the checkboxes: a named element
+         lookup from another window’s code-behind throws at first show.
+
+         An independent XAML root: every key it names resolves from app scope
+         (Themes/Dark.xaml) plus whatever it merges itself. It merges nothing. -->
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                  Padding="10,0,10,10" Focusable="False">
+        <StackPanel>
+            <TextBlock Text="LINES PUBLISHED TO THE ASIO RING" FontSize="9" FontWeight="Bold"
+                       Foreground="{StaticResource TextDimBrush}" Margin="0,0,0,8"/>
+            <CheckBox x:Name="VirtualLineDeckA" Content="Deck A" Margin="0,0,0,4"
+                      Checked="OnVirtualLineChanged" Unchecked="OnVirtualLineChanged"
+                      AutomationProperties.Name="Publish deck A to the virtual ASIO ring"/>
+            <CheckBox x:Name="VirtualLineDeckB" Content="Deck B" Margin="0,0,0,4"
+                      Checked="OnVirtualLineChanged" Unchecked="OnVirtualLineChanged"
+                      AutomationProperties.Name="Publish deck B to the virtual ASIO ring"/>
+            <CheckBox x:Name="VirtualLineRecording" Content="Recording" Margin="0,0,0,4"
+                      Checked="OnVirtualLineChanged" Unchecked="OnVirtualLineChanged"
+                      AutomationProperties.Name="Publish the recording bus to the virtual ASIO ring"/>
+            <CheckBox x:Name="VirtualLineSoundboard" Content="Soundboard" Margin="0,0,0,4"
+                      Checked="OnVirtualLineChanged" Unchecked="OnVirtualLineChanged"
+                      AutomationProperties.Name="Publish the soundboard bus to the virtual ASIO ring"/>
+            <CheckBox x:Name="VirtualLineMonitor" Content="Monitoring" Margin="0,0,0,10"
+                      Checked="OnVirtualLineChanged" Unchecked="OnVirtualLineChanged"
+                      AutomationProperties.Name="Publish the monitoring bus to the virtual ASIO ring"/>
+            <TextBlock Text="Ring name" FontSize="10" Foreground="{StaticResource TextDimBrush}"/>
+            <TextBox x:Name="VirtualLineBusName" Margin="0,3,0,0" MaxLength="64"
+                     LostFocus="OnVirtualLineNameChanged"
+                     AutomationProperties.Name="Virtual ASIO ring name"
+                     ToolTip="The ring the driver serves. One ring exists per name, so several lines publish on the first in this list."/>
+            <TextBlock Text="The driver picks these up the next time it opens." FontSize="9"
+                       Foreground="{StaticResource TextDimBrush}" Margin="0,6,0,0"
+                       TextWrapping="Wrap"/>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

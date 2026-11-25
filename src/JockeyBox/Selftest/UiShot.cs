@@ -183,7 +183,7 @@ internal static class UiShot
             if (Harness.Flag(args, "--uishot-library") != null) panes.SetLibraryOpen(true);
             if (Harness.Flag(args, "--uishot-dock") is { } dockPage) panes.SelectDockPage(dockPage.ToLowerInvariant());
             if (Harness.Flag(args, "--uishot-flyout") is { } flyoutSection)
-                panes.OpenFlyoutSection(flyoutSection.ToLowerInvariant());
+                panes.OpenRailPanel(flyoutSection.ToLowerInvariant());
 
             // --uishot-panel <id>: open any registered panel in the dock, the way the
             // rail does, so a capture can name MIX or LYRIC without pretending to be

@@ -60,6 +60,16 @@ public static class PanelCatalog
     /// SOUNDBOARD, CUES and JOBS plus their padding need 300, and the strip fader
     /// column needs 20 more to stay draggable.</summary>
     private const double MixMinWidth = 320;
+
+    /// <summary>The four rail sections (ROUTE, SRC, VIRT, DEV) opened inside a 400 px
+    /// flyout clamped to 360..420. 420 is what they were always trying to be, and the
+    /// dock's splitter is the way to ask for less.</summary>
+    private const double RailPanelDefaultWidth = 420;
+
+    /// <summary>The dock's own floor for everything that is not the library. The
+    /// flyout's 360 was the region's clamp, not the content's need: the widest thing
+    /// in any of the four is the strip rack's 244 px band plus its padding.</summary>
+    private const double RailPanelMinWidth = 320;
     /// <summary>
     /// The production panel set, in the order the shell offers them. This is a value
     /// handed to a <see cref="DockPanelHost"/>; the host itself knows nothing about
@@ -102,5 +112,47 @@ public static class PanelCatalog
             MixMinWidth,
             AllowsPopOut: true,
             () => new MixerPanel()),
+
+        // ---- the four rail sections that used to share one flyout ----------
+        // All four were 400 px wide inside a region clamped to 360..420; they open at
+        // the ceiling instead, because the dock's own splitter is the way to make one
+        // narrower and the value is remembered per panel. The floor is the dock's 320,
+        // not the flyout's clamped 360: the flyout had no splitter, so 360 was an
+        // accident of the region rather than a property of any of these four.
+        new PanelDefinition(
+            ShellPanelId.Routing,
+            "ROUTING",
+            "Routing panel: where each bus plays",
+            RailPanelDefaultWidth,
+            RailPanelMinWidth,
+            AllowsPopOut: true,
+            () => new RoutingPanel()),
+
+        new PanelDefinition(
+            ShellPanelId.Sources,
+            "SOURCES",
+            "Sources panel: the selected strip's stages",
+            RailPanelDefaultWidth,
+            RailPanelMinWidth,
+            AllowsPopOut: true,
+            () => new SourcesPanel()),
+
+        new PanelDefinition(
+            ShellPanelId.Virtual,
+            "VIRTUAL DEVICES",
+            "Virtual devices panel: the lines published to the ASIO ring",
+            RailPanelDefaultWidth,
+            RailPanelMinWidth,
+            AllowsPopOut: true,
+            () => new VirtualLinesPanel()),
+
+        new PanelDefinition(
+            ShellPanelId.Devices,
+            "DEVICES",
+            "Devices panel: microphone input and monitor output",
+            RailPanelDefaultWidth,
+            RailPanelMinWidth,
+            AllowsPopOut: true,
+            () => new DevicesPanel()),
     };
 }

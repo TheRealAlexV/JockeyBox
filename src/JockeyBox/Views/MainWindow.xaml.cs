@@ -34,7 +34,6 @@ public partial class MainWindow : Window
         InitializeComponent();
         _vm = new MainViewModel();
         DataContext = _vm;
-        LoadVirtualLines();
 
         // The dock's panels remember their width and their window rectangle in the
         // same settings object the view model owns: a second AppSettings.Load() here
@@ -129,7 +128,6 @@ public partial class MainWindow : Window
         // Soundboard pad binding: while a pad is capturing, the next chord is
         // consumed here before any window/command binding can act on it.
         PreviewKeyDown += OnSoundboardHotkeyCapture;
-        PreviewKeyDown += OnShellEscape;
 
         Closed += (_, _) => CloseViewModel();
     }
@@ -262,20 +260,9 @@ public partial class MainWindow : Window
         PlayButton.Content = _vm.IsPlaying ? "\u23F8" : "\u25B6";
 
 
-    /// <summary>
-    /// Double-click on a channel-strip parameter row returns that value to neutral, the way
-    /// a console fader snaps back. The row's Tag names the parameter, so the mapping lives
-    /// in <see cref="MicChannelStripViewModel.ResetParameter"/> instead of twenty handlers.
-    /// Preview, not the bubble: a slider's thumb marks the press handled before it would reach us.
-    /// </summary>
-    private void OnStripValueDoubleClick(object sender, MouseButtonEventArgs e)
-    {
-        if (e.ClickCount != 2) return;
-        if (sender is not FrameworkElement row || row.DataContext is not MicChannelStripViewModel strip) return;
-
-        strip.ResetParameter(row.Tag as string);
-        e.Handled = true;
-    }
+    // Double-click-to-neutral moved to SourcesPanel.xaml.cs with the strip the rows
+    // name: Preview, not bubble, because a slider's thumb marks the press handled
+    // before it would reach a handler further up.
 
     // Expand-all moved to LibraryPanel.xaml.cs with the tree it walks.
 
@@ -731,9 +718,6 @@ public partial class MainWindow : Window
     // not of this window, and every panel that joins the dock gets the same rule
     // (window width minus the centre's floor, floor 300, ceiling from the layout).
 
-    /// <summary>Which rail toggle opened the flyout, so a second press closes it.</summary>
-    private ToggleButton? _flyoutToggle;
-
     /// <summary>One pop-out window per panel, so a second press raises the open one
     /// instead of stacking an identical duplicate.</summary>
     private readonly Dictionary<ShellPanelId, PanelWindow> _panelWindows = new();
@@ -766,6 +750,10 @@ public partial class MainWindow : Window
         LibraryToggle.IsChecked = PanelHost.Current == ShellPanelId.Library;
         LyricsToggle.IsChecked = PanelHost.Current == ShellPanelId.Lyrics;
         DockToggle.IsChecked = PanelHost.Current == ShellPanelId.Mix;
+        RailRoutingToggle.IsChecked = PanelHost.Current == ShellPanelId.Routing;
+        RailSourcesToggle.IsChecked = PanelHost.Current == ShellPanelId.Sources;
+        RailVirtualToggle.IsChecked = PanelHost.Current == ShellPanelId.Virtual;
+        RailDevicesToggle.IsChecked = PanelHost.Current == ShellPanelId.Devices;
     }
 
     /// <summary>The mixer panel, or null before the dock has built it. The capture
@@ -837,15 +825,17 @@ public partial class MainWindow : Window
         Mixer?.SelectPage(page);
     }
 
-    /// <summary>Open the flyout on a named section: routing, sources, virtual or devices.</summary>
-    public void OpenFlyoutSection(string section)
+    /// <summary>Open a rail panel by name: routing, sources, virtual or devices. The
+    /// capture harness asks by name (its flag is still <c>--uishot-flyout</c>), and an
+    /// unknown name lands on devices rather than nowhere.</summary>
+    public void OpenRailPanel(string section)
     {
         switch (section)
         {
-            case "routing": OnFlyoutRoutingClick(RailRoutingToggle, new RoutedEventArgs()); break;
-            case "sources": OnFlyoutSourcesClick(RailSourcesToggle, new RoutedEventArgs()); break;
-            case "virtual": OnFlyoutVirtualClick(RailVirtualToggle, new RoutedEventArgs()); break;
-            default: OnFlyoutDevicesClick(RailDevicesToggle, new RoutedEventArgs()); break;
+            case "routing": SetPanelOpen(ShellPanelId.Routing, true); break;
+            case "sources": SetPanelOpen(ShellPanelId.Sources, true); break;
+            case "virtual": SetPanelOpen(ShellPanelId.Virtual, true); break;
+            default: SetPanelOpen(ShellPanelId.Devices, true); break;
         }
     }
 
@@ -855,149 +845,12 @@ public partial class MainWindow : Window
     // only way MIX opens and closes.
     private void OnDockToggleClick(object sender, RoutedEventArgs e) => SetPanelOpen(ShellPanelId.Mix, DockToggle.IsChecked == true);
 
-    private void OnFlyoutRoutingClick(object sender, RoutedEventArgs e) => ShowFlyout(RailRoutingToggle, "ROUTING", FlyoutRoutingPanel);
+    private void OnRouteToggleClick(object sender, RoutedEventArgs e) => SetPanelOpen(ShellPanelId.Routing, RailRoutingToggle.IsChecked == true);
 
-    private void OnFlyoutSourcesClick(object sender, RoutedEventArgs e) => ShowFlyout(RailSourcesToggle, "SOURCES", FlyoutSourcesPanel);
+    private void OnSourcesToggleClick(object sender, RoutedEventArgs e) => SetPanelOpen(ShellPanelId.Sources, RailSourcesToggle.IsChecked == true);
 
-    private void OnFlyoutVirtualClick(object sender, RoutedEventArgs e) => ShowFlyout(RailVirtualToggle, "VIRTUAL DEVICES", FlyoutVirtualPanel);
+    private void OnVirtualToggleClick(object sender, RoutedEventArgs e) => SetPanelOpen(ShellPanelId.Virtual, RailVirtualToggle.IsChecked == true);
 
-    private void OnFlyoutDevicesClick(object sender, RoutedEventArgs e) => ShowFlyout(RailDevicesToggle, "DEVICES", FlyoutDevicesPanel);
+    private void OnDevicesToggleClick(object sender, RoutedEventArgs e) => SetPanelOpen(ShellPanelId.Devices, RailDevicesToggle.IsChecked == true);
 
-    /// <summary>
-    /// One flyout, four contents. Pressing the toggle of the section already showing
-    /// closes the region, so the rail is both the opener and the way back out.
-    /// </summary>
-    private void ShowFlyout(ToggleButton toggle, string title, FrameworkElement panel)
-    {
-        if (FlyoutPanel.Visibility == Visibility.Visible && ReferenceEquals(_flyoutToggle, toggle))
-        {
-            CloseFlyout();
-            return;
-        }
-
-        RailRoutingToggle.IsChecked = ReferenceEquals(toggle, RailRoutingToggle);
-        RailSourcesToggle.IsChecked = ReferenceEquals(toggle, RailSourcesToggle);
-        RailVirtualToggle.IsChecked = ReferenceEquals(toggle, RailVirtualToggle);
-        RailDevicesToggle.IsChecked = ReferenceEquals(toggle, RailDevicesToggle);
-
-        // The strip band's own fold-out toggle went with the band: it is always open
-        // in the panel, and the panel is the fold.
-        if (ReferenceEquals(panel, FlyoutSourcesPanel)) _vm.AreStripControlsOpen = true;
-
-        _flyoutToggle = toggle;
-        FlyoutTitle.Text = title;
-        FlyoutRoutingPanel.Visibility = ReferenceEquals(panel, FlyoutRoutingPanel) ? Visibility.Visible : Visibility.Collapsed;
-        FlyoutSourcesPanel.Visibility = ReferenceEquals(panel, FlyoutSourcesPanel) ? Visibility.Visible : Visibility.Collapsed;
-        FlyoutVirtualPanel.Visibility = ReferenceEquals(panel, FlyoutVirtualPanel) ? Visibility.Visible : Visibility.Collapsed;
-        FlyoutDevicesPanel.Visibility = ReferenceEquals(panel, FlyoutDevicesPanel) ? Visibility.Visible : Visibility.Collapsed;
-        FlyoutPanel.Visibility = Visibility.Visible;
-    }
-
-    private void OnFlyoutCloseClick(object sender, RoutedEventArgs e) => CloseFlyout();
-
-    private void CloseFlyout()
-    {
-        FlyoutPanel.Visibility = Visibility.Collapsed;
-        _flyoutToggle = null;
-        RailRoutingToggle.IsChecked = false;
-        RailSourcesToggle.IsChecked = false;
-        RailVirtualToggle.IsChecked = false;
-        RailDevicesToggle.IsChecked = false;
-    }
-
-    /// <summary>
-    /// Escape is the flyout's own exit. It is handled before anything else in the
-    /// window can claim the key, and it never touches focus: the deck the operator
-    /// was on keeps it.
-    /// </summary>
-    private void OnShellEscape(object sender, KeyEventArgs e)
-    {
-        if (e.Key != Key.Escape) return;
-        if (FlyoutPanel.Visibility != Visibility.Visible) return;
-        CloseFlyout();
-        e.Handled = true;
-    }
-
-    // ---- virtual device lines ----------------------------------------------
-    // The five flags and the ring name live here and nowhere else. They used to
-    // be a wrap panel of checkboxes in Settings as well; two editors over one flag
-    // is how the two ends up disagreeing, so the Settings copy was deleted.
-
-    private bool _virtualLinesLoading;
-
-    private void LoadVirtualLines()
-    {
-        var settings = _vm.SettingsRef;
-        _virtualLinesLoading = true;
-        try
-        {
-            VirtualLineDeckA.IsChecked = settings.VirtualAsioDeckA;
-            VirtualLineDeckB.IsChecked = settings.VirtualAsioDeckB;
-            VirtualLineRecording.IsChecked = settings.VirtualAsioRecording;
-            VirtualLineSoundboard.IsChecked = settings.VirtualAsioSoundboard;
-            VirtualLineMonitor.IsChecked = settings.VirtualAsioMonitor;
-            VirtualLineBusName.Text = settings.VirtualAsioBusName;
-        }
-        finally { _virtualLinesLoading = false; }
-    }
-
-    /// <summary>
-    /// A line is a checkbox only because the ring has one section: ticking a second
-    /// line releases the first instead of refusing the change in a dialog, which is
-    /// not something to be doing mid-show.
-    /// </summary>
-    private void OnVirtualLineChanged(object sender, RoutedEventArgs e)
-    {
-        if (_virtualLinesLoading) return;
-
-        var box = (CheckBox)sender;
-        _virtualLinesLoading = true;
-        try
-        {
-            if (box.IsChecked == true)
-            {
-                foreach (var other in new[]
-                         {
-                             VirtualLineDeckA, VirtualLineDeckB, VirtualLineRecording,
-                             VirtualLineSoundboard, VirtualLineMonitor,
-                         })
-                {
-                    if (!ReferenceEquals(other, box)) other.IsChecked = false;
-                }
-            }
-
-            var settings = _vm.SettingsRef;
-            settings.VirtualAsioDeckA = VirtualLineDeckA.IsChecked == true;
-            settings.VirtualAsioDeckB = VirtualLineDeckB.IsChecked == true;
-            settings.VirtualAsioRecording = VirtualLineRecording.IsChecked == true;
-            settings.VirtualAsioSoundboard = VirtualLineSoundboard.IsChecked == true;
-            settings.VirtualAsioMonitor = VirtualLineMonitor.IsChecked == true;
-            settings.Save();
-        }
-        finally { _virtualLinesLoading = false; }
-    }
-
-    /// <summary>
-    /// The ring name is validated here with the same rule the save path uses, so a
-    /// typo cannot make the native writer fail at route time, where the operator
-    /// would only hear silence.
-    /// </summary>
-    private void OnVirtualLineNameChanged(object sender, RoutedEventArgs e)
-    {
-        if (_virtualLinesLoading) return;
-
-        var settings = _vm.SettingsRef;
-        string name = VirtualLineBusName.Text.Trim();
-        if (name.Length == 0) name = "main";
-        if (AppSettings.ValidateVirtualAsioBusName(name) is not null)
-        {
-            VirtualLineBusName.Text = settings.VirtualAsioBusName;
-            return;
-        }
-
-        if (string.Equals(name, settings.VirtualAsioBusName, StringComparison.Ordinal)) return;
-        settings.VirtualAsioBusName = name;
-        VirtualLineBusName.Text = name;
-        settings.Save();
-    }
 }

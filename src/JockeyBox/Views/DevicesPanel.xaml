@@ -1,0 +1,46 @@
+<UserControl x:Class="JockeyBox.Views.DevicesPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Focusable="False">
+    <!-- Device choices: the microphone input and the monitor output, the same values
+         the Settings dialog edits. Two editors over one device list is how the
+         ends disagree, so this panel and that dialog bind one source.
+
+         An independent XAML root: every key it names resolves from app scope
+         (Themes/Dark.xaml) plus whatever it merges itself. It merges nothing. -->
+    <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
+                  Padding="10,0,10,10" Focusable="False">
+        <StackPanel>
+            <TextBlock Text="MICROPHONE INPUT" FontSize="9" FontWeight="Bold"
+                       Foreground="{StaticResource TextDimBrush}" Margin="0,0,0,8"/>
+            <ComboBox MinHeight="24" FontSize="10" Padding="6,0"
+                      ItemsSource="{Binding MicDeviceChoices}"
+                      ItemTemplate="{StaticResource DeviceChoiceRow}"
+                      SelectedValuePath="Id"
+                      SelectedValue="{Binding SelectedMicDeviceId, Mode=TwoWay}"
+                      AutomationProperties.Name="Microphone input device"
+                      ToolTip="The recording endpoint the mixer takes its first strip from"/>
+            <TextBlock Text="{Binding MicStripCountText}" FontSize="9" Margin="0,6,0,0"
+                       Foreground="{StaticResource TextDimBrush}"/>
+            <TextBlock Text="MONITOR OUTPUT" FontSize="9" FontWeight="Bold" Margin="0,14,0,8"
+                       Foreground="{StaticResource TextDimBrush}"/>
+            <ComboBox MinHeight="24" FontSize="10" Padding="6,0"
+                      ItemsSource="{Binding MonitorDeviceChoices}"
+                      ItemTemplate="{StaticResource DeviceChoiceRow}"
+                      SelectedValuePath="Id"
+                      SelectedValue="{Binding SelectedMonitorDeviceId, Mode=TwoWay}"
+                      AutomationProperties.Name="Monitor output device for the flyout"/>
+            <TextBlock Text="MON plays the cued deck on this endpoint; MVSYNC links both cue levels. Both sit on the header because they are pressed mid-set."
+                       TextWrapping="Wrap" FontSize="9" Margin="0,8,0,0"
+                       Foreground="{StaticResource TextDimBrush}"/>
+            <ToggleButton Style="{StaticResource MicToggle}" Margin="0,14,0,4"
+                          HorizontalAlignment="Left" Width="128"
+                          Content="MIXER"
+                          IsChecked="{Binding IsMixerOn, Mode=TwoWay}"
+                          AutomationProperties.Name="Mixer enable"/>
+            <TextBlock Text="Off is bit-transparent: no filter, no limiter, no added latency."
+                       TextWrapping="Wrap" FontSize="9" Margin="0,4,0,0"
+                       Foreground="{StaticResource TextDimBrush}"/>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>
