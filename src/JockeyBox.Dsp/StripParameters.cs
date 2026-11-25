@@ -1,3 +1,5 @@
+using JockeyBox.Dsp.Reverb;
+
 namespace JockeyBox.Dsp;
 
 /// <summary>
@@ -184,6 +186,7 @@ public readonly record struct StripParameters(
     CompressorParameters Compressor,
     LimiterParameters Limiter,
     DeEsserParameters DeEsser,
+    ReverbParameters Reverb,
     bool MasterBypass = false)
 {
     /// <summary>
@@ -198,7 +201,8 @@ public readonly record struct StripParameters(
         GateParameters.Neutral,
         CompressorParameters.Neutral,
         LimiterParameters.Neutral,
-        DeEsserParameters.Neutral);
+        DeEsserParameters.Neutral,
+        ReverbParameters.Neutral);
 
     /// <summary>
     /// Returns this value with every field inside its valid range. Never throws: NaN becomes
@@ -213,6 +217,7 @@ public readonly record struct StripParameters(
         Compressor = Compressor.Clamp(),
         Limiter = Limiter.Clamp(),
         DeEsser = DeEsser.Clamp(),
+        Reverb = Reverb.Clamp(),
     };
 
     /// <summary>Alias for <see cref="Clamp"/>: the spelling used by callers that mean "make this safe to apply".</summary>

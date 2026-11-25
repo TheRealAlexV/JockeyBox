@@ -135,6 +135,15 @@ public class InterleavedMixerStripTests
         }
     }
 
+    [Fact]
+    public void Non_stereo_channel_counts_are_rejected()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => new InterleavedMixerStrip(SampleRate, 1, BlockFrames));
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => new InterleavedMixerStrip(SampleRate, 4, BlockFrames));
+    }
+
     private static double ChannelRms(ReadOnlySpan<float> interleaved, int channel)
     {
         double sum = 0;

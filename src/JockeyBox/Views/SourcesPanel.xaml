@@ -2,7 +2,8 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              Focusable="False">
-    <!-- The selected strip's own stages (EQ, gate, comp, de-ess).
+    <!-- The selected strip's own stages, in signal order: EQ, band limits, gate, comp,
+         de-esser, limiter and the reverb send.
          This band used to fold out over the mixer, covering the deck controls it
          was configuring; in a panel beside the mix it can stay open while the
          operator listens.
@@ -279,6 +280,46 @@
                                         </Grid>
                                     </StackPanel>
 
+                                    <!-- De-esser. Between COMP and LIMITER because that is the order
+                                         MixerStrip runs the stages. Off is neutral, so the pill reads
+                                         OFF on a fresh strip. The split slider is log like the filters:
+                                         sibilance lives at 4-8 kHz, and a linear fader would spend most
+                                         of its travel above 12 kHz where nothing is being controlled.
+                                         Its ends are the engine's own 1 kHz floor and 20 kHz ceiling. -->
+                                    <StackPanel Width="180" Margin="0,0,10,0">
+                                        <DockPanel Tag="deess.on" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
+                                            <TextBlock Text="DE-ESS" Style="{StaticResource RackGroupTitle}"/>
+                                            <ToggleButton HorizontalAlignment="Left" Style="{StaticResource RackBandGate}"
+                                                          Margin="6,0,0,0"
+                                                          IsChecked="{Binding DeEsserOn, Mode=TwoWay}"
+                                                          AutomationProperties.Name="De-esser on"/>
+                                        </DockPanel>
+                                        <DockPanel Style="{StaticResource RackRow}" Tag="deess.threshold" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
+                                            <TextBlock Text="THR" Style="{StaticResource RackRowLabel}"/>
+                                            <TextBlock Text="dB" Style="{StaticResource RackUnit}"/>
+                                            <TextBlock Text="{Binding DeEsserThresholdDb, StringFormat={}{0:0.0}}" Style="{StaticResource RackValue}" Width="40"/>
+                                            <Slider Width="56" Minimum="-60" Maximum="0" SmallChange="1" LargeChange="6"
+                                                    Value="{Binding DeEsserThresholdDb, Mode=TwoWay}"
+                                                    AutomationProperties.Name="De-esser threshold"/>
+                                        </DockPanel>
+                                        <DockPanel Style="{StaticResource RackRow}" Tag="deess.amount" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
+                                            <TextBlock Text="AMT" Style="{StaticResource RackRowLabel}"/>
+                                            <TextBlock Text=":1" Style="{StaticResource RackUnit}"/>
+                                            <TextBlock Text="{Binding DeEsserRatio, StringFormat={}{0:0.0}}" Style="{StaticResource RackValue}" Width="40"/>
+                                            <Slider Width="56" Minimum="1" Maximum="20" SmallChange="0.5" LargeChange="2"
+                                                    Value="{Binding DeEsserRatio, Mode=TwoWay}"
+                                                    AutomationProperties.Name="De-esser amount"/>
+                                        </DockPanel>
+                                        <DockPanel Style="{StaticResource RackRow}" Tag="deess.split" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
+                                            <TextBlock Text="SPLIT" Style="{StaticResource RackRowLabel}"/>
+                                            <TextBlock Text="Hz" Style="{StaticResource RackUnit}"/>
+                                            <TextBlock Text="{Binding DeEsserFrequencyHz, StringFormat={}{0:0}}" Style="{StaticResource RackValue}" Width="40"/>
+                                            <Slider Width="56" Minimum="0" Maximum="1" SmallChange="0.01" LargeChange="0.05"
+                                                    Value="{Binding DeEsserSplitSlider, Mode=TwoWay}"
+                                                    AutomationProperties.Name="De-esser split"/>
+                                        </DockPanel>
+                                    </StackPanel>
+
                                     <!-- Limiter: the one stage that costs latency, and the CHAIN column
                                          says so the moment it is switched on. -->
                                     <StackPanel Width="180" Margin="0,0,10,0">
@@ -304,6 +345,39 @@
                                                     Value="{Binding LimiterReleaseSlider, Mode=TwoWay}" AutomationProperties.Name="Limiter release"/>
                                         </DockPanel>
                                         <TextBlock Text="240 frames of lookahead, only when on"
+                                                   Style="{StaticResource RackCaption}" TextWrapping="Wrap"
+                                                   Margin="0,6,0,0"/>
+                                    </StackPanel>
+
+                                    <!-- Reverb send. Last stage in StripParameters, so it sits last in
+                                         the rack. Off is neutral, so the pill reads OFF on a fresh
+                                         strip. Wet ends at 0.4 because the engine clamps there: the
+                                         slider's right edge is the real ceiling, not a display choice. -->
+                                    <StackPanel Width="180" Margin="0,0,10,0">
+                                        <DockPanel Tag="rev.on" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
+                                            <TextBlock Text="REVERB" Style="{StaticResource RackGroupTitle}"/>
+                                            <ToggleButton HorizontalAlignment="Left" Style="{StaticResource RackBandGate}"
+                                                          Margin="6,0,0,0"
+                                                          IsChecked="{Binding ReverbOn, Mode=TwoWay}"
+                                                          AutomationProperties.Name="Reverb on"/>
+                                        </DockPanel>
+                                        <DockPanel Style="{StaticResource RackRow}" Tag="rev.size" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
+                                            <TextBlock Text="SIZE" Style="{StaticResource RackRowLabel}"/>
+                                            <!-- A 0..1 ratio carries no unit, but the empty 14 px gutter keeps
+                                                 the slider on the same x as the rows beside this group. -->
+                                            <TextBlock Style="{StaticResource RackUnit}"/>
+                                            <TextBlock Text="{Binding ReverbSize, StringFormat={}{0:0.00}}" Style="{StaticResource RackValue}" Width="40"/>
+                                            <Slider Width="56" Minimum="0" Maximum="1" SmallChange="0.01" LargeChange="0.1"
+                                                    Value="{Binding ReverbSize, Mode=TwoWay}" AutomationProperties.Name="Reverb size"/>
+                                        </DockPanel>
+                                        <DockPanel Style="{StaticResource RackRow}" Tag="rev.wet" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
+                                            <TextBlock Text="WET" Style="{StaticResource RackRowLabel}"/>
+                                            <TextBlock Style="{StaticResource RackUnit}"/>
+                                            <TextBlock Text="{Binding ReverbWet, StringFormat={}{0:0.00}}" Style="{StaticResource RackValue}" Width="40"/>
+                                            <Slider Width="56" Minimum="0" Maximum="0.4" SmallChange="0.01" LargeChange="0.1"
+                                                    Value="{Binding ReverbWet, Mode=TwoWay}" AutomationProperties.Name="Reverb wet"/>
+                                        </DockPanel>
+                                        <TextBlock Text="Wet stops at 0.40: that is the send's ceiling, not the slider's."
                                                    Style="{StaticResource RackCaption}" TextWrapping="Wrap"
                                                    Margin="0,6,0,0"/>
                                     </StackPanel>

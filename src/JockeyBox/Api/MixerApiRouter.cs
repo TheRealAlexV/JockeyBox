@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Text.Json;
 using JockeyBox.Audio.Graph;
 using JockeyBox.Dsp;
+using JockeyBox.Dsp.Reverb;
 using JockeyBox.Tools;
 
 namespace JockeyBox.Api;
@@ -627,21 +628,37 @@ public sealed class MixerApiRouter
                 p => p.Compressor.MakeupDb,
                 (p, v) => p with { Compressor = p.Compressor with { MakeupDb = v } }),
 
-            new("deess.on", "De-esser", "Dynamics", ControlKind.Toggle, 0, 1, 1, 0, "",
+            new("deess.on", "De-esser", "DeEsser", ControlKind.Toggle, 0, 1, 1, 0, "",
                 p => p.DeEsser.Enabled ? 1 : 0,
                 (p, v) => p with { DeEsser = p.DeEsser with { Enabled = v > 0.5 } }),
 
-            new("deess.threshold", "Threshold", "Dynamics", ControlKind.Continuous, -60, 0, 0.5, -28, "dB",
+            new("deess.threshold", "Threshold", "DeEsser", ControlKind.Continuous, -60, 0, 0.5, -28, "dB",
                 p => p.DeEsser.ThresholdDb,
                 (p, v) => p with { DeEsser = p.DeEsser with { ThresholdDb = v } }),
 
-            new("deess.amount", "Amount", "Dynamics", ControlKind.Continuous, 1, 20, 0.1, 4, ":1",
+            new("deess.amount", "Amount", "DeEsser", ControlKind.Continuous, 1, 20, 0.1, 4, ":1",
                 p => p.DeEsser.Ratio,
                 (p, v) => p with { DeEsser = p.DeEsser with { Ratio = v } }),
 
-            new("deess.split", "Split", "Dynamics", ControlKind.Continuous, 1000, 20000, 10, 6000, "Hz",
+            new("deess.split", "Split", "DeEsser", ControlKind.Continuous, 1000, 20000, 10, 6000, "Hz",
                 p => p.DeEsser.FrequencyHz,
                 (p, v) => p with { DeEsser = p.DeEsser with { FrequencyHz = v } }),
+
+            new("rev.on", "Reverb", "Reverb", ControlKind.Toggle, 0, 1, 1, 0, "",
+                p => p.Reverb.On ? 1 : 0,
+                (p, v) => p with { Reverb = p.Reverb with { On = v > 0.5 } }),
+
+            new("rev.size", "Size", "Reverb", ControlKind.Continuous,
+                ReverbParameters.MinSize, ReverbParameters.MaxSize, 0.01,
+                ReverbParameters.Neutral.Size, "",
+                p => p.Reverb.Size,
+                (p, v) => p with { Reverb = p.Reverb with { Size = v } }),
+
+            new("rev.wet", "Wet", "Reverb", ControlKind.Continuous,
+                ReverbParameters.MinWet, ReverbParameters.MaxWet, 0.01,
+                ReverbParameters.Neutral.Wet, "",
+                p => p.Reverb.Wet,
+                (p, v) => p with { Reverb = p.Reverb with { Wet = v } }),
 
             new("limiter.on", "Limiter", "Dynamics", ControlKind.Toggle, 0, 1, 1, 0, "",
                 p => p.Limiter.Enabled ? 1 : 0,

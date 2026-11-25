@@ -5,7 +5,8 @@ using JockeyBox.ViewModels;
 namespace JockeyBox.Views;
 
 /// <summary>
-/// The selected strip's own stages: EQ, gate, comp and de-ess for one channel.
+/// The selected strip's own stages in signal order, EQ through the reverb send, for one
+/// channel.
 ///
 /// <para><b>Why the double-click handler lives here.</b> It reads the row's
 /// <c>Tag</c> and resets the parameter on the strip that row is bound to, so it

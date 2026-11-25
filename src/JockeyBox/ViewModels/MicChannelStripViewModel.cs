@@ -2,12 +2,13 @@ using System;
 using System.Runtime.CompilerServices;
 using CommunityToolkit.Mvvm.ComponentModel;
 using JockeyBox.Dsp;
+using JockeyBox.Dsp.Reverb;
 
 namespace JockeyBox.ViewModels;
 
 /// <summary>
 /// One capture device's channel strip, as the rack in the main window sees it: ten EQ bands,
-/// the two band limits, gate, compressor, limiter and the per-strip bypass.
+/// the two band limits, gate, compressor, limiter, the reverb send and the per-strip bypass.
 ///
 /// <para><b>Values.</b> Every property reads the last <see cref="StripParameters"/> the engine
 /// reported through <see cref="MainViewModel.RefreshChannelStripsFromTick"/>. Nothing here is
@@ -151,6 +152,12 @@ public sealed partial class MicChannelStripViewModel : ObservableObject
         set => LimiterReleaseMs = ValueOf(value, 1, 1000);
     }
 
+    public double DeEsserSplitSlider
+    {
+        get => PositionOf(_p.DeEsser.FrequencyHz, 1000, 20000);
+        set => DeEsserFrequencyHz = ValueOf(value, 1000, 20000);
+    }
+
     private static double PositionOf(double value, double min, double max) =>
         Math.Log(Math.Clamp(value, min, max) / min) / Math.Log(max / min);
 
@@ -177,11 +184,29 @@ public sealed partial class MicChannelStripViewModel : ObservableObject
     public double CompKneeDb { get => _p.Compressor.KneeDb; set => Write(p => p with { Compressor = p.Compressor with { KneeDb = value } }); }
     public double CompMakeupDb { get => _p.Compressor.MakeupDb; set => Write(p => p with { Compressor = p.Compressor with { MakeupDb = value } }); }
 
+    // ---------------------------------------------------------------- de-esser
+
+    public bool DeEsserOn { get => _p.DeEsser.Enabled; set => Write(p => p with { DeEsser = p.DeEsser with { Enabled = value } }); }
+    public double DeEsserFrequencyHz { get => _p.DeEsser.FrequencyHz; set => Write(p => p with { DeEsser = p.DeEsser with { FrequencyHz = value } }); }
+    public double DeEsserThresholdDb { get => _p.DeEsser.ThresholdDb; set => Write(p => p with { DeEsser = p.DeEsser with { ThresholdDb = value } }); }
+    public double DeEsserRatio { get => _p.DeEsser.Ratio; set => Write(p => p with { DeEsser = p.DeEsser with { Ratio = value } }); }
+    public double DeEsserAttackMs { get => _p.DeEsser.AttackMs; set => Write(p => p with { DeEsser = p.DeEsser with { AttackMs = value } }); }
+    public double DeEsserReleaseMs { get => _p.DeEsser.ReleaseMs; set => Write(p => p with { DeEsser = p.DeEsser with { ReleaseMs = value } }); }
+    public double DeEsserMaxReductionDb { get => _p.DeEsser.MaxReductionDb; set => Write(p => p with { DeEsser = p.DeEsser with { MaxReductionDb = value } }); }
+    public double DeEsserSidechainLowHz { get => _p.DeEsser.SidechainLowHz; set => Write(p => p with { DeEsser = p.DeEsser with { SidechainLowHz = value } }); }
+    public double DeEsserSidechainHighHz { get => _p.DeEsser.SidechainHighHz; set => Write(p => p with { DeEsser = p.DeEsser with { SidechainHighHz = value } }); }
+
     // ---------------------------------------------------------------- limiter
 
     public bool LimiterOn { get => _p.Limiter.Enabled; set => Write(p => p with { Limiter = p.Limiter with { Enabled = value } }); }
     public double LimiterCeilingDb { get => _p.Limiter.CeilingDb; set => Write(p => p with { Limiter = p.Limiter with { CeilingDb = value } }); }
     public double LimiterReleaseMs { get => _p.Limiter.ReleaseMs; set => Write(p => p with { Limiter = p.Limiter with { ReleaseMs = value } }); }
+
+    // ---------------------------------------------------------------- reverb send
+
+    public bool ReverbOn { get => _p.Reverb.On; set => Write(p => p with { Reverb = p.Reverb with { On = value } }); }
+    public double ReverbSize { get => _p.Reverb.Size; set => Write(p => p with { Reverb = p.Reverb with { Size = value } }); }
+    public double ReverbWet { get => _p.Reverb.Wet; set => Write(p => p with { Reverb = p.Reverb with { Wet = value } }); }
 
     // ---------------------------------------------------------------- reset to neutral
 
@@ -226,8 +251,21 @@ public sealed partial class MicChannelStripViewModel : ObservableObject
             case "comp.knee": CompKneeDb = new CompressorParameters(Enabled: false).KneeDb; break;
             case "comp.makeup": CompMakeupDb = new CompressorParameters(Enabled: false).MakeupDb; break;
 
+            // De-essing ships off, splitting at 6 kHz and holding 4:1, so a double-click
+            // returns a stage someone has pulled back to where the strip ships.
+            case "deess.on": DeEsserOn = DeEsserParameters.Neutral.Enabled; break;
+            case "deess.threshold": DeEsserThresholdDb = DeEsserParameters.Neutral.ThresholdDb; break;
+            case "deess.amount": DeEsserRatio = DeEsserParameters.Neutral.Ratio; break;
+            case "deess.split": DeEsserFrequencyHz = DeEsserParameters.Neutral.FrequencyHz; break;
+
             case "limiter.ceiling": LimiterCeilingDb = new LimiterParameters(Enabled: false).CeilingDb; break;
             case "limiter.release": LimiterReleaseMs = new LimiterParameters(Enabled: false).ReleaseMs; break;
+
+            // The reverb send's neutral state is off at size 0.5 and wet 0, so a double-click
+            // returns a stage someone has pulled back to where the strip ships.
+            case "rev.on": ReverbOn = ReverbParameters.Neutral.On; break;
+            case "rev.size": ReverbSize = ReverbParameters.Neutral.Size; break;
+            case "rev.wet": ReverbWet = ReverbParameters.Neutral.Wet; break;
         }
     }
 }

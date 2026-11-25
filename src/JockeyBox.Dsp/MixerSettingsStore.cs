@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using JockeyBox.Dsp.Reverb;
 
 namespace JockeyBox.Dsp;
 
@@ -161,14 +162,15 @@ public sealed class MixerSettingsStore
 
         var neutral = StripParameters.Neutral;
         return new StripParameters(
-            EqFrom(dto.Eq) ?? neutral.Eq,
-            new FilterParameters(dto.HighPassOn ?? neutral.HighPass.Enabled, dto.HighPassHz ?? neutral.HighPass.FrequencyHz),
-            new FilterParameters(dto.LowPassOn ?? neutral.LowPass.Enabled, dto.LowPassHz ?? neutral.LowPass.FrequencyHz),
-            dto.Gate?.ToParameters(neutral.Gate) ?? neutral.Gate,
-            dto.Comp?.ToParameters(neutral.Compressor) ?? neutral.Compressor,
-            dto.Limiter?.ToParameters(neutral.Limiter) ?? neutral.Limiter,
-            dto.DeEsser?.ToParameters(neutral.DeEsser) ?? neutral.DeEsser,
-            dto.Bypass ?? false).Clamp();
+            Eq: EqFrom(dto.Eq) ?? neutral.Eq,
+            HighPass: new FilterParameters(dto.HighPassOn ?? neutral.HighPass.Enabled, dto.HighPassHz ?? neutral.HighPass.FrequencyHz),
+            LowPass: new FilterParameters(dto.LowPassOn ?? neutral.LowPass.Enabled, dto.LowPassHz ?? neutral.LowPass.FrequencyHz),
+            Gate: dto.Gate?.ToParameters(neutral.Gate) ?? neutral.Gate,
+            Compressor: dto.Comp?.ToParameters(neutral.Compressor) ?? neutral.Compressor,
+            Limiter: dto.Limiter?.ToParameters(neutral.Limiter) ?? neutral.Limiter,
+            DeEsser: dto.DeEsser?.ToParameters(neutral.DeEsser) ?? neutral.DeEsser,
+            Reverb: dto.Reverb?.ToParameters(neutral.Reverb) ?? neutral.Reverb,
+            MasterBypass: dto.Bypass ?? false).Clamp();
     }
 
     /// <summary>Ten band gains in ISO centre order; a short array pads with flat, extra entries drop.</summary>
@@ -199,6 +201,7 @@ public sealed class MixerSettingsStore
         public CompDto? Comp { get; set; }
         public LimiterDto? Limiter { get; set; }
         public DeEsserDto? DeEsser { get; set; }
+        public ReverbDto? Reverb { get; set; }
         public bool? Bypass { get; set; }
 
         public static DeviceDto From(StripParameters strip) => new()
@@ -216,6 +219,7 @@ public sealed class MixerSettingsStore
             Comp = CompDto.From(strip.Compressor),
             Limiter = LimiterDto.From(strip.Limiter),
             DeEsser = DeEsserDto.From(strip.DeEsser),
+            Reverb = ReverbDto.From(strip.Reverb),
             Bypass = strip.MasterBypass,
         };
     }
@@ -336,5 +340,26 @@ public sealed class MixerSettingsStore
             MaxReductionDb ?? fallback.MaxReductionDb,
             SidechainLowHz ?? fallback.SidechainLowHz,
             SidechainHighHz ?? fallback.SidechainHighHz);
+    }
+
+    private sealed class ReverbDto
+    {
+        public bool? On { get; set; }
+        public double? Size { get; set; }
+        public double? Wet { get; set; }
+
+        public static ReverbDto From(ReverbParameters reverb) => new()
+        {
+            On = reverb.On,
+            Size = reverb.Size,
+            Wet = reverb.Wet,
+        };
+
+        public ReverbParameters ToParameters(ReverbParameters fallback) => new()
+        {
+            On = On ?? fallback.On,
+            Size = Size ?? fallback.Size,
+            Wet = Wet ?? fallback.Wet,
+        };
     }
 }

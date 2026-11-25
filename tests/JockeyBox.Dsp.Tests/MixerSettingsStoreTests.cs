@@ -1,3 +1,5 @@
+using JockeyBox.Dsp.Reverb;
+
 namespace JockeyBox.Dsp.Tests;
 
 public class MixerSettingsStoreTests : IDisposable
@@ -22,7 +24,7 @@ public class MixerSettingsStoreTests : IDisposable
     {
         var neutral = StripParameters.Neutral;
         return new StripParameters(
-            neutral.Eq with
+            Eq: neutral.Eq with
             {
                 Gain31Db = -6,
                 Gain63Db = 2.5,
@@ -35,16 +37,17 @@ public class MixerSettingsStoreTests : IDisposable
                 Gain8kDb = 0,
                 Gain16kDb = 1.5,
             },
-            new FilterParameters(Enabled: true, FrequencyHz: 80),
-            new FilterParameters(Enabled: false, FrequencyHz: 16000),
-            new GateParameters(Enabled: true, ThresholdDb: -35, HysteresisDb: 4, AttackMs: 2,
+            HighPass: new FilterParameters(Enabled: true, FrequencyHz: 80),
+            LowPass: new FilterParameters(Enabled: false, FrequencyHz: 16000),
+            Gate: new GateParameters(Enabled: true, ThresholdDb: -35, HysteresisDb: 4, AttackMs: 2,
                 ReleaseMs: 250, HoldMs: 60, FloorDb: -55),
-            new CompressorParameters(Enabled: true, ThresholdDb: -18, Ratio: 3.5, AttackMs: 8,
+            Compressor: new CompressorParameters(Enabled: true, ThresholdDb: -18, Ratio: 3.5, AttackMs: 8,
                 ReleaseMs: 120, KneeDb: 4, MakeupDb: 2),
-            new LimiterParameters(Enabled: true, CeilingDb: -1, ReleaseMs: 80),
-            new DeEsserParameters(Enabled: true, FrequencyHz: 7200, ThresholdDb: -22, Ratio: 6,
+            Limiter: new LimiterParameters(Enabled: true, CeilingDb: -1, ReleaseMs: 80),
+            DeEsser: new DeEsserParameters(Enabled: true, FrequencyHz: 7200, ThresholdDb: -22, Ratio: 6,
                 AttackMs: 1.5, ReleaseMs: 65, MaxReductionDb: 9, SidechainLowHz: 5000,
                 SidechainHighHz: 10000),
+            Reverb: neutral.Reverb,
             MasterBypass: true);
     }
 
@@ -52,17 +55,18 @@ public class MixerSettingsStoreTests : IDisposable
     {
         var neutral = StripParameters.Neutral;
         return new StripParameters(
-            neutral.Eq with { Gain63Db = -9, Gain4kDb = -2.25 },
-            new FilterParameters(Enabled: false, FrequencyHz: 120),
-            new FilterParameters(Enabled: true, FrequencyHz: 9000),
-            new GateParameters(Enabled: false, ThresholdDb: -70, HysteresisDb: 8, AttackMs: 20,
+            Eq: neutral.Eq with { Gain63Db = -9, Gain4kDb = -2.25 },
+            HighPass: new FilterParameters(Enabled: false, FrequencyHz: 120),
+            LowPass: new FilterParameters(Enabled: true, FrequencyHz: 9000),
+            Gate: new GateParameters(Enabled: false, ThresholdDb: -70, HysteresisDb: 8, AttackMs: 20,
                 ReleaseMs: 400, HoldMs: 0, FloorDb: -90),
-            new CompressorParameters(Enabled: false, ThresholdDb: -40, Ratio: 12, AttackMs: 30,
+            Compressor: new CompressorParameters(Enabled: false, ThresholdDb: -40, Ratio: 12, AttackMs: 30,
                 ReleaseMs: 300, KneeDb: 12, MakeupDb: -3),
-            LimiterParameters.Neutral,
-            new DeEsserParameters(Enabled: false, FrequencyHz: 5200, ThresholdDb: -35, Ratio: 2,
+            Limiter: LimiterParameters.Neutral,
+            DeEsser: new DeEsserParameters(Enabled: false, FrequencyHz: 5200, ThresholdDb: -35, Ratio: 2,
                 AttackMs: 0.2, ReleaseMs: 25, MaxReductionDb: 6, SidechainLowHz: 3800,
                 SidechainHighHz: 11000),
+            Reverb: neutral.Reverb,
             MasterBypass: false);
     }
 
@@ -291,5 +295,24 @@ public class MixerSettingsStoreTests : IDisposable
         var text = File.ReadAllText(Path.Combine(_dir.FullName, MixerSettingsStore.FileName));
         Assert.Contains("\"DeEsser\":", text);
         Assert.Contains("\"SidechainHighHz\":", text);
+    }
+
+    [Fact]
+    public void Reverb_settings_round_trip_through_the_mixer_store()
+    {
+        // Every field deliberately off its default, so a dropped or reordered field fails here.
+        var reverb = new ReverbParameters(true, 0.83, 0.37);
+        var strip = StripParameters.Neutral with { Reverb = reverb };
+
+        Store().Save(new Dictionary<string, StripParameters> { ["{capture-a}"] = strip });
+
+        var loaded = Store().Load();
+
+        Assert.Null(loaded.Reason);
+        Assert.Equal(reverb, loaded.Devices["{capture-a}"].Reverb);
+        Assert.Equal(strip, loaded.Devices["{capture-a}"]);
+
+        var text = File.ReadAllText(Path.Combine(_dir.FullName, MixerSettingsStore.FileName));
+        Assert.Contains("\"Reverb\":", text);
     }
 }
