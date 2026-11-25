@@ -184,6 +184,22 @@ internal static class UiShot
             if (Harness.Flag(args, "--uishot-dock") is { } dockPage) panes.SelectDockPage(dockPage.ToLowerInvariant());
             if (Harness.Flag(args, "--uishot-flyout") is { } flyoutSection)
                 panes.OpenFlyoutSection(flyoutSection.ToLowerInvariant());
+
+            // --uishot-panel <id>: open any registered panel in the dock, the way the
+            // rail does, so a capture can name MIX or LYRIC without pretending to be
+            // one of the four centre pages.
+            if (Harness.Flag(args, "--uishot-panel") is { } panelName
+                && Enum.TryParse<ShellPanelId>(panelName, ignoreCase: true, out var panelId))
+                panes.SetPanelOpen(panelId, true);
+
+            // --uishot-rail-mix: the rail's MIX button is the only way the panel opens
+            // and closes, and a synthesised pointer click cannot be trusted on an
+            // offscreen window. Press the button the rail presses, three times, and
+            // print what the dock reports: its width and the panel's identity.
+            // "Closed" has to mean width 0, and "reopened" has to mean the same
+            // element came back rather than a fresh, empty one.
+            if (Harness.Flag(args, "--uishot-rail-mix") != null)
+                RailMixCycle(panes);
         }
 
 
@@ -1926,6 +1942,56 @@ internal static class UiShot
                 + (double.IsPositiveInfinity(grid.MaxHeight) ? "" : $" max {grid.MaxHeight:0.0}")
                 + (grid.Name.Length > 0 ? $" ({grid.Name})" : ""));
         }
+    }
+
+    /// <summary>
+    /// Press the rail's MIX button three times and report what the dock measured:
+    /// open, closed, reopened. The panel's identity is printed so a rebuilt-and-empty
+    /// panel cannot pass as a survivor.
+    /// </summary>
+    private static void RailMixCycle(MainWindow window)
+    {
+        MixerPanel? first = null;
+        int firstCount = 0;
+        var report = new StringBuilder();
+
+        for (int press = 1; press <= 3; press++)
+        {
+            window.DockToggle.IsChecked = press != 2;
+            window.DockToggle.RaiseEvent(new RoutedEventArgs(ButtonBase.ClickEvent, window.DockToggle));
+            UiPump.Pump(200);
+            // The dock sets Width explicitly and collapses on close; ActualWidth only
+            // moves once a layout pass has run, so force one before reading either.
+            window.UpdateLayout();
+
+            var mixer = window.Mixer;
+            int count = mixer is null ? 0 : CountElements(mixer);
+            if (press == 1)
+            {
+                first = mixer;
+                firstCount = count;
+            }
+
+            string identity = mixer is null ? "null" : "kept";
+            report.Append($"\nuishot: rail-mix press {press} width={window.PanelHost.Width:0.0} "
+                          + $"actual={window.PanelHost.ActualWidth:0.0} "
+                          + $"open={window.PanelHost.IsOpen} panel={identity} elements={count}");
+            if (press == 3)
+                report.Append($" same={ReferenceEquals(first, mixer)}"
+                              + $" survived={count == firstCount && count > 0}");
+        }
+
+        Console.Out.WriteLine(report.ToString());
+        Console.Out.Flush();
+    }
+
+    private static int CountElements(DependencyObject root)
+    {
+        int count = 1;
+        foreach (object child in LogicalTreeHelper.GetChildren(root))
+            if (child is DependencyObject node)
+                count += CountElements(node);
+        return count;
     }
 
     /// <summary>
