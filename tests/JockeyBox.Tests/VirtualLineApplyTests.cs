@@ -19,7 +19,7 @@ namespace JockeyBox.Tests;
 /// write is the half that always worked, and a test of <c>ApplyVirtualLineSettings</c>
 /// alone would pass without the call the checkbox makes.</para>
 /// </summary>
-[Collection(nameof(UiThreadCollection))]
+[Collection(UiThreadCollection.Name)]
 public sealed class VirtualLineApplyTests
 {
     [Fact]

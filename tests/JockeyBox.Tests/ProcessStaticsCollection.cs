@@ -39,9 +39,9 @@ namespace JockeyBox.Tests;
 /// the class name, which is an <em>undefined</em> collection and therefore runs in
 /// parallel with everything. (Measured on this suite: with the wrong form the
 /// dock-page case overlapped 89 other results; with the right one, zero.) The same
-/// mistake is live in eleven <c>[Collection(nameof(UiThreadCollection))]</c> classes,
-/// whose definition registers <c>"ui thread"</c>; those are not serialised and want
-/// the same one-line fix.</para>
+/// mistake was live in eleven of the <c>"ui thread"</c> classes, which had named the
+/// type instead; those ran unserialised, and they now carry
+/// <c>[Collection(UiThreadCollection.Name)]</c>.</para>
 /// </summary>
 [CollectionDefinition(Name, DisableParallelization = true)]
 public sealed class ProcessStaticsCollection
