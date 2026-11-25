@@ -59,19 +59,23 @@ public class ShellDockPanelHostTests
     /// <summary>Two panes the dock can hold, with content it must not rebuild.</summary>
     private sealed class Fixture
     {
-        public Border A { get; } = new();
-        public Border B { get; } = new();
+        /// <summary>
+        /// How many elements the factories produced. Each call makes a *fresh* element,
+        /// not a remembered one: a dock that silently rebuilt its pane would hand back an
+        /// equal-looking element, so identity assertions only mean something when a
+        /// rebuild is a different object. Created staying at 1 is the real proof.
+        /// </summary>
         public int Created { get; private set; }
 
         public PanelDefinition DefinitionA => new(
             ShellPanelId.Library, "LIBRARY", "Library panel",
             LibraryWidth, LibraryFloor, AllowsPopOut: true,
-            () => { Created++; return A; });
+            () => { Created++; return new Border(); });
 
         public PanelDefinition DefinitionB => new(
             ShellPanelId.Lyrics, "LYRICS", "Lyrics panel",
             OtherWidth, 260, AllowsPopOut: true,
-            () => { Created++; return B; });
+            () => { Created++; return new Border(); });
 
         public DockPanelHost NewHost(AppSettings? settings = null, double? availableWidth = null)
         {
@@ -98,10 +102,13 @@ public class ShellDockPanelHostTests
             var host = fixture.NewHost();
 
             host.Show(ShellPanelId.Library);
-            host.Show(ShellPanelId.Lyrics);
+            var a = host.ContentOf<FrameworkElement>(ShellPanelId.Library)!;
 
-            Assert.Same(fixture.B, host.ContentHost.Content);
-            Assert.Null(fixture.A.Parent);
+            host.Show(ShellPanelId.Lyrics);
+            var b = host.ContentOf<FrameworkElement>(ShellPanelId.Lyrics)!;
+
+            Assert.Same(b, host.ContentHost.Content);
+            Assert.Null(a.Parent);
             Assert.Equal(ShellPanelId.Lyrics, host.Current);
         });
     }
@@ -157,12 +164,13 @@ public class ShellDockPanelHostTests
             Assert.Equal(ShellPanelId.Library, raised);
 
             // The window layer's next step, reproduced: take the element, keep it.
+            var before = host.ContentOf<FrameworkElement>(ShellPanelId.Library)!;
             var element = host.DetachContent(ShellPanelId.Library);
 
             Assert.NotNull(element);
             Assert.Null(host.ContentHost.Content);
             Assert.False(host.IsOpen);
-            Assert.Same(fixture.A, element);
+            Assert.Same(before, element);
             Assert.Same(element, host.ContentOf<FrameworkElement>(ShellPanelId.Library));
             Assert.Equal(1, fixture.Created);
         });
@@ -185,7 +193,6 @@ public class ShellDockPanelHostTests
             // Reference equality is the assertion: a reconstructed pane would satisfy
             // IsNotNull and fail this.
             Assert.Same(element, host.ContentHost.Content);
-            Assert.Same(fixture.A, host.ContentHost.Content);
             Assert.True(host.IsOpen);
             Assert.Equal(ShellPanelId.Library, host.Current);
             Assert.Equal(Visibility.Visible, host.Visibility);
