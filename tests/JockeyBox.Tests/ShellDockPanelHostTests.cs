@@ -59,8 +59,8 @@ public class ShellDockPanelHostTests
     /// <summary>Two panes the dock can hold, with content it must not rebuild.</summary>
     private sealed class Fixture
     {
-        public Border A { get; } = new() { Name = "a-content" };
-        public Border B { get; } = new() { Name = "b-content" };
+        public Border A { get; } = new();
+        public Border B { get; } = new();
         public int Created { get; private set; }
 
         public PanelDefinition DefinitionA => new(
@@ -233,18 +233,19 @@ public class ShellDockPanelHostTests
                 host.Show(ShellPanelId.Library);
 
                 // The operator's drag: width then the thumb's completion, which is what
-                // persists it.
-                host.Width = 600;
+                // persists it. 480 sits inside [300, 545] at a 1400-wide shell, so the
+                // number stored is the number reopened, not a clamped one.
+                host.Width = 480;
                 host.Splitter.RaiseEvent(
                     new DragCompletedEventArgs(0, 0, false) { RoutedEvent = Thumb.DragCompletedEvent });
 
-                Assert.Equal(600, AppSettings.TryLoad()!.Panel(ShellPanelId.Library).Width);
+                Assert.Equal(480, AppSettings.TryLoad()!.Panel(ShellPanelId.Library).Width);
 
                 // A fresh host reads it back from disk rather than from memory.
                 var reloaded = AppSettings.TryLoad()!;
                 var reopened = fixture.NewHost(reloaded, availableWidth: 1400);
                 reopened.Show(ShellPanelId.Library);
-                Assert.Equal(600, reopened.Width);
+                Assert.Equal(480, reopened.Width);
 
                 // Outside [floor, ceiling] a stored width is clamped, never trusted:
                 // 1400 - 855 = 545 is the ceiling here.

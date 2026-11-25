@@ -968,11 +968,27 @@ internal static class UiShot
         // --uishot-popout <panel>: undock a panel and capture the window it lands in.
         // This is the phase-1 proof: the mechanism is only worth building if a panel
         // can leave the dock and come back without its content being rebuilt.
+        //
+        // The return trip is captured too (--uishot-popout-return <file>): the window
+        // is closed, PanelWindow.OnClosing hands the element back, and the dock is
+        // rendered afterwards. A capture of the popped window cannot show that half -
+        // the reopen happens on another HWND - and it is the half the whole design
+        // hangs on.
+        MainWindow? popoutShell = null;
+        PanelWindow? poppedPanel = null;
+        ShellPanelId popoutPanelId = default;
+        FrameworkElement? poppedElement = null;
+
         if (Harness.Flag(args, "--uishot-popout") is { } popoutName
             && window is MainWindow popoutHost
             && Enum.TryParse<ShellPanelId>(popoutName, ignoreCase: true, out var popoutId)
             && popoutHost.PopOutPanel(popoutId) is { } poppedWindow)
         {
+            popoutShell = popoutHost;
+            poppedPanel = poppedWindow;
+            popoutPanelId = popoutId;
+            poppedElement = popoutHost.PanelHost.ContentOf<FrameworkElement>(popoutId);
+
             poppedWindow.Width = width;
             poppedWindow.Height = height;
             poppedWindow.UpdateLayout();
@@ -1152,6 +1168,65 @@ internal static class UiShot
                 $"({busyState}{(playlistName == null ? "" : $", playlist '{playlistName}'")}); " +
                 $"{path} is not evidence");
             Console.Error.Flush();
+        }
+
+        // --uishot-popout-return <file>: close the panel's window and capture the dock it
+        // comes back to. This is the half a capture of the popped window cannot show -
+        // PanelWindow.OnClosing -> ReturnContent -> dock reopens happens on the main
+        // HWND - and the reference check below is what separates a returned panel from a
+        // rebuilt one that merely looks the same.
+        if (Harness.Flag(args, "--uishot-popout-return") is { } returnPath
+            && popoutShell is not null && poppedPanel is not null && poppedElement is not null)
+        {
+            poppedPanel.Close();
+            bool reopened = UiPump.PumpUntil(
+                () => popoutShell.PanelHost.IsOpen
+                      && popoutShell.PanelHost.Current == popoutPanelId, 5000);
+            UiPump.Pump(250);
+            popoutShell.UpdateLayout();
+
+            var dock = popoutShell.PanelHost;
+            var returned = dock.ContentOf<FrameworkElement>(popoutPanelId);
+            int texts = 0;
+            void CountText(DependencyObject? node)
+            {
+                if (node == null) return;
+                if (node is TextBlock { Text.Length: > 0 }) texts++;
+                for (int i = 0; i < VisualTreeHelper.GetChildrenCount(node); i++)
+                    CountText(VisualTreeHelper.GetChild(node, i));
+            }
+            CountText(dock);
+
+            Console.Out.WriteLine(
+                $"uishot: popout-return reopened={reopened}" +
+                $" current={dock.Current}" +
+                $" sameInstance={ReferenceEquals(returned, poppedElement)}" +
+                $" slotIsSame={ReferenceEquals(dock.ContentHost.Content, poppedElement)}" +
+                $" dockw={dock.ActualWidth:0.#} dockh={dock.ActualHeight:0.#}" +
+                $" nonEmptyTextBlocks={texts}");
+
+            if (reopened && dock.ActualWidth > 1 && dock.ActualHeight > 1)
+            {
+                int dockWidth = (int)Math.Ceiling(dock.ActualWidth);
+                int dockHeight = (int)Math.Ceiling(dock.ActualHeight);
+                var dockBitmap = new RenderTargetBitmap(dockWidth, dockHeight, 96, 96, PixelFormats.Pbgra32);
+                dockBitmap.Render(dock);
+
+                var dockEncoder = new PngBitmapEncoder();
+                dockEncoder.Frames.Add(BitmapFrame.Create(dockBitmap));
+                string? dockDirectory = Path.GetDirectoryName(Path.GetFullPath(returnPath));
+                if (!string.IsNullOrEmpty(dockDirectory)) Directory.CreateDirectory(dockDirectory);
+                using var dockStream = File.Create(returnPath);
+                dockEncoder.Save(dockStream);
+                Console.Out.WriteLine(
+                    $"uishot: popout-return {dockWidth}x{dockHeight} -> {returnPath}");
+            }
+            else
+            {
+                Console.Error.WriteLine(
+                    $"uishot: popout-return PNG not written - dock {(reopened ? "has no size" : "did not reopen")}");
+                Console.Error.Flush();
+            }
         }
 
         Console.Out.Flush();
