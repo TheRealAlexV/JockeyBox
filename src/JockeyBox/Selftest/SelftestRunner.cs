@@ -696,6 +696,21 @@ public static class SelftestRunner
     }
 
     /// <summary>
+    /// 16. Every page the main window owns comes up in this process with the real
+    /// merged resource dictionaries, and none of them throws while it is realised.
+    ///
+    /// <para>This is the only case that constructs a page. A <c>StaticResource</c>
+    /// inside a <see cref="System.Windows.Controls.ControlTemplate"/> is resolved
+    /// when the template is applied, so a template placed above the style it names
+    /// compiles clean, passes every other case here, and throws the first time its
+    /// page is shown (commit <c>7b687b4</c>: <c>StripCell</c> above
+    /// <c>RackCaption</c>, dock STRIPS dead on first display). One line per page is
+    /// printed so a red run names the page; the inner exception's message is
+    /// carried into the failure because the <c>RackCaption</c> name lives there.</para>
+    /// </summary>
+    private static void DockPages(Case test) => DockPageProbe.Check(test.Line);
+
+    /// <summary>
     /// 15. Parameters written through the persist path read back identically on a fresh load.
     /// Round-trip is structural equality on the whole value, so a dropped field (a bypass
     /// flag, a limiter release) fails rather than decoding as its default.

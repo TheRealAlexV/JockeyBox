@@ -17,7 +17,7 @@ namespace JockeyBox.Tests;
 /// is selected before the menu opens, so the assertions drive the command with
 /// no argument and demand it still acts on that row.</para>
 /// </summary>
-[Collection(nameof(UiThreadCollection))]
+[Collection(UiThreadCollection.Name)]
 public sealed class TrackMenuCommandTests
 {
     [Theory]

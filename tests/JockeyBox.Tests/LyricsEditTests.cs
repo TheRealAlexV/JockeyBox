@@ -30,7 +30,7 @@ namespace JockeyBox.Tests;
 /// reflection, the way <c>KaraokePairTests</c> reaches <c>LoadTrack</c>.
 /// </para>
 /// </summary>
-[Collection(nameof(UiThreadCollection))]
+[Collection(UiThreadCollection.Name)]
 public sealed class LyricsEditTests : IDisposable
 {
     private readonly string? _previousHome;

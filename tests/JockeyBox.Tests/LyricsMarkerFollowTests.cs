@@ -29,7 +29,7 @@ namespace JockeyBox.Tests;
 /// real audio endpoint.
 /// </para>
 /// </summary>
-[Collection(nameof(UiThreadCollection))]
+[Collection(UiThreadCollection.Name)]
 public sealed class LyricsMarkerFollowTests : IDisposable
 {
     private readonly string? _previousHome;

@@ -268,7 +268,7 @@ public class LyricsDurationFitTests : IDisposable
 /// which candidate was rejected and by how much. Drives a real view model on
 /// <see cref="UiThreadCollection"/>, no window shown.
 /// </summary>
-[Collection(nameof(UiThreadCollection))]
+[Collection(UiThreadCollection.Name)]
 public sealed class LyricsRefusalStatusTests : IDisposable
 {
     private readonly string? _previousHome;
