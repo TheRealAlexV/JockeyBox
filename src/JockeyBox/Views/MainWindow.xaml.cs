@@ -1,4 +1,6 @@
 using System.ComponentModel;
+using System.Collections.Generic;
+using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -14,6 +16,7 @@ using JockeyBox.Separation;
 using JockeyBox.Settings;
 using JockeyBox.Tools;
 using JockeyBox.ViewModels;
+using JockeyBox.Views.Shell;
 
 namespace JockeyBox.Views;
 
@@ -70,6 +73,12 @@ public partial class MainWindow : Window
         _vm = new MainViewModel();
         DataContext = _vm;
         LoadVirtualLines();
+
+        // The dock's panels remember their width and their window rectangle in the
+        // same settings object the view model owns: a second AppSettings.Load() here
+        // would be a second copy whose saves overwrite the first.
+        PanelHost.Bind(_vm.SettingsRef);
+        PanelHost.PoppedOut += OnPanelPoppedOut;
 
         // Adopt the saved talk-over mic (device, gain, monitor) and start the
         // peak meter. The transport may not have an engine yet; this is a no-op
@@ -150,12 +159,9 @@ public partial class MainWindow : Window
         ActivityFeed.Shared.Rows.CollectionChanged += OnActivityRowsChanged;
         HookActivityRows();
 
-        // Sync TreeView selection to the view model (SelectedItem is read-only
-        // in XAML so we wire it in code-behind).
-        TrackTree.SelectedItemChanged += (_, e) =>
-        {
-            if (e.NewValue is BrowserNode node) _vm.SelectedTreeNode = node;
-        };
+        // The catalogue pane's TreeView selection is wired inside LibraryPanel now: the
+        // block that held the tree moved out of this window, and a panel owns its own
+        // controls (see Views/LibraryPanel.xaml.cs).
 
         // The context menu is the shared one from Views/Shared/TrackMenu.xaml:
         // its "Make Karaoke Version" entry is a command bound to the tree's
@@ -208,8 +214,13 @@ public partial class MainWindow : Window
         // so it costs the band width, not height.
         var shellRows = ShellGrid.RowDefinitions;
         var centreRows = CentreHost.RowDefinitions;
+        // PHASE 5 LANDMINE: this guard is a count, and phase 5 deletes centre row 3
+        // (the documents/dock band moves). Rewritten in the same commit as that delete,
+        // or every reader below stops running: the library pane silently keeps no
+        // height and the shell scrolls at infinite height. Fix = name the rows you
+        // actually need (DocumentsRow / WaveformRow) rather than counting them.
         if (shellRows.Count < 2 || centreRows.Count < 4) return;
-        ApplyLibraryPaneWidth();
+        PanelHost.FitToWindow();
 
         double fixedHeight = shellRows[0].ActualHeight
                              + centreRows[0].ActualHeight
@@ -238,18 +249,15 @@ public partial class MainWindow : Window
         WaveformRow.Height = waveformRow;
         BrowserHost.Height = hostHeight;
 
-        // The library pane sits in a column, not a row, so a star column has the same
+        // The docked panel sits in a column, not a row, so a star column has the same
         // problem the rows had: inside the root ScrollViewer it measures at the tree's
         // full height and the shell scrolls by a thousand pixels with 5425 tracks in
-        // it. It gets the body height instead, and scrolls inside itself.
+        // it. It gets the body height instead, and scrolls inside itself. The host
+        // ignores a height it already has, so this stays a write-on-change.
         double bodyHeight = Math.Max(0, ShellScroll.ViewportHeight
                                         - shellRows[0].ActualHeight
                                         - ShellScroll.Padding.Top - ShellScroll.Padding.Bottom);
-        // NaN is the "auto" default, and every comparison against NaN is false, so
-        // the guard has to treat it as "not set yet" rather than "already correct".
-        double paneHeight = LibraryPane.Height;
-        if (double.IsNaN(paneHeight) || Math.Abs(paneHeight - bodyHeight) > 0.5)
-            LibraryPane.Height = bodyHeight;
+        PanelHost.SetBodyHeight(bodyHeight);
     }
 
     /// <summary>The single pop-out lyrics window, if one is open.</summary>
@@ -341,12 +349,6 @@ public partial class MainWindow : Window
     private void UpdatePlayGlyph() =>
         PlayButton.Content = _vm.IsPlaying ? "\u23F8" : "\u25B6";
 
-    private void OnTrackDoubleClick(object sender, MouseButtonEventArgs e)
-    {
-        var item = FindAncestor<TreeViewItem>(e.OriginalSource as DependencyObject);
-        if (item?.DataContext is BrowserNode node && !node.IsFolder)
-            _vm.LoadSelectedTreeTrackCommand.Execute(null);
-    }
 
     /// <summary>
     /// Double-click on a channel-strip parameter row returns that value to neutral, the way
@@ -363,44 +365,7 @@ public partial class MainWindow : Window
         e.Handled = true;
     }
 
-    /// <summary>WPF does not select rows on right-click; do it so the context menu targets the row under the cursor.</summary>
-    private void OnTrackRightClick(object sender, MouseButtonEventArgs e)
-    {
-        var item = FindAncestor<TreeViewItem>(e.OriginalSource as DependencyObject);
-        if (item != null) item.IsSelected = true;
-    }
-
-    private static T? FindAncestor<T>(DependencyObject? node) where T : DependencyObject
-    {
-        while (node != null)
-        {
-            if (node is T match) return match;
-            node = VisualTreeHelper.GetParent(node);
-        }
-        return null;
-    }
-
-    private bool _expanded;
-
-    /// <summary>Expand/collapse top-level folder nodes only (one level) to avoid TreeView container explosion.</summary>
-    private void OnExpandAllClick(object sender, RoutedEventArgs e)
-    {
-        _expanded = !_expanded;
-        ExpandButton.Content = _expanded ? "\u2B06 Collapse all" : "\u2B07 Expand all";
-        foreach (var item in TrackTree.Items)
-        {
-            if (TrackTree.ItemContainerGenerator.ContainerFromItem(item) is TreeViewItem tvi && tvi.HasItems)
-            {
-                tvi.IsExpanded = _expanded;
-                // Also expand immediate sub-folders for convenience.
-                foreach (var child in tvi.Items)
-                {
-                    if (tvi.ItemContainerGenerator.ContainerFromItem(child) is TreeViewItem cvi && cvi.HasItems)
-                        cvi.IsExpanded = _expanded;
-                }
-            }
-        }
-    }
+    // Expand-all moved to LibraryPanel.xaml.cs with the tree it walks.
 
     private void OnSettingsButtonClick(object sender, RoutedEventArgs e) => OpenSettings();
 
@@ -878,18 +843,17 @@ public partial class MainWindow : Window
 
     // ---- shell panes: rail, library, dock, flyout ---------------------------
 
-    /// <summary>Width the library pane opens at when the window can afford it: 155 px
-    /// of playlist rail plus the 346 px the shared track table needs for its six
-    /// columns, plus the tree's scrollbar gutter. At 300 the pane gave the table 107 px,
-    /// so Artist was cut mid-word at the pane edge and the Icons strip was off-screen.</summary>
-    private const double LibraryPaneWidth = 545;
-
-    /// <summary>Below this the pane is not worth opening; the columns give way as they
-    /// already do in TrackRows.xaml instead of the whole pane shrinking to a strip.</summary>
-    private const double LibraryPaneFloor = 300;
+    // The pane's default width, its floor, the splitter clamp and the persisted value
+    // all live in Views/Shell/DockPanelHost.cs now: a width is a property of the dock,
+    // not of this window, and every panel that joins the dock gets the same rule
+    // (window width minus the centre's floor, floor 300, ceiling from the layout).
 
     /// <summary>Which rail toggle opened the flyout, so a second press closes it.</summary>
     private ToggleButton? _flyoutToggle;
+
+    /// <summary>One pop-out window per panel, so a second press raises the open one
+    /// instead of stacking an identical duplicate.</summary>
+    private readonly Dictionary<ShellPanelId, PanelWindow> _panelWindows = new();
 
     private void OnLibraryToggleClick(object sender, RoutedEventArgs e) => SetLibraryOpen(LibraryToggle.IsChecked == true);
 
@@ -898,23 +862,57 @@ public partial class MainWindow : Window
     public void SetLibraryOpen(bool open)
     {
         LibraryToggle.IsChecked = open;
-        LibraryPane.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
-        if (open) ApplyLibraryPaneWidth();
-        else ShellBody.ColumnDefinitions[1].Width = new GridLength(0);
+        if (open) PanelHost.Show(ShellPanelId.Library);
+        else PanelHost.Close();
     }
 
-    /// <summary>The pane's width follows the window: it takes its six-column width when
-    /// the centre can still keep its own floor, and only what is left when it cannot.
-    /// Recomputed on every layout pass rather than once on open, because the capture
-    /// harness opens the pane before the window has its final size and a width frozen
-    /// at that moment left the pane at 390 px.</summary>
-    private void ApplyLibraryPaneWidth()
+    /// <summary>
+    /// The dock asked for its current panel in a window. The host does not own windows,
+    /// so this is where one is made: it takes the live element (not a copy, so the pane
+    /// keeps its scroll position and selection) and gives it back on close.
+    /// </summary>
+    private void OnPanelPoppedOut(object? sender, ShellPanelId id)
     {
-        if (LibraryPane.Visibility != Visibility.Visible) return;
-        double width = Math.Clamp(ActualWidth - 855, LibraryPaneFloor, LibraryPaneWidth);
-        var column = ShellBody.ColumnDefinitions[1];
-        if (Math.Abs(column.Width.Value - width) > 0.5)
-            column.Width = new GridLength(width, GridUnitType.Pixel);
+        if (_panelWindows.TryGetValue(id, out var existing))
+        {
+            existing.Activate();
+            return;
+        }
+
+        if (PanelHost.DetachContent(id) is not { } content) return;
+
+        var window = new PanelWindow(PanelCatalog.Get(id), content, PanelHost, _vm.SettingsRef)
+        {
+            Owner = this,
+            // The panel binds to the console's view model, and a window is a new root:
+            // without this the moved tree inherits a null context, renders empty and
+            // shows every "loading" state as if nothing had loaded.
+            DataContext = DataContext,
+        };
+        window.Closed += (_, _) => _panelWindows.Remove(id);
+        _panelWindows[id] = window;
+        window.Show();
+    }
+
+    /// <summary>
+    /// Undock a panel into its own window - the same path the dock's button takes.
+    /// Public so the capture harness can show the state a pointer would have to click
+    /// through, exactly as <see cref="SetLibraryOpen"/> is.
+    /// </summary>
+    public PanelWindow? PopOutPanel(ShellPanelId id)
+    {
+        if (PanelHost.Current != id) PanelHost.Show(id);
+        PanelHost.PopOutCurrent();
+        return _panelWindows.TryGetValue(id, out var window) ? window : null;
+    }
+
+    /// <summary>Close every pop-out before the console goes: an owned window outliving
+    /// its owner is the one way this app could leave a surface on screen with nothing
+    /// behind it.</summary>
+    private void ClosePanelWindows()
+    {
+        foreach (var window in _panelWindows.Values.ToList()) window.Close();
+        _panelWindows.Clear();
     }
 
     /// <summary>Open the dock on a named page: strips, soundboard, cues or jobs.</summary>

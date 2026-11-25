@@ -20,6 +20,7 @@ using JockeyBox.Sources;
 using JockeyBox.Tools;
 using JockeyBox.ViewModels;
 using JockeyBox.Views;
+using JockeyBox.Views.Shell;
 using JockeyBox.YouTube;
 using ActivityKind = JockeyBox.Activity.ActivityKind;
 
@@ -964,6 +965,21 @@ internal static class UiShot
             }
         }
 
+        // --uishot-popout <panel>: undock a panel and capture the window it lands in.
+        // This is the phase-1 proof: the mechanism is only worth building if a panel
+        // can leave the dock and come back without its content being rebuilt.
+        if (Harness.Flag(args, "--uishot-popout") is { } popoutName
+            && window is MainWindow popoutHost
+            && Enum.TryParse<ShellPanelId>(popoutName, ignoreCase: true, out var popoutId)
+            && popoutHost.PopOutPanel(popoutId) is { } poppedWindow)
+        {
+            poppedWindow.Width = width;
+            poppedWindow.Height = height;
+            poppedWindow.UpdateLayout();
+            UiPump.Pump(200);
+            window = poppedWindow;
+        }
+
         // The window owns an HWND, and the service session clamps its client area
         // (1024x768 desktop minus chrome). Layout has to leave that tree entirely:
         // detach the content and host it in a Border that is its own layout root,
@@ -1111,7 +1127,8 @@ internal static class UiShot
                 $" body={shellWindow.DockBody.ActualHeight:0.#}" +
                 $" viewport={shellWindow.ShellScroll.ViewportHeight:0.#}" +
                 $" extent={shellWindow.ShellScroll.ExtentHeight:0.#}" +
-                $" pane={shellWindow.LibraryPane.ActualHeight:0.#}/{shellWindow.LibraryPane.Height:0.#}" +
+                $" pane={shellWindow.PanelHost.ActualHeight:0.#}/{shellWindow.PanelHost.Height:0.#}" +
+                $" panew={shellWindow.PanelHost.ActualWidth:0.#}" +
                 $" body={shellWindow.ShellBody.ActualHeight:0.#}");
         Console.Out.WriteLine(
             $"uishot: settle {settleMs}ms of {waitMs}ms budget{quietNote}, first frame {firstFrameMs}ms, waited on {waitedOn}" +

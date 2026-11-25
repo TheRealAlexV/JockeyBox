@@ -1,0 +1,700 @@
+<UserControl x:Class="JockeyBox.Views.LibraryPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:vm="clr-namespace:JockeyBox.ViewModels">
+    <!-- The catalogue: LIBRARY and QUEUE. It used to be a Border inside MainWindow;
+         it is its own view now because the dock builds a panel when it is first shown
+         and hands the same element to a window when the operator pops it out.
+
+         The two dictionaries are merged here, not inherited from the main window:
+         a UserControl is built before it has a parent, so StaticResource cannot reach
+         the window's own dictionary. TrackRows and TrackMenu are the shared track
+         table design; LibraryTabs holds the tab and queue-row styles that used to be
+         private to MainWindow. -->
+    <UserControl.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="/Views/Shared/TrackRows.xaml"/>
+                <ResourceDictionary Source="/Views/Shared/TrackMenu.xaml"/>
+                <ResourceDictionary Source="/Views/Shared/LibraryTabs.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </UserControl.Resources>
+
+    <Grid>
+                    <TabControl Style="{StaticResource BrowserTabControl}">
+                <TabItem Header="LIBRARY">
+                <DockPanel>
+                    <!-- Layout switcher: the ACTIVE mode is the filled pill, the
+                         other is plain text, matching every tab and segmented
+                         control on the window. It also sits with the actions at
+                         the right end of the row instead of continuing the
+                         TRACK BROWSER label as a third nav band. LastChildFill
+                         is off so the right-docked buttons keep their own
+                         widths (+ Queue was stretching to fill the row). -->
+                    <!-- Browser toolbar: three rows. At the pane's 300 px floor one row
+                         cannot hold the label, the layout switcher, the three actions
+                         and the filter/sort strip; the strip lost that contest and its
+                         sort combo was cut mid-word ("Track na") against the pane edge.
+                         Whole controls per row means only the filter box ever shrinks. -->
+                    <StackPanel DockPanel.Dock="Top" Margin="6,0,8,8">
+                        <DockPanel LastChildFill="False">
+                            <TextBlock Text="TRACK BROWSER" FontSize="11" FontWeight="Bold"
+                                       Foreground="{StaticResource TextDimBrush}" VerticalAlignment="Center"/>
+                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal"
+                                    VerticalAlignment="Center" Margin="12,0,0,0">
+                            <Button Content="ARTIST"
+                                    ToolTip="Group tracks by tagged artist and album"
+                                    Command="{Binding ShowArtistAlbumLayoutCommand}">
+                                <Button.Style>
+                                    <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                        <Setter Property="FontSize" Value="10"/>
+                                        <Setter Property="Padding" Value="7,3"/>
+                                        <Setter Property="Background" Value="Transparent"/>
+                                        <Setter Property="BorderThickness" Value="0"/>
+                                        <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsArtistAlbumLayout}" Value="True">
+                                                <Setter Property="Background" Value="{StaticResource BorderBrush}"/>
+                                                <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Button.Style>
+                            </Button>
+                            <Button Content="PATH" Margin="2,0,0,0"
+                                    ToolTip="Group tracks by their folder path"
+                                    Command="{Binding ShowPathLayoutCommand}">
+                                <Button.Style>
+                                    <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                        <Setter Property="FontSize" Value="10"/>
+                                        <Setter Property="Padding" Value="7,3"/>
+                                        <Setter Property="Background" Value="Transparent"/>
+                                        <Setter Property="BorderThickness" Value="0"/>
+                                        <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsPathLayout}" Value="True">
+                                                <Setter Property="Background" Value="{StaticResource BorderBrush}"/>
+                                                <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Button.Style>
+                            </Button>
+                        </StackPanel>
+                        </DockPanel>
+
+                        <!-- Filter + sort strip, shared with the Spotify and YouTube
+                             lists. Two rows since the shared template was reworked:
+                             one row could not fit FILTER, its box, SORT, the combo and
+                             the direction button in the pane, and the piece that lost
+                             was the combo, cut mid-label. Its filter box writes into
+                             SearchText, so the tree keeps filtering exactly as before. -->
+                        <ContentControl Margin="0,6,0,0" Focusable="False"
+                                        Content="{Binding LibraryView}"
+                                        ContentTemplate="{StaticResource FilterSortStrip}"/>
+
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
+                                    Margin="0,6,0,0">
+                            <Button Content="+ Queue" Margin="0,0,4,0"
+                                    FontSize="10" Padding="6,3"
+                                    ToolTip="Add the selected track to the playback queue (Ctrl+Q)"
+                                    Command="{Binding AddToQueueCommand}"/>
+                            <Button x:Name="ExpandButton" Content="&#x2B07; Expand all"
+                                    Margin="0,0,4,0" FontSize="10" Padding="6,3"
+                                    Click="OnExpandAllClick"/>
+                            <Button Content="Load &#x25B6;" Margin="4,0,0,0"
+                                    Command="{Binding LoadSelectedTreeTrackCommand}"/>
+                        </StackPanel>
+                    </StackPanel>
+
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <!-- The playlist rail gives way, not the track table: six
+                                 columns need 346 px (TrackRows.xaml) and the pane is
+                                 530 wide, so the rail takes 155 and the browser keeps
+                                 367 - enough for the columns plus the tree's own
+                                 scrollbar gutter. At 190 the browser had 107 px, which
+                                 is why Artist was cut mid-word at the pane edge. -->
+                            <ColumnDefinition Width="155"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+
+                        <!-- Playlist rail. Wraps the existing tree grid, so the
+                             tab's own layout is untouched. -->
+                        <Border Grid.Column="0" Background="{StaticResource PanelAltBrush}"
+                                BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,1,0"
+                                Padding="2,0,2,0">
+                            <DockPanel>
+                                <TextBlock DockPanel.Dock="Top" Text="PLAYLISTS" FontSize="10" FontWeight="Bold"
+                                           Foreground="{StaticResource TextDimBrush}" Margin="4,4,0,4"/>
+
+                                <!-- + New (inline name, same pattern as the YouTube manage strip) -->
+                                <Button DockPanel.Dock="Top" Content="+ New" HorizontalAlignment="Left"
+                                        FontSize="10" Padding="5,2" Margin="2,0,2,4"
+                                        ToolTip="Create an app-owned playlist from library tracks, or right-click a track and choose Add to playlist"
+                                        Command="{Binding BeginCreatePlaylistCommand}"
+                                        Visibility="{Binding IsNotCreatingPlaylist, Converter={StaticResource BoolToVisibility}}"/>
+
+                                <StackPanel DockPanel.Dock="Top" Orientation="Horizontal" Margin="2,0,2,4"
+                                            Visibility="{Binding IsCreatingPlaylist, Converter={StaticResource BoolToVisibility}}">
+                                    <TextBox Width="104" FontSize="11"
+                                             Text="{Binding NewPlaylistName, UpdateSourceTrigger=PropertyChanged}">
+                                        <TextBox.InputBindings>
+                                            <KeyBinding Key="Enter" Command="{Binding CommitCreatePlaylistCommand}"/>
+                                            <KeyBinding Key="Escape" Command="{Binding CancelCreatePlaylistCommand}"/>
+                                        </TextBox.InputBindings>
+                                    </TextBox>
+                                    <Button Content="&#x2713;" FontSize="10" Padding="4,1" Margin="3,0,0,0"
+                                            ToolTip="Create" Command="{Binding CommitCreatePlaylistCommand}"/>
+                                    <Button Content="&#x2715;" FontSize="10" Padding="4,1" Margin="2,0,0,0"
+                                            ToolTip="Cancel" Command="{Binding CancelCreatePlaylistCommand}"/>
+                                </StackPanel>
+
+                                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                                    <ItemsControl ItemsSource="{Binding PlaylistRail}">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <StackPanel>
+                                                    <!-- Normal row -->
+                                                    <Button HorizontalContentAlignment="Stretch" Padding="4,3"
+                                                            Visibility="{Binding IsNotEditing, Converter={StaticResource BoolToVisibility}}"
+                                                            Command="{Binding DataContext.SelectPlaylistCommand,
+                                                                      RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                            CommandParameter="{Binding}">
+                                                        <!-- Tag carries the view model into the context menu;
+                                                             the menu itself is in its own popup tree. -->
+                                                        <Button.Tag>
+                                                            <Binding Path="DataContext"
+                                                                     RelativeSource="{RelativeSource AncestorType=ItemsControl}"/>
+                                                        </Button.Tag>
+                                                        <Button.ContextMenu>
+                                                            <ContextMenu AutomationProperties.Name="Playlist actions">
+                                                                <MenuItem Header="New playlist"
+                                                                          Command="{Binding PlacementTarget.Tag.BeginCreatePlaylistCommand,
+                                                                                    RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                                                <MenuItem Header="Move up"
+                                                                          Command="{Binding PlacementTarget.Tag.MovePlaylistUpCommand,
+                                                                                    RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                                          CommandParameter="{Binding PlacementTarget.DataContext,
+                                                                                             RelativeSource={RelativeSource AncestorType=ContextMenu}}">
+                                                                    <MenuItem.Style>
+                                                                        <Style TargetType="MenuItem"
+                                                                               BasedOn="{StaticResource {x:Type MenuItem}}">
+                                                                            <Style.Triggers>
+                                                                                <!-- Imported rows are read-only in this rail, like Rename/Delete -->
+                                                                                <DataTrigger Binding="{Binding PlacementTarget.DataContext.Playlist.IsReadOnly,
+                                                                                                       RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                                                             Value="True">
+                                                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                                                </DataTrigger>
+                                                                            </Style.Triggers>
+                                                                        </Style>
+                                                                    </MenuItem.Style>
+                                                                </MenuItem>
+                                                                <MenuItem Header="Move down"
+                                                                          Command="{Binding PlacementTarget.Tag.MovePlaylistDownCommand,
+                                                                                    RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                                          CommandParameter="{Binding PlacementTarget.DataContext,
+                                                                                             RelativeSource={RelativeSource AncestorType=ContextMenu}}">
+                                                                    <MenuItem.Style>
+                                                                        <Style TargetType="MenuItem"
+                                                                               BasedOn="{StaticResource {x:Type MenuItem}}">
+                                                                            <Style.Triggers>
+                                                                                <DataTrigger Binding="{Binding PlacementTarget.DataContext.Playlist.IsReadOnly,
+                                                                                                       RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                                                             Value="True">
+                                                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                                                </DataTrigger>
+                                                                            </Style.Triggers>
+                                                                        </Style>
+                                                                    </MenuItem.Style>
+                                                                </MenuItem>
+                                                                <Separator/>
+                                                                <MenuItem Header="Rename playlist…"
+                                                                          Command="{Binding PlacementTarget.Tag.BeginRenamePlaylistCommand,
+                                                                                    RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                                          CommandParameter="{Binding PlacementTarget.DataContext,
+                                                                                             RelativeSource={RelativeSource AncestorType=ContextMenu}}">
+                                                                    <MenuItem.Style>
+                                                                        <Style TargetType="MenuItem"
+                                                                               BasedOn="{StaticResource {x:Type MenuItem}}">
+                                                                            <Style.Triggers>
+                                                                                <!-- Imported playlists cannot be renamed or deleted -->
+                                                                                <DataTrigger Binding="{Binding PlacementTarget.DataContext.Playlist.IsReadOnly,
+                                                                                                       RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                                                             Value="True">
+                                                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                                                </DataTrigger>
+                                                                            </Style.Triggers>
+                                                                        </Style>
+                                                                    </MenuItem.Style>
+                                                                </MenuItem>
+                                                                <MenuItem Header="Delete playlist…"
+                                                                          Command="{Binding PlacementTarget.Tag.BeginDeletePlaylistCommand,
+                                                                                    RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                                          CommandParameter="{Binding PlacementTarget.DataContext,
+                                                                                             RelativeSource={RelativeSource AncestorType=ContextMenu}}">
+                                                                    <MenuItem.Style>
+                                                                        <Style TargetType="MenuItem"
+                                                                               BasedOn="{StaticResource {x:Type MenuItem}}">
+                                                                            <Style.Triggers>
+                                                                                <DataTrigger Binding="{Binding PlacementTarget.DataContext.Playlist.IsReadOnly,
+                                                                                                       RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                                                             Value="True">
+                                                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                                                </DataTrigger>
+                                                                            </Style.Triggers>
+                                                                        </Style>
+                                                                    </MenuItem.Style>
+                                                                </MenuItem>
+                                                            </ContextMenu>
+                                                        </Button.ContextMenu>
+                                                        <Button.Style>
+                                                            <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                                                <Setter Property="Background" Value="Transparent"/>
+                                                                <Setter Property="BorderThickness" Value="0"/>
+                                                                <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                                                <Setter Property="Padding" Value="4,3"/>
+                                                                <Style.Triggers>
+                                                                    <Trigger Property="IsMouseOver" Value="True">
+                                                                        <Setter Property="Background" Value="{StaticResource HoverBrush}"/>
+                                                                    </Trigger>
+                                                                    <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                                                                        <Setter Property="Background" Value="{StaticResource SelectionBrush}"/>
+                                                                    </DataTrigger>
+                                                                </Style.Triggers>
+                                                            </Style>
+                                                        </Button.Style>
+                                                        <Grid>
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="*"/>
+                                                                <ColumnDefinition Width="Auto"/>
+                                                                <ColumnDefinition Width="Auto"/>
+                                                            </Grid.ColumnDefinitions>
+                                                            <TextBlock Text="{Binding Title}" FontSize="11"
+                                                                       TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
+                                                                       Foreground="{StaticResource TextBrush}"/>
+                                                            <TextBlock Grid.Column="1" Text="{Binding CountText}" FontSize="10"
+                                                                       Margin="6,0,0,0" VerticalAlignment="Center"
+                                                                       Foreground="{StaticResource TextDimBrush}"/>
+                                                            <StackPanel Grid.Column="2" Orientation="Horizontal"
+                                                                        Visibility="{Binding IsInternal, Converter={StaticResource BoolToVisibility}}">
+                                                                <Button Content="&#x270E;" FontSize="9" Padding="3,0" Margin="4,0,0,0"
+                                                                        ToolTip="Rename playlist"
+                                                                        Command="{Binding DataContext.BeginRenamePlaylistCommand,
+                                                                                  RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                                        CommandParameter="{Binding}"/>
+                                                                <Button Content="&#x2715;" FontSize="9" Padding="3,0" Margin="1,0,0,0"
+                                                                        ToolTip="Delete playlist"
+                                                                        Command="{Binding DataContext.BeginDeletePlaylistCommand,
+                                                                                  RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                                        CommandParameter="{Binding}"/>
+                                                            </StackPanel>
+                                                        </Grid>
+                                                    </Button>
+
+                                                    <!-- Inline rename -->
+                                                    <StackPanel Orientation="Horizontal" Margin="2,0,2,0"
+                                                                Visibility="{Binding IsEditing, Converter={StaticResource BoolToVisibility}}">
+                                                        <TextBox Width="104" FontSize="11"
+                                                                 Text="{Binding EditName, UpdateSourceTrigger=PropertyChanged}">
+                                                            <TextBox.InputBindings>
+                                                                <KeyBinding Key="Enter"
+                                                                            Command="{Binding DataContext.CommitRenamePlaylistCommand,
+                                                                                      RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                                            CommandParameter="{Binding}"/>
+                                                                <KeyBinding Key="Escape"
+                                                                            Command="{Binding DataContext.CancelRenamePlaylistCommand,
+                                                                                      RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                                            CommandParameter="{Binding}"/>
+                                                            </TextBox.InputBindings>
+                                                        </TextBox>
+                                                        <Button Content="&#x2713;" FontSize="10" Padding="4,1" Margin="3,0,0,0"
+                                                                ToolTip="Rename"
+                                                                Command="{Binding DataContext.CommitRenamePlaylistCommand,
+                                                                          RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                                CommandParameter="{Binding}"/>
+                                                        <Button Content="&#x2715;" FontSize="10" Padding="4,1" Margin="2,0,0,0"
+                                                                ToolTip="Cancel"
+                                                                Command="{Binding DataContext.CancelRenamePlaylistCommand,
+                                                                          RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                                CommandParameter="{Binding}"/>
+                                                    </StackPanel>
+
+                                                    <!-- Delete confirmation (internal playlists only) -->
+                                                    <Border Margin="2,0,2,3" Padding="4,2"
+                                                            Background="{StaticResource PanelBrush}"
+                                                            BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                                                            Visibility="{Binding IsConfirmingDelete, Converter={StaticResource BoolToVisibility}}">
+                                                        <StackPanel Orientation="Horizontal">
+                                                            <TextBlock Text="{Binding Playlist.Name, StringFormat={}Delete &#x201C;{0}&#x201D;?}"
+                                                                       FontSize="10" VerticalAlignment="Center"
+                                                                       Foreground="{StaticResource TextBrush}"
+                                                                       TextTrimming="CharacterEllipsis" MaxWidth="120"
+                                                                       ToolTip="{Binding Playlist.Name}"/>
+                                                            <Button Content="Yes" FontSize="10" Padding="5,1" Margin="6,0,0,0"
+                                                                    Command="{Binding DataContext.CommitDeletePlaylistCommand,
+                                                                              RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                                    CommandParameter="{Binding}"/>
+                                                            <Button Content="No" FontSize="10" Padding="5,1" Margin="3,0,0,0"
+                                                                    Command="{Binding DataContext.CancelDeletePlaylistCommand,
+                                                                              RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                                    CommandParameter="{Binding}"/>
+                                                        </StackPanel>
+                                                    </Border>
+                                                </StackPanel>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                </ScrollViewer>
+                            </DockPanel>
+                        </Border>
+
+                        <Grid Grid.Column="1" Margin="6,0,0,0">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto"/>
+                            <RowDefinition Height="*"/>
+                        </Grid.RowDefinitions>
+
+                        <!-- Column headers come from Views/Shared/TrackRows.xaml, so
+                             they line up with the rows on all three lists. The 14 px
+                             right inset is the tree's scrollbar gutter: the header is
+                             outside the tree's ScrollViewer, so without it the Icons
+                             header sat 14 px right of the icons it names. -->
+                        <ContentControl Grid.Row="0" Content="{StaticResource TrackColumnHeaders}"
+                                        Margin="0,0,14,0"
+                                        Focusable="False" IsTabStop="False"/>
+
+                        <!-- Tree; the busy state below covers it while a playlist's
+                             membership resolves off the UI thread, so a half-built
+                             playlist is never shown. -->
+                        <Grid Grid.Row="1">
+                            <TreeView x:Name="TrackTree"
+                                      ItemsSource="{Binding BrowserRoots}"
+                                      Background="{StaticResource PanelBrush}"
+                                      BorderThickness="0"
+                                      MouseDoubleClick="OnTrackDoubleClick"
+                                      PreviewMouseRightButtonDown="OnTrackRightClick"
+                                      VirtualizingPanel.IsVirtualizing="True"
+                                      VirtualizingPanel.VirtualizationMode="Recycling"
+                                      VirtualizingPanel.ScrollUnit="Pixel"
+                                      VirtualizingPanel.CacheLength="1"
+                                      VirtualizingPanel.CacheLengthUnit="Page"
+                                      ItemTemplate="{StaticResource LibraryNodeRow}"
+                                      ContextMenu="{StaticResource TrackMenu}"
+                                      Tag="{Binding TrackMenu}"
+                                      ScrollViewer.CanContentScroll="True"
+                                      ScrollViewer.VerticalScrollBarVisibility="Visible"
+                                      ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                                <!-- Virtualisation is the difference between "5 000 rows
+                                     open in 10 s" and a scrolled window: without it every
+                                     TreeViewItem of every expanded folder is built, even
+                                     the ones never on screen. Recycling keeps the row
+                                     template instances, pixel scrolling keeps the thumb
+                                     honest while rows have a fixed height. -->
+                                <!-- The row itself now comes from Views/Shared/TrackRows.xaml
+                                     (LibraryNodeRow): one design shared with the
+                                     Spotify and YouTube lists. -->
+
+                                <TreeView.ItemContainerStyle>
+                                    <Style TargetType="TreeViewItem">
+                                        <!-- Bound two-way so a rebuild can restore the row state. -->
+                                        <Setter Property="IsExpanded" Value="{Binding IsExpanded, Mode=TwoWay}"/>
+                                        <Setter Property="IsSelected" Value="{Binding IsSelected, Mode=TwoWay}"/>
+                                        <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+                                        <Setter Property="Background" Value="Transparent"/>
+                                        <Setter Property="Padding" Value="0,1"/>
+                                        <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                                        <Setter Property="Template">
+                                            <Setter.Value>
+                                                <ControlTemplate TargetType="TreeViewItem">
+                                                    <Grid>
+                                                        <Grid.RowDefinitions>
+                                                            <RowDefinition Height="Auto"/>
+                                                            <RowDefinition Height="*"/>
+                                                        </Grid.RowDefinitions>
+                                                        <Border x:Name="Bd" Grid.Row="0"
+                                                                Background="{TemplateBinding Background}"
+                                                                Padding="0">
+                                                            <Grid>
+                                                                <Grid.ColumnDefinitions>
+                                                                    <ColumnDefinition Width="Auto"/>
+                                                                    <ColumnDefinition Width="*"/>
+                                                                </Grid.ColumnDefinitions>
+                                                                <!-- Expander toggle (visible only for folders) -->
+                                                                <ToggleButton x:Name="Expander" Grid.Column="0"
+                                                                              ClickMode="Press"
+                                                                              IsChecked="{Binding IsExpanded, RelativeSource={RelativeSource TemplatedParent}}"
+                                                                              Width="18" Height="18"
+                                                                              Margin="4,0,2,0">
+                                                                    <ToggleButton.Template>
+                                                                        <ControlTemplate TargetType="ToggleButton">
+                                                                            <Border Width="18" Height="18"
+                                                                                    Background="Transparent">
+                                                                                <Path x:Name="Arrow"
+                                                                                      HorizontalAlignment="Center"
+                                                                                      VerticalAlignment="Center"
+                                                                                      Data="M 0 0 L 5 4 L 0 8 Z"
+                                                                                      Fill="{StaticResource TextDimBrush}"/>
+                                                                            </Border>
+                                                                            <ControlTemplate.Triggers>
+                                                                                <Trigger Property="IsChecked" Value="True">
+                                                                                    <Setter TargetName="Arrow"
+                                                                                            Property="Data"
+                                                                                            Value="M 0 0 L 8 0 L 4 5 Z"/>
+                                                                                </Trigger>
+                                                                            </ControlTemplate.Triggers>
+                                                                        </ControlTemplate>
+                                                                    </ToggleButton.Template>
+                                                                </ToggleButton>
+                                                                <!-- Content (row grid) -->
+                                                                <ContentPresenter Grid.Column="1" x:Name="PART_Header"
+                                                                                  ContentSource="Header"
+                                                                                  HorizontalAlignment="Stretch"/>
+                                                            </Grid>
+                                                        </Border>
+                                                        <ItemsPresenter Grid.Row="1" x:Name="ItemsHost"
+                                                                        Visibility="Collapsed"/>
+                                                    </Grid>
+                                                    <ControlTemplate.Triggers>
+                                                        <Trigger Property="IsExpanded" Value="True">
+                                                            <Setter TargetName="ItemsHost"
+                                                                    Property="Visibility" Value="Visible"/>
+                                                        </Trigger>
+                                                        <Trigger Property="HasItems" Value="False">
+                                                            <Setter TargetName="Expander"
+                                                                    Property="Visibility" Value="Collapsed"/>
+                                                        </Trigger>
+                                                        <Trigger Property="IsSelected" Value="True">
+                                                            <Setter TargetName="Bd"
+                                                                    Property="Background"
+                                                                    Value="{StaticResource SelectionBrush}"/>
+                                                        </Trigger>
+                                                        <MultiTrigger>
+                                                            <MultiTrigger.Conditions>
+                                                                <Condition Property="IsMouseOver" Value="True"/>
+                                                                <Condition Property="IsSelected" Value="False"/>
+                                                            </MultiTrigger.Conditions>
+                                                            <Setter TargetName="Bd"
+                                                                    Property="Background"
+                                                                    Value="{StaticResource HoverBrush}"/>
+                                                        </MultiTrigger>
+                                                    </ControlTemplate.Triggers>
+                                                </ControlTemplate>
+                                            </Setter.Value>
+                                        </Setter>
+                                    </Style>
+                                </TreeView.ItemContainerStyle>
+                            </TreeView>
+
+                            <!-- Busy state: a playlist resolves off the UI thread and is
+                                 applied as one batch, so the tree is only ever empty or
+                                 complete - never half built. -->
+                            <Border Background="{StaticResource PanelBrush}" Opacity="0.85"
+                                    Visibility="{Binding IsPlaylistLoading, Converter={StaticResource BoolToVisibility}}">
+                                <TextBlock Text="Loading playlist&#x2026;"
+                                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                                           FontSize="12" Foreground="{StaticResource TextDimBrush}"/>
+                            </Border>
+                        </Grid>
+                        </Grid>
+                    </Grid>
+                </DockPanel>
+                </TabItem>
+                <TabItem Header="{Binding QueueHeader}">
+                    <DockPanel>
+                        <!-- Queue toolbar: transport for the queue itself -->
+                        <DockPanel DockPanel.Dock="Top" Margin="4,0,4,8">
+                            <TextBlock Text="PLAYBACK QUEUE" FontSize="11" FontWeight="Bold"
+                                       Foreground="{StaticResource TextDimBrush}" VerticalAlignment="Center"/>
+                            <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                <Button Content="&#x23EE; Prev" FontSize="10" Padding="8,3"
+                                        ToolTip="Play the previous unplayed queue track (Ctrl+Shift+Left)"
+                                        Command="{Binding PlayPreviousCommand}"/>
+                                <Button Content="Next &#x23ED;" FontSize="10" Padding="8,3" Margin="4,0,0,0"
+                                        ToolTip="Play the next queue track (Ctrl+Shift+Right)"
+                                        Command="{Binding PlayNextCommand}"/>
+                                <Button Command="{Binding ToggleRepeatQueueCommand}" Margin="8,0,0,0"
+                                        ToolTip="Start the queue over when it reaches the end">
+                                    <Button.Style>
+                                        <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                            <Setter Property="FontSize" Value="10"/>
+                                            <Setter Property="Padding" Value="8,3"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding RepeatQueue}" Value="True">
+                                                    <Setter Property="Foreground" Value="{StaticResource AccentABrush}"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Button.Style>
+                                    <TextBlock Text="&#x21BB; Repeat"/>
+                                </Button>
+                                <Button Content="Clear played" FontSize="10" Padding="8,3" Margin="4,0,0,0"
+                                        Command="{Binding ClearPlayedCommand}"/>
+                                <Button Content="Clear" FontSize="10" Padding="8,3" Margin="4,0,0,0"
+                                        Command="{Binding ClearQueueCommand}"/>
+                            </StackPanel>
+                        </DockPanel>
+
+                        <!-- Status line doubles as the empty-state hint -->
+                        <TextBlock DockPanel.Dock="Bottom" Text="{Binding QueueStatusText}"
+                                   Margin="6,6,6,0" FontSize="10.5"
+                                   Foreground="{StaticResource TextDimBrush}"
+                                   TextTrimming="CharacterEllipsis"/>
+
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+
+                            <!-- Column headers -->
+                            <Border Grid.Row="0" Background="{StaticResource PanelAltBrush}"
+                                    BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="26"/>
+                                        <ColumnDefinition Width="38"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="150"/>
+                                        <ColumnDefinition Width="56"/>
+                                        <ColumnDefinition Width="74"/>
+                                        <ColumnDefinition Width="56"/>
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Grid.Column="0" Text="#" Padding="6,5" FontWeight="SemiBold"
+                                               Foreground="{StaticResource TextDimBrush}"/>
+                                    <TextBlock Grid.Column="1" Text="Deck" Padding="0,5" FontWeight="SemiBold"
+                                               Foreground="{StaticResource TextDimBrush}"/>
+                                    <TextBlock Grid.Column="2" Text="Title" Padding="6,5" FontWeight="SemiBold"
+                                               Foreground="{StaticResource TextDimBrush}"/>
+                                    <TextBlock Grid.Column="3" Text="Artist" Padding="6,5" FontWeight="SemiBold"
+                                               Foreground="{StaticResource TextDimBrush}"/>
+                                    <TextBlock Grid.Column="4" Text="Time" Padding="6,5" FontWeight="SemiBold"
+                                               Foreground="{StaticResource TextDimBrush}"/>
+                                    <TextBlock Grid.Column="5" Text="State" Padding="6,5" FontWeight="SemiBold"
+                                               Foreground="{StaticResource TextDimBrush}"/>
+                                </Grid>
+                            </Border>
+
+                            <!-- Rows: played stays in the list (greyed), current gets the accent bar -->
+                            <ListView Grid.Row="1"
+                                      ItemsSource="{Binding Queue}"
+                                      SelectedItem="{Binding SelectedQueueItem}"
+                                      ItemContainerStyle="{StaticResource QueueRow}"
+                                      Background="{StaticResource PanelBrush}"
+                                      BorderThickness="0"
+                                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                      VirtualizingPanel.IsVirtualizing="True"
+                                      VirtualizingPanel.VirtualizationMode="Recycling">
+                                <ListView.ItemTemplate>
+                                    <DataTemplate DataType="{x:Type vm:PlaybackQueueItem}">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="26"/>
+                                                <ColumnDefinition Width="38"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="150"/>
+                                                <ColumnDefinition Width="56"/>
+                                                <ColumnDefinition Width="74"/>
+                                                <ColumnDefinition Width="56"/>
+                                            </Grid.ColumnDefinitions>
+
+                                            <TextBlock Grid.Column="0" Text="{Binding IndexText}"
+                                                       Padding="6,0" FontFamily="Consolas" FontSize="10.5"
+                                                       VerticalAlignment="Center"
+                                                       Foreground="{StaticResource TextDimBrush}"/>
+
+                                            <!-- Deck badge: click to flip the row between A and B -->
+                                            <Button Grid.Column="1" Content="{Binding DeckText}"
+                                                    Width="18" Height="16" Padding="0" Margin="1,0,0,0"
+                                                    HorizontalAlignment="Left" VerticalAlignment="Center"
+                                                    FontFamily="Consolas" FontSize="9"
+                                                    Foreground="{StaticResource TextDimBrush}"
+                                                    ToolTip="{Binding DeckHint}"
+                                                    Command="{Binding DataContext.FlipQueueDeckCommand,
+                                                        RelativeSource={RelativeSource AncestorType=ListView}}"
+                                                    CommandParameter="{Binding}">
+                                                <Button.Style>
+                                                    <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                                        <Setter Property="Background" Value="Transparent"/>
+                                                        <Setter Property="BorderThickness" Value="1"/>
+                                                        <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}"/>
+                                                        <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+                                                        <Style.Triggers>
+                                                            <Trigger Property="IsMouseOver" Value="True">
+                                                                <Setter Property="BorderBrush" Value="{StaticResource AccentABrush}"/>
+                                                                <Setter Property="Foreground" Value="{StaticResource AccentABrush}"/>
+                                                            </Trigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Button.Style>
+                                            </Button>
+
+                                            <TextBlock Grid.Column="2" Text="{Binding Title}"
+                                                       Padding="6,0" FontSize="12"
+                                                       VerticalAlignment="Center"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       ToolTip="{Binding Title}"/>
+
+                                            <TextBlock Grid.Column="3" Text="{Binding Artist}"
+                                                       Padding="6,0" FontSize="10.5"
+                                                       VerticalAlignment="Center"
+                                                       Foreground="{StaticResource TextDimBrush}"
+                                                       TextTrimming="CharacterEllipsis"
+                                                       ToolTip="{Binding Artist}"/>
+
+                                            <TextBlock Grid.Column="4" Text="{Binding DurationText}"
+                                                       Padding="6,0" FontFamily="Consolas" FontSize="10.5"
+                                                       VerticalAlignment="Center"
+                                                       Foreground="{StaticResource TextDimBrush}"/>
+
+                                            <TextBlock Grid.Column="5" Text="{Binding Display}"
+                                                       Padding="6,0" FontSize="10"
+                                                       VerticalAlignment="Center"
+                                                       TextTrimming="CharacterEllipsis">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsCurrent}" Value="True">
+                                                                <Setter Property="Foreground" Value="{StaticResource AccentABrush}"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+
+                                            <StackPanel Grid.Column="6" Orientation="Horizontal"
+                                                        HorizontalAlignment="Right" VerticalAlignment="Center">
+                                                <Button Content="&#x25B6;" Width="22" Height="20"
+                                                        FontSize="9" Padding="0"
+                                                        ToolTip="Play this track now"
+                                                        Command="{Binding DataContext.PlayNowFromQueueCommand,
+                                                            RelativeSource={RelativeSource AncestorType=ListView}}"
+                                                        CommandParameter="{Binding}"/>
+                                                <Button Content="&#x2715;" Width="22" Height="20"
+                                                        FontSize="9" Padding="0" Margin="2,0,0,0"
+                                                        ToolTip="Remove from the queue"
+                                                        Command="{Binding DataContext.RemoveFromQueueCommand,
+                                                            RelativeSource={RelativeSource AncestorType=ListView}}"
+                                                        CommandParameter="{Binding}"/>
+                                            </StackPanel>
+                                        </Grid>
+                                    </DataTemplate>
+                                </ListView.ItemTemplate>
+                            </ListView>
+
+                            <!-- Empty hint, layered over the (empty) list -->
+                            <TextBlock Grid.Row="1" Text="{Binding QueueStatusText}"
+                                       FontSize="11" Foreground="{StaticResource TextDimBrush}"
+                                       TextWrapping="Wrap" TextAlignment="Center" MaxWidth="260"
+                                       IsHitTestVisible="False"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"
+                                       Visibility="{Binding IsQueueEmpty, Converter={StaticResource BoolToVisibility}}"/>
+                        </Grid>
+                    </DockPanel>
+                </TabItem>
+                    </TabControl>
+    </Grid>
+</UserControl>

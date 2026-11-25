@@ -525,6 +525,36 @@ public class AppSettings
     /// <summary>Saved window height in pixels, or null.</summary>
     public double? LyricsWindowHeight { get; set; }
 
+    // ---- shell panel layout ----------------------------------------------
+    // Additive on the schema, the same precedent as MixerEnabled and the
+    // VirtualAsio keys: Save() writes the whole object, so every key that exists
+    // keeps round-tripping, and a settings.json without this one loads with an
+    // empty dictionary and every panel at its own default width. No schema bump
+    // is needed for a property nothing reads by name.
+
+    /// <summary>
+    /// One entry per shell panel, keyed by <c>ShellPanelId</c> name: how wide the
+    /// operator left the dock and where its window was last placed. An absent key
+    /// means "never touched", which the host answers with the panel's default width.
+    /// </summary>
+    public Dictionary<string, PanelLayoutEntry> PanelLayout { get; set; } = new();
+
+    /// <summary>
+    /// The entry for a panel, created on first use. Never null: callers write through
+    /// it (width, window rectangle, always-on-top) rather than replacing it.
+    /// </summary>
+    public PanelLayoutEntry Panel(Views.Shell.ShellPanelId id)
+    {
+        PanelLayout ??= new();
+        string key = Views.Shell.ShellPanelIdNames.Key(id);
+        if (!PanelLayout.TryGetValue(key, out var entry))
+        {
+            entry = new PanelLayoutEntry();
+            PanelLayout[key] = entry;
+        }
+        return entry;
+    }
+
     /// <summary>Preferred provider id for a track, or null when none is stored.</summary>
     public string? GetLyricsSource(string? trackKey)
     {

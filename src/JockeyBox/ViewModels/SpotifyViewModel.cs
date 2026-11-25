@@ -518,6 +518,13 @@ public partial class SpotifyViewModel : ObservableObject
             Versions.Add(new VersionCandidate(variant));
     }
 
+    /// <summary>
+    /// Closes the versions panel. Marked <c>RelayCommand</c> because SpotifyView.xaml
+    /// binds its &#x2715; to <c>CloseVersionsCommand</c>: the method was private and
+    /// unattributed, so that button did nothing and the XAML named a member that did not
+    /// exist. The widened binding guard (XamlBindingGuardTests) is what found it.
+    /// </summary>
+    [RelayCommand]
     private void CloseVersions()
     {
         Versions.Clear();

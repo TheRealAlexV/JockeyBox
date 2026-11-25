@@ -5,6 +5,7 @@ using System.Linq;
 using System.Reflection;
 using System.Xml.Linq;
 using JockeyBox.ViewModels;
+using JockeyBox.Views;
 using Xunit;
 
 namespace JockeyBox.Tests;
@@ -19,16 +20,97 @@ public sealed class XamlBindingGuardTests
 {
     private static readonly Assembly AppAssembly = typeof(MainViewModel).Assembly;
 
-    [Fact]
-    public void EveryBindingPathInTheMainWindowResolvesOnItsDataContext()
+    /// <summary>
+    /// Every view's data context, named here so a binding can be checked against the
+    /// type it actually reads. A new view that is not listed fails the suite instead of
+    /// being skipped: this guard exists to break when a binding stops resolving, and one
+    /// that silently stops watching a file is worse than no guard at all.
+    ///
+    /// <para>null means "no inherited context" - a ResourceDictionary has no data
+    /// context of its own, so only the bindings inside its typed DataTemplates are
+    /// checked, and those name their own type.</para>
+    /// </summary>
+    private static readonly Dictionary<string, Type?> ViewContexts = new(StringComparer.OrdinalIgnoreCase)
     {
-        var doc = XDocument.Load(MainWindowXaml());
+        // The console and the panes it hosts: everything inside them binds to the one
+        // MainViewModel the window owns.
+        ["MainWindow.xaml"] = typeof(MainViewModel),
+        ["LibraryPanel.xaml"] = typeof(MainViewModel),
+        ["LyricsPanel.xaml"] = typeof(MainViewModel),
+        ["LyricsWindow.xaml"] = typeof(MainViewModel),
+        ["SpotifyView.xaml"] = typeof(SpotifyViewModel),
+        ["YouTubeView.xaml"] = typeof(YouTubeViewModel),
+
+        // Views with a context of their own.
+        ["PreviewBar.xaml"] = typeof(PreviewBarViewModel),
+        ["DiagnosticsWindow.xaml"] = typeof(DiagnosticsViewModel),
+        ["YouTubeSearchWindow.xaml"] = typeof(YouTubeSearchViewModel),
+        ["SpotifySetupDialog.xaml"] = typeof(SpotifySetupDialog),
+        ["YouTubeAuthDialog.xaml"] = typeof(YouTubeAuthDialog),
+
+        // The shell's own chrome. DockPanelHost binds nothing (its caption is set in
+        // code from the panel definition); PanelWindow carries the console's view model
+        // because it hosts the panel element that binds to it.
+        ["DockPanelHost.xaml"] = null,
+        ["PanelWindow.xaml"] = typeof(MainViewModel),
+
+        // Dialogs that bind nothing or bind with ElementName only: there is no
+        // inherited context to check a path against, so the walk finds none. Listed
+        // rather than omitted so a new binding in one of them cannot be added silently -
+        // the file still has to be named here either way.
+        ["SettingsWindow.xaml"] = null,
+        ["SetupWindow.xaml"] = null,
+        ["EditLyricLineDialog.xaml"] = null,
+        ["MoveTrackDialog.xaml"] = null,
+        ["RenameTrackDialog.xaml"] = null,
+    };
+
+    [Fact]
+    public void EveryBindingPathInEveryViewResolvesOnItsDataContext()
+    {
         var failures = new List<string>();
+        var unlisted = new List<string>();
+        int checkedBindings = 0;
+        int files = 0;
+
+        foreach (string file in ViewXamlFiles())
+        {
+            var doc = XDocument.Load(file);
+            string name = Path.GetFileName(file);
+            files++;
+
+            // A dictionary is merged into an element tree rather than being one, so it
+            // inherits nothing; a view inherits from whatever hosts it, which is the
+            // table above.
+            bool isDictionary = doc.Root?.Name.LocalName == "ResourceDictionary";
+            Type? fallback = null;
+            if (!isDictionary)
+            {
+                if (!ViewContexts.TryGetValue(name, out fallback)) unlisted.Add(name);
+            }
+
+            checkedBindings += WalkBindings(doc, fallback, name, failures);
+        }
+
+        Assert.Empty(unlisted);
+        Assert.True(files >= 10, $"only {files} XAML files were walked; the guard is not reading the views");
+        Assert.True(checkedBindings > 100,
+                    $"only {checkedBindings} bindings were walked; the guard is not reading the views");
+        Assert.Empty(failures);
+    }
+
+    /// <summary>
+    /// Walk one file's bindings. Returns how many were attributed to a data context, so
+    /// the caller can prove the guard actually read something rather than passing on an
+    /// empty tree.
+    /// </summary>
+    private static int WalkBindings(XDocument doc, Type? fallback, string file, List<string> failures)
+    {
         int checkedBindings = 0;
 
         foreach (var element in doc.Descendants())
         {
-            Type? context = DataContextType(element);
+            Type? context = DataContextType(element, fallback);
             if (context == null) continue;
 
             foreach (var attribute in element.Attributes())
@@ -39,20 +121,18 @@ public sealed class XamlBindingGuardTests
                 // A DataContext binding re-roots what is inside, so it is checked
                 // against the context it replaces, not the one it creates.
                 var target = attribute.Name.LocalName == "DataContext"
-                    ? OuterContextType(element)
+                    ? OuterContextType(element, fallback)
                     : context;
                 if (target == null) continue;
 
                 checkedBindings++;
                 if (!Resolves(target, path))
-                    failures.Add($"\"{{Binding {path}}}\" on {element.Name.LocalName}.{attribute.Name.LocalName} " +
+                    failures.Add($"{file}: \"{{Binding {path}}}\" on {element.Name.LocalName}.{attribute.Name.LocalName} " +
                                  $"does not resolve on {target.Name}");
             }
         }
 
-        Assert.True(checkedBindings > 100,
-                    $"only {checkedBindings} bindings were walked; the guard is not reading the window");
-        Assert.Empty(failures);
+        return checkedBindings;
     }
 
     /// <summary>
@@ -152,13 +232,32 @@ public sealed class XamlBindingGuardTests
         List<(string Path, string Value)> bindings, string name)
         => bindings.Where(b => b.Path == name || b.Path == "DataContext." + name);
 
-    private static string MainWindowXaml()
+    private static string MainWindowXaml() =>
+        Path.Combine(RepoRoot(), "src", "JockeyBox", "Views", "MainWindow.xaml");
+
+    /// <summary>The source tree the test is running against: the folder holding the solution.</summary>
+    private static string RepoRoot()
     {
         string? dir = AppContext.BaseDirectory;
         while (dir != null && !File.Exists(Path.Combine(dir, "JockeyBox.sln")))
             dir = Path.GetDirectoryName(dir);
         Assert.NotNull(dir);
-        return Path.Combine(dir!, "src", "JockeyBox", "Views", "MainWindow.xaml");
+        return dir!;
+    }
+
+    /// <summary>
+    /// Every view's XAML, not just the main window. The library pane used to live inside
+    /// MainWindow.xaml, so a guard that read only that file stopped watching 700 lines
+    /// the moment the pane became its own view - a coverage regression caused by the
+    /// extraction, and the reason this walk is part of the same commit.
+    /// </summary>
+    private static IEnumerable<string> ViewXamlFiles()
+    {
+        string views = Path.Combine(RepoRoot(), "src", "JockeyBox", "Views");
+        return Directory.EnumerateFiles(views, "*.xaml", SearchOption.AllDirectories)
+            .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .OrderBy(f => f, StringComparer.Ordinal);
     }
 
     /// <summary>
@@ -167,7 +266,7 @@ public sealed class XamlBindingGuardTests
     /// context we can name here). A ControlTemplate does not change the data
     /// context - it inherits it - so it is walked through, not returned.
     /// </summary>
-    private static Type? DataContextType(XElement element)
+    private static Type? DataContextType(XElement element, Type? fallback = null)
     {
         for (var e = element; e != null; e = e.Parent)
         {
@@ -177,7 +276,7 @@ public sealed class XamlBindingGuardTests
             {
                 var path = BindingPathOf(dataContext.Value);
                 if (path == null) return null;
-                var outer = e.Parent == null ? typeof(MainViewModel) : DataContextType(e.Parent);
+                var outer = DataContextType(e.Parent, fallback);
                 return outer == null ? null : ResolveType(outer, path);
             }
 
@@ -191,11 +290,11 @@ public sealed class XamlBindingGuardTests
                     return null;                 // implicit template: item type unknown
             }
         }
-        return typeof(MainViewModel);
+        return fallback;
     }
 
-    private static Type? OuterContextType(XElement element)
-        => element.Parent == null ? typeof(MainViewModel) : DataContextType(element.Parent);
+    private static Type? OuterContextType(XElement element, Type? fallback = null)
+        => DataContextType(element.Parent, fallback);
 
     private static Type? TypeNamed(string xType)
     {

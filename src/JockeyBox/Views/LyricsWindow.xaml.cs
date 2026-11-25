@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.Windows;
 using JockeyBox.Settings;
 using JockeyBox.ViewModels;
+using JockeyBox.Views.Shell;
 
 namespace JockeyBox.Views;
 
@@ -57,41 +58,14 @@ public partial class LyricsWindow : Window
     /// saved on a monitor that is no longer attached would otherwise open off
     /// screen. CenterOwner at design size is the fallback.
     /// </summary>
-    private void RestoreGeometry()
-    {
-        var left = _settings.LyricsWindowLeft;
-        var top = _settings.LyricsWindowTop;
-        var width = _settings.LyricsWindowWidth;
-        var height = _settings.LyricsWindowHeight;
-
-        if (width is > 200) Width = width.Value;
-        if (height is > 150) Height = height.Value;
-
-        if (left is null || top is null) return;
-
-        var candidate = new Rect(left.Value, top.Value,
-            double.IsNaN(Width) ? 780 : Width,
-            double.IsNaN(Height) ? 486 : Height);
-
-        if (!IsOnAnyScreen(candidate)) return;
-
-        WindowStartupLocation = WindowStartupLocation.Manual;
-        Left = candidate.Left;
-        Top = candidate.Top;
-    }
-
-    private static bool IsOnAnyScreen(Rect candidate)
-    {
-        var screens = SystemParameters.VirtualScreenLeft + SystemParameters.VirtualScreenWidth;
-        var screensTop = SystemParameters.VirtualScreenTop + SystemParameters.VirtualScreenHeight;
-
-        // A sliver of the title bar has to be reachable, not the whole rectangle:
-        // partially off screen is a legitimate placement.
-        return candidate.Left >= SystemParameters.VirtualScreenLeft - 8
-               && candidate.Top >= SystemParameters.VirtualScreenTop - 8
-               && candidate.Left + 80 <= screens
-               && candidate.Top + 32 <= screensTop;
-    }
+    private void RestoreGeometry() =>
+        WindowGeometry.Restore(this,
+            _settings.LyricsWindowLeft,
+            _settings.LyricsWindowTop,
+            _settings.LyricsWindowWidth,
+            _settings.LyricsWindowHeight,
+            fallbackWidth: 780,
+            fallbackHeight: 486);
 
     private void SaveState()
     {
@@ -103,7 +77,7 @@ public partial class LyricsWindow : Window
 
         // A headless capture parks the window far off screen; saving that
         // rectangle would make the next real launch open nowhere.
-        if (!IsOnAnyScreen(bounds)) return;
+        if (!WindowGeometry.IsOnAnyScreen(bounds)) return;
 
         _settings.LyricsWindowLeft = bounds.Left;
         _settings.LyricsWindowTop = bounds.Top;
