@@ -40,6 +40,13 @@ public sealed class XamlBindingGuardTests
         // The mixer's four pages bind the same view model; its console commands hang
         // off the panel itself so the popped-out host resolves them too.
         ["MixerPanel.xaml"] = typeof(MainViewModel),
+        // The four former flyout sections: routing devices, the selected strip's
+        // stages, the virtual ASIO lines and the device choices. All four bind the
+        // console's view model, which is what the dock hands them by inheritance.
+        ["RoutingPanel.xaml"] = typeof(MainViewModel),
+        ["SourcesPanel.xaml"] = typeof(MainViewModel),
+        ["VirtualLinesPanel.xaml"] = typeof(MainViewModel),
+        ["DevicesPanel.xaml"] = typeof(MainViewModel),
         ["SpotifyView.xaml"] = typeof(SpotifyViewModel),
         ["YouTubeView.xaml"] = typeof(YouTubeViewModel),
 
@@ -95,7 +102,13 @@ public sealed class XamlBindingGuardTests
         }
 
         Assert.Empty(unlisted);
-        Assert.True(files >= 10, $"only {files} XAML files were walked; the guard is not reading the views");
+        // 26 files: the 22 of phases 1-3 plus the four former flyout sections, which
+        // are independent roots now and would otherwise never be checked.
+        Assert.True(files >= 26, $"only {files} XAML files were walked; the guard is not reading the views");
+        // 403 is unchanged from phase 3 on purpose: phase 4 *moved* 74 bindings out of
+        // MainWindow.xaml (191 -> 117) into the four panels instead of adding any, so the
+        // total is conserved. The map and the file count are the contract here; the
+        // number only proves the walk still reads something.
         Assert.True(checkedBindings >= 403,
                     $"only {checkedBindings} bindings were walked; the guard is not reading the views");
         Assert.Empty(failures);
