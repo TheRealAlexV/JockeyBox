@@ -50,7 +50,41 @@ public sealed class VirtualLineApplyTests
         }
     }
 
-    private static bool WaitFor(Func<bool> condition, int milliseconds = 10_000)
+    /// <summary>
+    /// The other direction, which nothing covered: the untick has to close the ring
+    /// on the panel too. It rides the same route compare, so the empty-buses branch
+    /// of <c>ReplaceVirtualBusLocked</c> has to be reachable without a Settings save.
+    /// </summary>
+    [Fact]
+    public void Unticking_deck_A_on_the_panel_closes_the_ring_without_a_settings_save()
+    {
+        var vm = UiThread.Run(() => new MainViewModel());
+        try
+        {
+            var panel = UiThread.Run(() =>
+            {
+                ThemeResources.Ensure();
+                return new VirtualLinesPanel { DataContext = vm };
+            });
+
+            UiThread.Run(() => panel.VirtualLineDeckA.IsChecked = true);
+            Assert.True(WaitFor(() => vm.Transport.Engine.Route.VirtualBuses.Contains(BusKind.DeckA)),
+                        "the deck A line never opened, so the untick has nothing to close: " +
+                        $"route buses = [{string.Join(", ", vm.Transport.Engine.Route.VirtualBuses)}]");
+
+            UiThread.Run(() => panel.VirtualLineDeckA.IsChecked = false);
+
+            Assert.True(WaitFor(() => !vm.Transport.Engine.Route.VirtualBuses.Contains(BusKind.DeckA)),
+                        "the untick saved the flag and the ring stayed open: " +
+                        $"route buses = [{string.Join(", ", vm.Transport.Engine.Route.VirtualBuses)}]");
+        }
+        finally
+        {
+            UiThread.Run(() => vm.Dispose());
+        }
+    }
+
+    private static bool WaitFor(Func<bool> condition, int milliseconds = 2000)
     {
         var deadline = Environment.TickCount64 + milliseconds;
         while (Environment.TickCount64 < deadline)

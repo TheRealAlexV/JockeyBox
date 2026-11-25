@@ -707,8 +707,9 @@ public partial class MainViewModel
     /// </summary>
     public void ApplyAudioSettings()
     {
-        // Reads AppSettings from disk, so it must run after the dialog wrote it.
-        _transport.ApplyDeckSettingsChange(PlaybackDeck.A);
+        // The document is the one the dialog wrote through SettingsRef: the save is
+        // best-effort, so the file can lag what the window already adopted.
+        _transport.ApplyDeckSettingsChange(PlaybackDeck.A, _settings);
 
         // The monitor device may have been reopened by the dialog: put the switch and
         // the two sends back on whatever device the engine now has. The gains are the
@@ -720,12 +721,12 @@ public partial class MainViewModel
 
     /// <summary>
     /// Adopt a virtual-line change without the Settings dialog: which line the ring
-    /// carries is part of the six-bus route, so the route is rebuilt from the file
-    /// the panel just saved. Narrow on purpose - a checkbox write must not also
-    /// re-apply the monitor gains or re-count mic devices, which is what the dialog's
-    /// full <see cref="ApplyAudioSettings"/> path does.
+    /// carries is part of the six-bus route, so the route is rebuilt from the
+    /// in-memory document the panel's checkbox just changed. Narrow on purpose - a
+    /// checkbox write must not also re-apply the monitor gains or re-count mic
+    /// devices, which is what the dialog's full <see cref="ApplyAudioSettings"/> path does.
     /// </summary>
     public void ApplyVirtualLineSettings()
-        => _transport.ApplyDeckSettingsChange(PlaybackDeck.A);
+        => _transport.ApplyDeckSettingsChange(PlaybackDeck.A, _settings);
 
 }

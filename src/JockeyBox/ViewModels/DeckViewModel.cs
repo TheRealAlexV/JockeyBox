@@ -8,6 +8,7 @@ using JockeyBox.Audio.Graph;
 using JockeyBox.Library;
 using JockeyBox.Playback;
 using JockeyBox.Separation;
+using JockeyBox.Settings;
 
 namespace JockeyBox.ViewModels;
 
@@ -26,6 +27,9 @@ public partial class DeckViewModel : ObservableObject, IDisposable
     private readonly DeckChannel _channel;
     private readonly DualDeckTransport _transport;
     private readonly Action _persistSettings;
+    /// <summary>The window's live settings document, the same object <see cref="_persistSettings"/>
+    /// writes: the transport rebuilds its route from this, never from the file.</summary>
+    private readonly AppSettings _settings;
     private readonly Func<string?, double> _getDeviceDelay; // lookup per-device offset
     private readonly Action<string?, double> _setDeviceDelay;
     /// <summary>The route field this deck's output maps to (Main for A, Karaoke aid for B).</summary>
@@ -91,7 +95,7 @@ public partial class DeckViewModel : ObservableObject, IDisposable
 
     public DeckViewModel(string title, PlaybackDeck deckTarget, DeckChannel channel,
                           DualDeckTransport transport,
-                          Action persistSettings,
+                          Action persistSettings, AppSettings settings,
                           Func<string?, double> getDeviceDelay, Action<string?, double> setDeviceDelay,
                           Func<string?> getRouteDeviceId)
     {        Title = title;
@@ -100,6 +104,7 @@ public partial class DeckViewModel : ObservableObject, IDisposable
         _channel = channel;
         _transport = transport;
         _persistSettings = persistSettings;
+        _settings = settings;
         _getDeviceDelay = getDeviceDelay;
         _setDeviceDelay = setDeviceDelay;
         _getRouteDeviceId = getRouteDeviceId;
@@ -117,7 +122,7 @@ public partial class DeckViewModel : ObservableObject, IDisposable
         _resyncDebounce.Tick += (_, _) =>
         {
             _resyncDebounce.Stop();
-            _transport.ApplyDeckSettingsChange(DeckTarget);
+            _transport.ApplyDeckSettingsChange(DeckTarget, _settings);
             _persistSettings();
         };
 
@@ -697,10 +702,10 @@ public partial class DeckViewModel : ObservableObject, IDisposable
                 DelayMs = deviceDelay;
         }
 
-        // Persist first: the transport re-reads the settings file and only then
-        // builds the route, so the route field has to be on disk before it looks.
+        // Persist first: the transport builds the route from the same document this
+        // writes, so the route field is set before it looks.
         _persistSettings();
-        _transport.ApplyDeckSettingsChange(DeckTarget);
+        _transport.ApplyDeckSettingsChange(DeckTarget, _settings);
     }
 
     partial void OnDelayMsChanged(double value)

@@ -175,11 +175,11 @@ public partial class MainViewModel : ObservableObject, IDisposable
         _transport.StateChanged += (_, _) => OnTransportStateChanged();
         _transport.ActiveDeckChanged += (_, _) => SyncDeckActivation();
 
-        DeckA = new DeckViewModel("DECK A", PlaybackDeck.A, channelA, _transport, PersistDeckSettings,
+        DeckA = new DeckViewModel("DECK A", PlaybackDeck.A, channelA, _transport, PersistDeckSettings, SettingsRef,
             id => id != null && _settings.DeviceDelays.TryGetValue(id, out var d) ? d : 0,
             (id, delay) => { if (id != null) _settings.DeviceDelays[id] = delay; },
             () => _settings.MainOutputDeviceId);
-        DeckB = new DeckViewModel("DECK B", PlaybackDeck.B, channelB, _transport, PersistDeckSettings,
+        DeckB = new DeckViewModel("DECK B", PlaybackDeck.B, channelB, _transport, PersistDeckSettings, SettingsRef,
             id => id != null && _settings.DeviceDelays.TryGetValue(id, out var d) ? d : 0,
             (id, delay) => { if (id != null) _settings.DeviceDelays[id] = delay; },
             () => _settings.KaraokeAidOutputDeviceId);

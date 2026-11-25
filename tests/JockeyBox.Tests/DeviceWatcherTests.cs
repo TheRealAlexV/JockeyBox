@@ -269,7 +269,7 @@ public sealed class DeviceWatcherTests
 
             string? route = "dev-live";
             using var deck = new DeckViewModel("DECK A", PlaybackDeck.A, transport.DeckA, transport,
-                () => { }, _ => 0, (_, _) => { }, () => route);
+                () => { }, AppSettings.Load(), _ => 0, (_, _) => { }, () => route);
 
             // It is routed and present.
             deck.RefreshDevices(new[] { new AudioDeviceInfo("dev-live", "Interface") });

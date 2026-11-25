@@ -108,11 +108,20 @@ public sealed class VirtualBusSinkTests
 
         var block = BlockFor(0);
 
-        // Warm up: the first write touches the mapped pages.
-        for (int i = 0; i < 8; i++) sink.Write(block, 0, Block);
+        // The whole render loop twice, counted only on the second run: the same shape as
+        // AllocationAssert.Measure in JockeyBox.Dsp.Tests.
+        void Render() { for (int i = 0; i < 1_000; i++) sink.Write(block, 0, Block); }
+
+        // Warm up: the first pass touches the mapped pages and pays tiered-JIT compilation.
+        Render();
+
+        // Tier-1 compilation lands on a background thread some time after the call threshold,
+        // so a warm pass can end while the promotion is still in flight and the counted pass
+        // can then be charged a one-off install cost. Give it room to finish first.
+        Thread.Sleep(100);
 
         long before = GC.GetAllocatedBytesForCurrentThread();
-        for (int i = 0; i < 1_000; i++) sink.Write(block, 0, Block);
+        Render();
         long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
         Assert.Equal(0, allocated);

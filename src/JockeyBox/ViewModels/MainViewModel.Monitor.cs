@@ -114,9 +114,9 @@ public partial class MainViewModel
         _settings.MonitorOutputDeviceId = id;
         _settings.Save();
 
-        // Same single path as the deck combos: the route field is on disk before
-        // the transport re-reads it, and only a changed route is reopened.
-        _transport.ApplyDeckSettingsChange(PlaybackDeck.A);
+        // Same single path as the deck combos: the transport rebuilds from the
+        // document the write above just changed, and only a changed route reopens.
+        _transport.ApplyDeckSettingsChange(PlaybackDeck.A, _settings);
     }
 
     private void RebuildMonitorDeviceChoices()

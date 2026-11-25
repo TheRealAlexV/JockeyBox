@@ -717,23 +717,28 @@ public sealed class DualDeckTransport : IDisposable
     // ---------------------------------------------------------------- settings
 
     /// <summary>
+    /// Startup and any path with no live document: read the file, then adopt it.
+    /// </summary>
+    public void ApplyDeckSettingsChange(PlaybackDeck deck)
+        => ApplyDeckSettingsChange(deck, AppSettings.Load());
+
+    /// <summary>
     /// Adopt a settings change made for one deck (device, delay, volume, karaoke
     /// split, tempo). Gains are live engine parameters, so a playing deck is
     /// never re-primed; the route is only reopened when the routing values
     /// actually differ from what the engine is running.
+    ///
+    /// <para>From a document the caller already holds, and it must be the live one:
+    /// the window edits <see cref="MainViewModel.SettingsRef"/> in memory and saves
+    /// best-effort, so re-reading the file here can rebuild the previous route and
+    /// silently skip the reopen.</para>
+    ///
+    /// <para>The settings are read synchronously, before the first await of
+    /// <see cref="ApplyRouteAsync"/>, so nothing pool-side ever touches the object.</para>
     /// </summary>
-    public void ApplyDeckSettingsChange(PlaybackDeck deck)
+    public void ApplyDeckSettingsChange(PlaybackDeck deck, AppSettings settings)
     {
         Channel(deck).ApplySettings();
-
-        AppSettings settings;
-        try { settings = AppSettings.Load(); }
-        catch (Exception ex)
-        {
-            Log.Warn($"audio settings could not be read: {ex.Message}");
-            RaiseStateChanged();
-            return;
-        }
 
         bool changed = AdoptMasterVolume(settings.MasterVolume);
         changed |= AdoptOutputDelay(settings.OutputDelayMs);
