@@ -718,4 +718,14 @@ public partial class MainViewModel
         RefreshMicDeviceCount();
     }
 
+    /// <summary>
+    /// Adopt a virtual-line change without the Settings dialog: which line the ring
+    /// carries is part of the six-bus route, so the route is rebuilt from the file
+    /// the panel just saved. Narrow on purpose - a checkbox write must not also
+    /// re-apply the monitor gains or re-count mic devices, which is what the dialog's
+    /// full <see cref="ApplyAudioSettings"/> path does.
+    /// </summary>
+    public void ApplyVirtualLineSettings()
+        => _transport.ApplyDeckSettingsChange(PlaybackDeck.A);
+
 }

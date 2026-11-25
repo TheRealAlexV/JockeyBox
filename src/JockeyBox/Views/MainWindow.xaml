@@ -546,99 +546,6 @@
         </DataTemplate>
 
 
-        <!-- ======== Vertical splitter: browser | mixer dock, same bottom band ========
-             8px hit area, one hairline, and a real grab handle: a 6x44 px pill with
-             three dots at mid-height. The 2x34 px nib this replaced read as a seam in
-             the card, not as something to drag. Hover turns the dots and the pill's
-             edge accent, so the affordance answers the pointer. -->
-        <Style x:Key="ColumnSplitter" TargetType="GridSplitter">
-            <Setter Property="Width" Value="8"/>
-            <Setter Property="VerticalAlignment" Value="Stretch"/>
-            <Setter Property="HorizontalAlignment" Value="Center"/>
-            <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="Cursor" Value="SizeWE"/>
-            <Setter Property="ResizeDirection" Value="Columns"/>
-            <Setter Property="ResizeBehavior" Value="PreviousAndNext"/>
-            <Setter Property="Focusable" Value="False"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="GridSplitter">
-                        <Grid Background="Transparent">
-                            <Border Width="1" HorizontalAlignment="Center"
-                                    Background="{StaticResource BorderBrush}"/>
-                            <Border x:Name="grip" Width="6" Height="44" CornerRadius="3"
-                                    HorizontalAlignment="Center" VerticalAlignment="Center"
-                                    Background="{StaticResource BorderBrush}"
-                                    BorderBrush="{StaticResource BorderBrush}"
-                                    BorderThickness="1">
-                                <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
-                                    <Ellipse x:Name="dot1" Width="2" Height="2" Margin="0,0,0,2"
-                                             Fill="{StaticResource TextDimBrush}"/>
-                                    <Ellipse x:Name="dot2" Width="2" Height="2" Margin="0,0,0,2"
-                                             Fill="{StaticResource TextDimBrush}"/>
-                                    <Ellipse x:Name="dot3" Width="2" Height="2"
-                                             Fill="{StaticResource TextDimBrush}"/>
-                                </StackPanel>
-                            </Border>
-                        </Grid>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="grip" Property="Background"
-                                        Value="{StaticResource TextDimBrush}"/>
-                                <Setter TargetName="grip" Property="BorderBrush"
-                                        Value="{StaticResource TextDimBrush}"/>
-                                <Setter TargetName="dot1" Property="Fill"
-                                        Value="{StaticResource PanelBrush}"/>
-                                <Setter TargetName="dot2" Property="Fill"
-                                        Value="{StaticResource PanelBrush}"/>
-                                <Setter TargetName="dot3" Property="Fill"
-                                        Value="{StaticResource PanelBrush}"/>
-                            </Trigger>
-                            <Trigger Property="IsMouseCaptured" Value="True">
-                                <Setter TargetName="grip" Property="Background"
-                                        Value="{StaticResource AccentABrush}"/>
-                                <Setter TargetName="grip" Property="BorderBrush"
-                                        Value="{StaticResource AccentABrush}"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
-        <!-- ======== Horizontal splitter between the deck block and the browser ========
-             8px hit area, one hairline, a short centred grip. Same family as the
-             vertical splitters inside the source tab panes. -->
-        <Style x:Key="RowSplitter" TargetType="GridSplitter">
-            <Setter Property="Height" Value="8"/>
-            <Setter Property="HorizontalAlignment" Value="Stretch"/>
-            <Setter Property="VerticalAlignment" Value="Center"/>
-            <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="Cursor" Value="SizeNS"/>
-            <Setter Property="ResizeDirection" Value="Rows"/>
-            <Setter Property="ResizeBehavior" Value="PreviousAndNext"/>
-            <Setter Property="Focusable" Value="False"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="GridSplitter">
-                        <Grid Background="Transparent">
-                            <Border Height="1" VerticalAlignment="Center"
-                                    Background="{StaticResource BorderBrush}"/>
-                            <Border x:Name="grip" Width="34" Height="2" CornerRadius="1"
-                                    HorizontalAlignment="Center" VerticalAlignment="Center"
-                                    Background="#3A4150"/>
-                        </Grid>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="grip" Property="Background"
-                                        Value="{StaticResource AccentABrush}"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
         <!-- ======== Soundboard expander ========
              Header is a toggle on the left and its actions on the right, so
              STOP ALL never doubles as "collapse". -->
@@ -938,24 +845,17 @@
                  Rows are the two things that never leave the surface (decks and their
                  transport, folders), then the document switcher, then the dock. -->
             <Grid Grid.Column="2" x:Name="CentreHost" Margin="6,0,6,0">
-                <!-- The bottom band is ONE row shared by the documents panel and the
-                     mixer dock, side by side. Stacked, the dock's 190 px came out of the
-                     same band the documents had and left them a 151 px strip at 1400x900:
-                     short enough that neither the queue nor a browser pane could show a
-                     readable number of rows. Two columns in one band gives each panel the
-                     band's full height, and the splitter lets the operator trade width. -->
-                <!-- The bottom band belongs to the documents panel now: the mixer moved
-                     to the dock column, so there is no width to trade and no splitter
-                     between them. The CenterHost grid keeps its shape because every row
-                     above still spans it; phase 5 removes the leftover 480 px card. -->
+                <!-- Two rows: the deck block (cards, crossfader, transport) and the
+                     waveform strip under them. The documents band that used to sit
+                     below both is gone: every document is a dock panel now (LIB,
+                     LYRIC, MIX, ROUTE, SRC, VIRT, DEV), so nothing renders under the
+                     waveforms and no splitter has two sides to trade. -->
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>                 <!-- decks, transport, crossfader -->
                     <RowDefinition x:Name="WaveformRow" Height="*" MinHeight="84"/>     <!-- waveforms -->
-                    <RowDefinition Height="6"/>                                        <!-- splitter -->
-                    <RowDefinition x:Name="DocumentsRow" Height="*" MinHeight="132"/>   <!-- documents -->
                 </Grid.RowDefinitions>
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>                  <!-- documents -->
+                    <ColumnDefinition Width="*"/>                  <!-- the centre column -->
                 </Grid.ColumnDefinitions>
 
         <!-- ================= Deck block: decks / waveforms / crossfader / transport =================
@@ -1526,48 +1426,6 @@
                 </Grid>
             </Grid>
         </Border>
-
-        <!-- Splitter: balances the deck block against the browser -->
-        <!-- Height matches the 6 px row it lives in; the style's 8 would overflow
-             the row by a pixel at each end and sit on the card edges. -->
-        <GridSplitter Grid.Row="2" Height="6" Style="{StaticResource RowSplitter}"/>
-
-        <!-- ================= Browser + Lyrics ================= -->
-        <!-- The browser row needs a definite height, and 480 is only the seed for the
-             first pass. The shell measures its content at infinite height, and under
-             that constraint a star row degrades to a content-sized one, which leaves the
-             tab's track list with no viewport to virtualize against (it realizes a
-             container for every row - 4 150 of them). The window replaces this with its
-             viewport share (OnShellLayoutChanged); the seed is what keeps the very first
-             pass, before a viewport exists, finite. -->
-        <!-- ================= Centre documents =================
-             What the operator switches between mid-set. The library tree and the queue
-             are not documents any more: they left for the left pane, so a document gets
-             the whole centre column instead of a 3:2 split. Lyrics is a document for the
-             same reason Spotify is - it is a view, and it is read, not configured. -->
-        <Grid Grid.Row="3" Grid.Column="0" x:Name="BrowserHost" MinHeight="150" Height="480">
-            <Border Style="{StaticResource Card}" Padding="8">
-                <TabControl x:Name="BrowserTabs" Style="{StaticResource BrowserTabControl}">
-                <!-- Spotify, YouTube and Lyrics left this strip in phase 2: the first
-                     two are LIB tabs now and lyrics is the LYRIC dock panel. The strip
-                     itself stays (empty) until phase 3 puts the mixer here, because
-                     the centre column's geometry is measured off this element. -->
-                </TabControl>
-            </Border>
-        </Grid>
-
-
-            <!-- ================= Retired flyout =================
-                 ROUTE, SRC, VIRT and DEV were the four contents of this region; each
-                 is a dock panel now (Views/RoutingPanel.xaml and friends), so nothing
-                 renders here and nothing but this element itself is left. Phase 5
-                 removes it with row 3, DocumentsRow and BrowserHost, which are
-                 rewritten together. Kept until then because the row is measured and
-                 a bare row deletion would move the centre column in this pass. -->
-            <Border Grid.Row="3" x:Name="FlyoutPanel" HorizontalAlignment="Right"
-                    VerticalAlignment="Stretch" Panel.ZIndex="20" Margin="0" Width="400"
-                    Visibility="Collapsed"/>
-
             </Grid>
 
         </Grid>

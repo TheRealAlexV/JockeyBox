@@ -78,6 +78,10 @@ public partial class VirtualLinesPanel
             settings.VirtualAsioSoundboard = VirtualLineSoundboard.IsChecked == true;
             settings.VirtualAsioMonitor = VirtualLineMonitor.IsChecked == true;
             settings.Save();
+            // The ring's bus set is part of the six-bus route: saving the flag alone
+            // leaves the audio closed until an unrelated Settings save rebuilds it
+            // (a124). Adopt the file the way the dialog does.
+            vm.ApplyVirtualLineSettings();
         }
         finally { _loading = false; }
     }

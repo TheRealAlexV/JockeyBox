@@ -1176,13 +1176,11 @@ internal static class UiShot
 
         Console.Out.WriteLine(
             $"uishot: canvas {width}x{height}, arranged {arrangedWidth}x{arrangedHeight} -> {path}");
-        // Row heights: the shell sizes its elastic rows by hand, so a capture that
+        // Row heights: the shell sizes its elastic row by hand, so a capture that
         // clips has to be able to say which row lost the pixels.
         if (window is MainWindow shellWindow)
             Console.Out.WriteLine(
-                $"uishot: rows documents={shellWindow.DocumentsRow.ActualHeight:0.#}" +
-                $" ({shellWindow.DocumentsRow.Height.Value:0.#}{shellWindow.DocumentsRow.Height.GridUnitType})" +
-                $" waveform={shellWindow.WaveformRow.ActualHeight:0.#}" +
+                $"uishot: rows waveform={shellWindow.WaveformRow.ActualHeight:0.#}" +
                 $" ({shellWindow.WaveformRow.Height.Value:0.#}{shellWindow.WaveformRow.Height.GridUnitType})" +
                 $" mix={shellWindow.Mixer?.ActualHeight ?? 0:0.#}" +
                 $" body={shellWindow.Mixer?.DockBody.ActualHeight ?? 0:0.#}" +

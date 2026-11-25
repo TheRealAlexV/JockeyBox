@@ -133,79 +133,45 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Give the browser row the height the shell can actually afford, so the track
-    /// table below it gets a finite viewport to virtualize against.
+    /// Give the waveform strip the height the shell can actually afford.
     ///
     /// <para><b>Why.</b> <c>ShellScroll</c> measures its content at infinite height,
     /// and under that constraint the star rows degrade to content-sized ones, so the
-    /// browser row handed its track table no viewport at all. A virtualizing panel with
-    /// no viewport realizes a container for every item: 4 150 rows of ~15 elements and
-    /// ~10 bindings each, measured and arranged in one layout pass. Measured on this
-    /// branch at 1518x900 before the change: 4 150 containers, <c>ShellScroll</c> extent
-    /// 117 181 px against an 876 px viewport.</para>
-    ///
-    /// <para>A definite <see cref="FrameworkElement.Height"/> rather than a
-    /// <c>MaxHeight</c>: under an infinite measure a max still lets the row take its cap
-    /// as a <i>desired</i> height - 778 px of shell inside a 900 px window - and the
-    /// card's own Auto-plus-star pair went on handing the list a 0 px viewport. This
-    /// value is exactly what the star split would produce on a normal window, so the
-    /// vertical layout matches the shipped one, and it is definite at every depth below
-    /// the row, which is what the card's inner Grid needs to pass a viewport down.</para>
+    /// waveform row took its 84 px floor and the strip lost the rest of the viewport.
+    /// The waveform canvases draw from their own height, so that reads as a shrunken
+    /// deck, not as a scroll.</para>
     ///
     /// <para>It is derived from the viewport and the fixed rows only, never from the
-    /// rows it sizes, so it cannot chase its own layout; it is written only when it
+    /// row it sizes, so it cannot chase its own layout; it is written only when it
     /// changes, so it settles after the first pass that has a viewport.</para>
     /// </summary>
     private void OnShellLayoutChanged(object? sender, EventArgs e)
     {
-        // Two levels now matter: the shell's rows (header, body) and the centre
-        // column's rows (decks, waveforms, splitter, documents). The elastic pair is
-        // the waveform and the documents row; everything else is a height the
-        // documents cannot have, so the band is the viewport minus them. The mixer
-        // dock is not in this sum any more: it shares the documents row as a column,
-        // so it costs the band width, not height.
+        // Two levels matter: the shell's rows (header, body) and the centre column's
+        // (the deck block, then the waveforms). The deck block is Auto and is a height
+        // the waveform cannot have, so the band is the viewport minus both it and the
+        // header. The dock is a column of the body, so it costs width, not height.
         var shellRows = ShellGrid.RowDefinitions;
         var centreRows = CentreHost.RowDefinitions;
-        // PHASE 5 LANDMINE: this guard is a count, and phase 5 deletes centre row 3
-        // (the documents/dock band moves). Rewritten in the same commit as that delete,
-        // or every reader below stops running: the library pane silently keeps no
-        // height and the shell scrolls at infinite height. Fix = name the rows you
-        // actually need (DocumentsRow / WaveformRow) rather than counting them.
-        if (shellRows.Count < 2 || centreRows.Count < 4) return;
+        if (shellRows.Count < 2 || centreRows.Count < 2) return;
         PanelHost.FitToWindow();
 
-        double fixedHeight = shellRows[0].ActualHeight
-                             + centreRows[0].ActualHeight
-                             + centreRows[2].ActualHeight;
-        double band = ShellScroll.ViewportHeight - fixedHeight - 2;
+        double band = ShellScroll.ViewportHeight
+                      - shellRows[0].ActualHeight
+                      - centreRows[0].ActualHeight
+                      - 2;
         if (band <= 0) return;
 
-        // Both elastic rows are sized, not just the documents: the shell's root
-        // ScrollViewer measures its content at infinite height, so a star row never
-        // shrinks to the window and the dock beside it fell off the bottom at 900.
-        // Their sum is the band, with the two floors honoured, so at any height that
-        // can hold the floors the dock is on screen and nothing is cut off. Below
-        // that the shell scrolls, which is what the root ScrollViewer is for.
-        double waveFloor = centreRows[1].MinHeight;
-        double docFloor = centreRows[3].MinHeight;
-        double documents = Math.Min(Math.Max(band * 0.75, docFloor), Math.Max(docFloor, band - waveFloor));
-        double waveform = Math.Max(waveFloor, band - documents);
-
-        var documentRow = new GridLength(documents);
-        var waveformRow = new GridLength(waveform);
-        var hostHeight = documents;
-        if (DocumentsRow.Height == documentRow && WaveformRow.Height == waveformRow
-            && Math.Abs(BrowserHost.Height - hostHeight) < 0.5) return;
-
-        DocumentsRow.Height = documentRow;
+        // The floor is honoured rather than overridden: below it there is nothing
+        // left to give, so the shell scrolls, which is what the root ScrollViewer is
+        // for. The dock has its own height for the other reason a star element fails
+        // here: inside the root ScrollViewer a star column measures at the tree's
+        // full height and the shell would scroll by a thousand pixels with 5425
+        // tracks in it. The host ignores a height it already has.
+        var waveformRow = new GridLength(Math.Max(WaveformRow.MinHeight, band));
+        if (WaveformRow.Height == waveformRow) return;
         WaveformRow.Height = waveformRow;
-        BrowserHost.Height = hostHeight;
 
-        // The docked panel sits in a column, not a row, so a star column has the same
-        // problem the rows had: inside the root ScrollViewer it measures at the tree's
-        // full height and the shell scrolls by a thousand pixels with 5425 tracks in
-        // it. It gets the body height instead, and scrolls inside itself. The host
-        // ignores a height it already has, so this stays a write-on-change.
         double bodyHeight = Math.Max(0, ShellScroll.ViewportHeight
                                         - shellRows[0].ActualHeight
                                         - ShellScroll.Padding.Top - ShellScroll.Padding.Bottom);
