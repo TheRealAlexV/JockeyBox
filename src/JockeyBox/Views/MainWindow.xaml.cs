@@ -24,48 +24,10 @@ public partial class MainWindow : Window
 {
     private readonly MainViewModel _vm;
 
-    /// <summary>
-    /// Console actions live on the window because the rows they act on are on
-    /// <see cref="ActivityFeed.Shared"/>, not on the view model. Initialised
-    /// before <c>InitializeComponent</c> so the XAML bindings find them.
-    /// </summary>
-    public IRelayCommand<string> CancelActivityCommand { get; } =
-        new RelayCommand<string>(key =>
-        {
-            if (!string.IsNullOrEmpty(key)) ActivityFeed.Shared.Cancel(key);
-        });
-
-    public IRelayCommand ClearFinishedActivityCommand { get; } =
-        new RelayCommand(() => ActivityFeed.Shared.ClearFinished(),
-                         () => ActivityFeed.Shared.Rows.Any(r => r.IsFinished));
-
-    // ---- console detail pane ------------------------------------------------
-    // Clipboard is a view concern, so these live in code-behind rather than on
-    // ActivityFeed: the feed formats the text, the view moves it.
-
-    private void CopyJobDetail_Click(object sender, RoutedEventArgs e)
-        => CopyToClipboard(ActivityFeed.DescribeRow(ActivityFeed.Shared.SelectedRow), "job detail");
-
-    private void CloseJobDetail_Click(object sender, RoutedEventArgs e)
-        => ActivityFeed.Shared.SelectedRow = null;
-
-    private void CopyLogLine_Click(object sender, RoutedEventArgs e)
-        => CopyToClipboard(ActivityFeed.Shared.SelectedLogLine, "log line");
-
-    private static void CopyToClipboard(string? text, string what)
-    {
-        if (string.IsNullOrEmpty(text)) return;
-        try
-        {
-            Clipboard.SetText(text);
-        }
-        catch (Exception ex)
-        {
-            // The clipboard is a shared OS resource; another app holding it is
-            // not a reason to take the app down.
-            Log.Warn($"Copy {what} failed: {ex.Message}");
-        }
-    }
+    // The console's own actions ("Clear finished", per-job Cancel, the clipboard
+    // buttons) moved with the console into Views/MixerPanel.xaml.cs: they act on
+    // ActivityFeed.Shared, and a popped-out panel is a different window, so a
+    // command that only existed here left them dead outside the dock.
 
     public MainWindow()
     {
@@ -149,11 +111,8 @@ public partial class MainWindow : Window
         _vm.Downloads.StartPolling();
         Closed += (_, _) => _vm.Downloads.StopPolling();
 
-        // "Clear finished" is only offered when a finished row exists. Rows are
-        // created by producers, so the window watches the feed rather than
-        // polling it.
-        ActivityFeed.Shared.Rows.CollectionChanged += OnActivityRowsChanged;
-        HookActivityRows();
+        // "Clear finished" now watches the feed from the console itself: the panel
+        // that offers the button owns the hook (see Views/MixerPanel.xaml.cs).
 
         // The catalogue pane's TreeView selection is wired inside LibraryPanel now: the
         // block that held the tree moved out of this window, and a panel owns its own
@@ -336,38 +295,9 @@ public partial class MainWindow : Window
     /// <summary>
     /// The toolbar's Downloads button (raised by MainViewModel.ShowDownloads)
     /// opens the console on its Downloads tab. Nothing here builds a window any
-    /// more: the queue is docked in the main window.
+    /// more: the queue is a page of the mixer panel.
     /// </summary>
-    private void RevealConsoleDownloads()
-    {
-        SetDockOpen(true);
-        DockTabJobs.IsChecked = true;
-        DockCollapseToggle.Focus();
-    }
-
-    /// <summary>
-    /// Keep "Clear finished" in step with the feed: re-hook every row (finished
-    /// flags change in place) and re-query the command.
-    /// </summary>
-    private void HookActivityRows()
-    {
-        foreach (var row in ActivityFeed.Shared.Rows)
-        {
-            row.PropertyChanged -= OnActivityRowChanged;
-            row.PropertyChanged += OnActivityRowChanged;
-        }
-
-        ClearFinishedActivityCommand.NotifyCanExecuteChanged();
-    }
-
-    private void OnActivityRowsChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
-        => HookActivityRows();
-
-    private void OnActivityRowChanged(object? sender, PropertyChangedEventArgs e)
-    {
-        if (e.PropertyName == nameof(ActivityRow.IsFinished))
-            ClearFinishedActivityCommand.NotifyCanExecuteChanged();
-    }
+    private void RevealConsoleDownloads() => SelectDockPage("jobs");
 
     private void OpenSettings()
     {
@@ -835,7 +765,12 @@ public partial class MainWindow : Window
     {
         LibraryToggle.IsChecked = PanelHost.Current == ShellPanelId.Library;
         LyricsToggle.IsChecked = PanelHost.Current == ShellPanelId.Lyrics;
+        DockToggle.IsChecked = PanelHost.Current == ShellPanelId.Mix;
     }
+
+    /// <summary>The mixer panel, or null before the dock has built it. The capture
+    /// harness reaches the dock pages through <see cref="SelectDockPage"/>.</summary>
+    public MixerPanel? Mixer => PanelHost.ContentOf<MixerPanel>(ShellPanelId.Mix);
 
     /// <summary>The library pane's control, or null before it has ever been shown.
     /// The capture harness selects the LIB tabs (SPOTIFY, YOUTUBE) through it.</summary>
@@ -891,17 +826,15 @@ public partial class MainWindow : Window
         _panelWindows.Clear();
     }
 
-    /// <summary>Open the dock on a named page: strips, soundboard, cues or jobs.</summary>
+    /// <summary>
+    /// Open the mixer panel on a named page: strips, soundboard, cues or jobs.
+    /// The rail's MIX button is what opens the surface; this only chooses the page
+    /// inside it, which is why it forwards instead of owning the radios.
+    /// </summary>
     public void SelectDockPage(string page)
     {
-        SetDockOpen(true);
-        (page switch
-        {
-            "soundboard" => DockTabSoundboard,
-            "cues" => DockTabCues,
-            "jobs" => DockTabJobs,
-            _ => DockTabMixer,
-        }).IsChecked = true;
+        SetPanelOpen(ShellPanelId.Mix, true);
+        Mixer?.SelectPage(page);
     }
 
     /// <summary>Open the flyout on a named section: routing, sources, virtual or devices.</summary>
@@ -916,25 +849,11 @@ public partial class MainWindow : Window
         }
     }
 
-    private void OnDockToggleClick(object sender, RoutedEventArgs e) => SetDockOpen(DockToggle.IsChecked == true);
-
-    private void OnDockCollapseClick(object sender, RoutedEventArgs e) => SetDockOpen(DockCollapseToggle.IsChecked == true);
-
-    /// <summary>Open or close the mixer dock.</summary>
-    public void SetDockOpen(bool open)
-    {
-        DockCollapseToggle.IsChecked = open;
-        DockToggle.IsChecked = open;
-        DockBody.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
-        // The dock is a column beside the documents now, not a row under them: folded
-        // away it must give its width back, or the closed state would leave a blank
-        // strip where the dock used to be.
-        DockColumn.Width = open ? new GridLength(DockWidth, GridUnitType.Pixel) : new GridLength(0);
-        DockSplitter.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
-    }
-
-    /// <summary>Width the mixer dock opens at, before the splitter moves it.</summary>
-    private const double DockWidth = 420;
+    // The rail's MIX button is the surface switch: press once to open the panel,
+    // press again to close it. The panel used to carry its own collapse chevron as
+    // well, which meant two controls for one state - it is gone, and this is the
+    // only way MIX opens and closes.
+    private void OnDockToggleClick(object sender, RoutedEventArgs e) => SetPanelOpen(ShellPanelId.Mix, DockToggle.IsChecked == true);
 
     private void OnFlyoutRoutingClick(object sender, RoutedEventArgs e) => ShowFlyout(RailRoutingToggle, "ROUTING", FlyoutRoutingPanel);
 

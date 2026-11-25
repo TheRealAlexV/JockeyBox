@@ -277,6 +277,71 @@ public class ShellDockPanelHostTests
         }
     }
 
+    /// <summary>
+    /// The splitter's gesture itself. Until now the width tests assigned
+    /// <c>Width</c> and raised <c>DragCompleted</c>, which is the persistence half of a
+    /// drag and none of the movement: a Thumb whose <c>DragDelta</c> handler was never
+    /// wired would have passed all of them. This raises the drag and reads the width.
+    /// </summary>
+    [Fact]
+    public void DraggingTheSplitter_MovesTheWidthByTheDrag_ClampsAtBothEnds_AndPersists()
+    {
+        string home = TempHome();
+        string? previous = Environment.GetEnvironmentVariable(AppPaths.HomeVariable);
+        try
+        {
+            Environment.SetEnvironmentVariable(AppPaths.HomeVariable, home);
+
+            OnUi(() =>
+            {
+                var fixture = new Fixture();
+                var host = fixture.NewHost(new AppSettings(), availableWidth: 1400);
+                host.Show(ShellPanelId.Library);
+
+                // The gesture has to be a Thumb event to be the one the dock listens
+                // for: a GridSplitter would resize columns instead and this test would
+                // be raising an event nothing handles.
+                Assert.IsType<Thumb>(host.Splitter);
+                Assert.Equal(LibraryWidth, host.Width);
+
+                // Dragging right narrows the dock, because the splitter sits on the
+                // inner edge: 545 - 40 = 505, inside [300, 545].
+                host.Splitter.RaiseEvent(Drag(40));
+                Assert.Equal(505, host.Width);
+
+                // A drag past the ceiling is clamped to it (1400 - 855 = 545), not
+                // stored: the centre keeps its floor.
+                host.Splitter.RaiseEvent(Drag(-500));
+                Assert.Equal(LibraryWidth, host.Width);
+
+                // And past the floor likewise (300).
+                host.Splitter.RaiseEvent(Drag(2000));
+                Assert.Equal(LibraryFloor, host.Width);
+
+                // A real drag ends on the floor here; the width it reached is the one
+                // the next launch opens at.
+                host.Splitter.RaiseEvent(Drag(-20));
+                Assert.Equal(320, host.Width);
+                host.Splitter.RaiseEvent(
+                    new DragCompletedEventArgs(0, 0, false) { RoutedEvent = Thumb.DragCompletedEvent });
+                Assert.Equal(320, AppSettings.TryLoad()!.Panel(ShellPanelId.Library).Width);
+
+                var reopened = fixture.NewHost(AppSettings.TryLoad()!, availableWidth: 1400);
+                reopened.Show(ShellPanelId.Library);
+                Assert.Equal(320, reopened.Width);
+            });
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable(AppPaths.HomeVariable, previous);
+            try { Directory.Delete(home, recursive: true); } catch { /* best effort */ }
+        }
+    }
+
+    /// <summary>One mouse move during a drag, as the Thumb would raise it.</summary>
+    private static DragDeltaEventArgs Drag(double horizontalChange) =>
+        new(horizontalChange, 0) { RoutedEvent = Thumb.DragDeltaEvent };
+
     [Fact]
     public void SettingsFileWrittenBeforePanelLayoutExisted_LoadsWithEveryKeyAndAnEmptyPanelLayout()
     {

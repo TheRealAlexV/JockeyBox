@@ -37,6 +37,9 @@ public sealed class XamlBindingGuardTests
         ["MainWindow.xaml"] = typeof(MainViewModel),
         ["LibraryPanel.xaml"] = typeof(MainViewModel),
         ["LyricsPanel.xaml"] = typeof(MainViewModel),
+        // The mixer's four pages bind the same view model; its console commands hang
+        // off the panel itself so the popped-out host resolves them too.
+        ["MixerPanel.xaml"] = typeof(MainViewModel),
         ["SpotifyView.xaml"] = typeof(SpotifyViewModel),
         ["YouTubeView.xaml"] = typeof(YouTubeViewModel),
 

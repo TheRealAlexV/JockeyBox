@@ -169,12 +169,12 @@ internal static class UiShot
         window.ShowInTaskbar = false;
         window.ShowActivated = false;
 
-        // Opt-in: the mixer dock starts on its strips page and the jobs rows are only
+        // Opt-in: the mixer panel starts on its strips page and the jobs rows are only
         // laid out when their page is showing, so a capture (or the text dump) cannot
         // show them. Selecting the jobs page before the pump makes those rows part of
         // the layout the settle then covers.
-        if (Harness.Flag(args, "--uishot-console") != null && window is MainWindow mainWindow)
-            mainWindow.DockTabJobs.IsChecked = true;
+        if (Harness.Flag(args, "--uishot-console") != null && window is MainWindow consoleWindow)
+            consoleWindow.SelectDockPage("jobs");
 
         // Shell panes: the rail is a pointer surface, so a capture that has to show a
         // pane asks for it by name instead. Each flag is the same call the rail makes.
@@ -1168,8 +1168,8 @@ internal static class UiShot
                 $" ({shellWindow.DocumentsRow.Height.Value:0.#}{shellWindow.DocumentsRow.Height.GridUnitType})" +
                 $" waveform={shellWindow.WaveformRow.ActualHeight:0.#}" +
                 $" ({shellWindow.WaveformRow.Height.Value:0.#}{shellWindow.WaveformRow.Height.GridUnitType})" +
-                $" dock={shellWindow.MixerDock.ActualHeight:0.#}" +
-                $" body={shellWindow.DockBody.ActualHeight:0.#}" +
+                $" mix={shellWindow.Mixer?.ActualHeight ?? 0:0.#}" +
+                $" body={shellWindow.Mixer?.DockBody.ActualHeight ?? 0:0.#}" +
                 $" viewport={shellWindow.ShellScroll.ViewportHeight:0.#}" +
                 $" extent={shellWindow.ShellScroll.ExtentHeight:0.#}" +
                 $" pane={shellWindow.PanelHost.ActualHeight:0.#}/{shellWindow.PanelHost.Height:0.#}" +

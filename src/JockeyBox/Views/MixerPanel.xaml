@@ -1,0 +1,1212 @@
+<UserControl x:Class="JockeyBox.Views.MixerPanel"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:views="clr-namespace:JockeyBox.Views"
+             xmlns:activity="clr-namespace:JockeyBox.Activity"
+             xmlns:local="clr-namespace:JockeyBox.Views">
+    <!-- The mixer, as one dock panel. It used to be a Border in MainWindow's bottom
+         band; the dock builds it on first show and hands the same element to a window
+         when the operator pops it out, so nothing here is rebuilt and no strip loses
+         its selection.
+
+         Four pages share one surface, because four separate bands is how the centre
+         got crowded: the strips and master EQ, the soundboard, the cue bank, and the
+         jobs console (ActivityFeed jobs, the Downloads list and the log). The radios
+         in the header choose the page; they are not a surface switch, and the rail's
+         MIX button is that.
+
+         StatusConsole.xaml is merged here rather than inherited: a UserControl is
+         built before it has a parent, and the popped-out host is a different window
+         with none of the main window's resources in scope. -->
+    <UserControl.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="/Views/Shared/StatusConsole.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
+        </ResourceDictionary>
+    </UserControl.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+        <DockPanel Grid.Row="0" Margin="8,3,8,3" LastChildFill="False">
+            <StackPanel DockPanel.Dock="Left" Orientation="Horizontal" VerticalAlignment="Center">
+                <RadioButton x:Name="DockTabMixer" Style="{StaticResource MicStripChoice}"
+                             Content="STRIPS" IsChecked="True"
+                             AutomationProperties.Name="Mixer strips and EQ"/>
+                <RadioButton x:Name="DockTabSoundboard" Style="{StaticResource MicStripChoice}"
+                             Content="SOUNDBOARD"
+                             AutomationProperties.Name="Soundboard pads"/>
+                <RadioButton x:Name="DockTabCues" Style="{StaticResource MicStripChoice}"
+                             Content="CUES"
+                             AutomationProperties.Name="Cue bank"/>
+                <RadioButton x:Name="DockTabJobs" Style="{StaticResource MicStripChoice}"
+                             Content="JOBS"
+                             AutomationProperties.Name="Jobs and the log"/>
+            </StackPanel>
+            <Button DockPanel.Dock="Right" Content="Clear finished"
+                    Style="{StaticResource ConsoleAction}" Margin="0"
+                    Command="{Binding ClearFinishedActivityCommand, RelativeSource={RelativeSource AncestorType={x:Type local:MixerPanel}}}"
+                    ToolTip="Remove finished jobs from the list"/>
+            <TextBlock DockPanel.Dock="Right" Text="{Binding StatusText}" Margin="12,0,12,0"
+                       MaxWidth="220" VerticalAlignment="Center"
+                       Foreground="{StaticResource TextDimBrush}"
+                       TextTrimming="CharacterEllipsis"
+                       ToolTip="{Binding StatusText}"/>
+        </DockPanel>
+        <ScrollViewer Grid.Row="1" x:Name="DockBody" Focusable="False"
+                      VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
+        <Grid>
+                <Grid x:Name="DockPageMixer">
+                    <Grid.Style>
+                        <Style TargetType="Grid">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsChecked, ElementName=DockTabMixer}" Value="True">
+                                    <Setter Property="Visibility" Value="Visible"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Grid.Style>
+                    <!-- One column, stacked. At 420 the dock can hold either the
+                         EQ card or a five-cell strip row beside it, never both:
+                         side by side the row ran past the panel edge (the BYP
+                         toggle was sliced at x1370-1382) and the EQ's right
+                         border fell outside the panel. Stacked, each gets the
+                         full width - the row keeps its five cells untrimmed and
+                         the EQ card shows its own border with 14 px of inset
+                         before the panel edge. -->
+                    <StackPanel>
+                        <Border Style="{StaticResource Card}" Padding="8,10"
+                                Margin="6,6,6,0">
+                            <StackPanel>
+                                <TextBlock Text="EQ" FontSize="9" Margin="0,0,0,7"
+                                           Foreground="{StaticResource TextDimBrush}"/>
+
+                                <Grid Margin="0,0,0,1">
+                                    <TextBlock Text="LOW" FontSize="9" VerticalAlignment="Center"
+                                               Foreground="{StaticResource TextDimBrush}"/>
+                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
+                                                VerticalAlignment="Center">
+                                        <TextBlock Text="BYP" FontSize="8" Margin="0,0,4,0"
+                                                   VerticalAlignment="Center"
+                                                   Foreground="{StaticResource TextDimBrush}"
+                                                   Visibility="{Binding IsEqLowBypassed, Converter={StaticResource BoolToVisibility}}"/>
+                                        <TextBlock Text="{Binding EqLowText}" FontSize="10"
+                                                   VerticalAlignment="Center">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Foreground" Value="{StaticResource AccentABrush}"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsEqLowBypassed}" Value="True">
+                                                            <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </StackPanel>
+                                </Grid>
+                                <Slider Minimum="-50" Maximum="50" Margin="0,0,0,6"
+                                        Value="{Binding EqLowDb, Mode=TwoWay}"
+                                        views:SliderTickBar.Values="-50,-25,0,25,50"
+                                        ToolTip="Low shelf, 70 Hz. 0 dB takes the band out of circuit."/>
+
+                                <Grid Margin="0,0,0,1">
+                                    <TextBlock Text="MID" FontSize="9" VerticalAlignment="Center"
+                                               Foreground="{StaticResource TextDimBrush}"/>
+                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
+                                                VerticalAlignment="Center">
+                                        <TextBlock Text="BYP" FontSize="8" Margin="0,0,4,0"
+                                                   VerticalAlignment="Center"
+                                                   Foreground="{StaticResource TextDimBrush}"
+                                                   Visibility="{Binding IsEqMidBypassed, Converter={StaticResource BoolToVisibility}}"/>
+                                        <TextBlock Text="{Binding EqMidText}" FontSize="10"
+                                                   VerticalAlignment="Center">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Foreground" Value="{StaticResource AccentABrush}"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsEqMidBypassed}" Value="True">
+                                                            <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </StackPanel>
+                                </Grid>
+                                <Slider Minimum="-50" Maximum="50" Margin="0,0,0,6"
+                                        Value="{Binding EqMidDb, Mode=TwoWay}"
+                                        views:SliderTickBar.Values="-50,-25,0,25,50"
+                                        ToolTip="Mid bell, 1 kHz (Q 0.6). 0 dB takes the band out of circuit."/>
+
+                                <Grid Margin="0,0,0,1">
+                                    <TextBlock Text="HIGH" FontSize="9" VerticalAlignment="Center"
+                                               Foreground="{StaticResource TextDimBrush}"/>
+                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
+                                                VerticalAlignment="Center">
+                                        <TextBlock Text="BYP" FontSize="8" Margin="0,0,4,0"
+                                                   VerticalAlignment="Center"
+                                                   Foreground="{StaticResource TextDimBrush}"
+                                                   Visibility="{Binding IsEqHighBypassed, Converter={StaticResource BoolToVisibility}}"/>
+                                        <TextBlock Text="{Binding EqHighText}" FontSize="10"
+                                                   VerticalAlignment="Center">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Foreground" Value="{StaticResource AccentABrush}"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsEqHighBypassed}" Value="True">
+                                                            <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </StackPanel>
+                                </Grid>
+                                <Slider Minimum="-50" Maximum="50"
+                                        Value="{Binding EqHighDb, Mode=TwoWay}"
+                                        views:SliderTickBar.Values="-50,-25,0,25,50"
+                                        ToolTip="High shelf, 13 kHz. 0 dB takes the band out of circuit."/>
+                            </StackPanel>
+                        </Border>
+                    <Grid Margin="6,6,6,0">
+    <Border Padding="0,4,0,0" BorderBrush="{StaticResource BorderBrush}"
+            BorderThickness="0,1,0,0">
+
+        <StackPanel>
+            <!-- Header: what this is, whether it is on, what it costs, and the switch that
+                 gives the rows back to the window when the rack is not in use.
+                 Same five column widths and the same 11 px horizontal inset as the
+                 channel rows below, so CH and PAD sit over the values they label.
+                 As a DockPanel this docked from the right edge with 26 px number
+                 cells and put PAD 36 px right of the rows' PAD. -->
+            <Grid Margin="11,0,11,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" MinWidth="70"/>
+                    <ColumnDefinition Width="66"/>
+                    <ColumnDefinition Width="72"/>
+                    <ColumnDefinition Width="72"/>
+                    <ColumnDefinition Width="34"/>
+                </Grid.ColumnDefinitions>
+                <DockPanel Grid.Column="0" LastChildFill="True">
+                    <TextBlock DockPanel.Dock="Left" Text="CHANNEL STRIP" FontSize="9"
+                               FontWeight="Bold" Foreground="{StaticResource TextDimBrush}"
+                               VerticalAlignment="Center"/>
+                    <TextBlock DockPanel.Dock="Left" Text="{Binding MicStripCountText}"
+                               FontSize="9" Foreground="{StaticResource TextDimBrush}"
+                               Margin="8,0,0,0" VerticalAlignment="Center"/>
+                    <TextBlock DockPanel.Dock="Right" Text="MIXER" Style="{StaticResource RackCaption}"
+                               Margin="8,0,6,0" VerticalAlignment="Center"
+                               ToolTip="The switch at the end of this row is the mixer's master gate"/>
+                    <!-- Fill child: yields to the label and trims. -->
+                    <TextBlock FontSize="9" Margin="8,0,0,0" VerticalAlignment="Center"
+                               Foreground="{StaticResource AccentABrush}"
+                               TextTrimming="CharacterEllipsis"
+                               ToolTip="{Binding SelectedMicStrip.Name}"
+                               Text="{Binding SelectedMicStrip.Name, StringFormat={}editing {0}}"/>
+                </DockPanel>
+                <HeaderedContentControl Grid.Column="2" Template="{StaticResource StripCell}"
+                                        Header="CHAIN" Tag="f"
+                                        Content="{Binding MixerChainFrames}"
+                                        VerticalAlignment="Center"
+                                        ToolTip="Chain: frames this strip's own stages cost, 240 only from the limiter. Pad: frames the mixer adds so every device lines up. Both 0 = zero added latency."/>
+                <HeaderedContentControl Grid.Column="3" Template="{StaticResource StripCell}"
+                                        Header="PAD" Tag="f"
+                                        Content="{Binding MixerPadFrames}"
+                                        VerticalAlignment="Center"
+                                        ToolTip="Pad: frames the mixer adds so every device lines up. 0 = no added latency."/>
+                <!-- MIXER caption lives in the name column, not the meter column:
+                     the header had five tokens against five row cells, shifted by
+                     one, so MIXER sat over an input meter and BYP had nothing above
+                     it. The gate is the header of the BYP column. -->
+                <ToggleButton Grid.Column="4" Style="{StaticResource RackGate}"
+                              IsChecked="{Binding IsMixerOn, Mode=TwoWay}"
+                              HorizontalAlignment="Right"
+                              AutomationProperties.Name="Mixer enable"
+                              ToolTip="Master gate for every strip. Off is bit-transparent: no filter, no limiter, no latency."/>
+            </Grid>
+
+            <!-- Strip row: one button per attached device, one device per line.
+                 It was a WrapPanel for the old full-width band; in a 420 px
+                 column two devices side by side would share 400 px between
+                 them, so each row now takes the width and the name column is
+                 the one that gives way. -->
+            <ItemsControl ItemsSource="{Binding MicStrips}" Margin="0,4,0,0">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <StackPanel Orientation="Vertical"/>
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <RadioButton Style="{StaticResource MicStripChoice}"
+                                     GroupName="MicStripChoice"
+                                     IsChecked="{Binding IsSelected, Mode=TwoWay}"
+                                     AutomationProperties.Name="{Binding Name}"
+                                     ToolTip="Edit this device's channel strip">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <!-- The name is the column that gives way:
+                                         at 420 the dock gives the row ~390, and
+                                         the four controls after it need 200 of
+                                         that. A fixed 118 pushed BYP past the
+                                         panel edge. -->
+                                    <ColumnDefinition Width="*" MinWidth="70"/>
+                                    <ColumnDefinition Width="66"/>
+                                    <ColumnDefinition Width="72"/>
+                                    <ColumnDefinition Width="72"/>
+                                    <ColumnDefinition Width="34"/>
+                                </Grid.ColumnDefinitions>
+
+                                <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,6,0">
+                                    <TextBlock Text="{Binding Name}" FontSize="10"
+                                               TextTrimming="CharacterEllipsis" ToolTip="{Binding Name}"/>
+                                    <TextBlock Text="not connected" FontSize="9"
+                                               Foreground="{StaticResource TextDimBrush}">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsOpen}" Value="False">
+                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
+                                </StackPanel>
+
+                                <Grid Grid.Column="1" Width="56" Height="4" VerticalAlignment="Center"
+                                      Margin="0,0,10,0" AutomationProperties.Name="Input level">
+                                    <Border Background="{StaticResource BorderBrush}"/>
+                                    <Border HorizontalAlignment="Left" Background="{StaticResource AccentABrush}"
+                                            Width="{Binding MeterWidth}"/>
+                                </Grid>
+
+                                <HeaderedContentControl Grid.Column="2" Template="{StaticResource StripCell}"
+                                                        Header="CH" Content="{Binding ChainFrames}"
+                                                        VerticalAlignment="Center"
+                                                        ToolTip="Chain frames: this strip's own stages (limiter lookahead only)"/>
+                                <HeaderedContentControl Grid.Column="3" Template="{StaticResource StripCell}"
+                                                        Header="PAD" Content="{Binding PadFrames}"
+                                                        VerticalAlignment="Center"
+                                                        ToolTip="Pad frames: delay added to line up with the slowest device"/>
+
+                                <ToggleButton Grid.Column="4" Style="{StaticResource MicToggle}" Width="34"
+                                              HorizontalAlignment="Right"
+                                              Content="BYP"
+                                              IsChecked="{Binding Bypass, Mode=TwoWay}"
+                                              AutomationProperties.Name="Bypass this strip"
+                                              ToolTip="Bypass: the device passes through untouched"/>
+                            </Grid>
+                        </RadioButton>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+
+            <!-- Nothing enabled is a state, said out loud rather than shown as an empty box. -->
+            <TextBlock Text="No microphones enabled. Turn one on in Settings › Inputs."
+                       FontSize="9" Foreground="{StaticResource TextDimBrush}" Margin="0,6,0,0">
+                <TextBlock.Style>
+                    <Style TargetType="TextBlock">
+                        <Setter Property="Visibility" Value="Collapsed"/>
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding HasMicStrips}" Value="False">
+                                <Setter Property="Visibility" Value="Visible"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </TextBlock.Style>
+            </TextBlock>
+
+        </StackPanel>
+    </Border>
+                    </Grid>
+                    </StackPanel>
+                </Grid>
+                <Grid x:Name="DockPageCues">
+                    <Grid.Style>
+                        <Style TargetType="Grid">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsChecked, ElementName=DockTabCues}" Value="True">
+                                    <Setter Property="Visibility" Value="Visible"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Grid.Style>
+                                    <Border Margin="0,0,8,0" Padding="2,0" CornerRadius="3"
+                                            BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                                            ToolTip="Pair cues: an empty pad captures where both decks are; an occupied pad seeks both">
+                                        <Border.Style>
+                                            <Style TargetType="Border">
+                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsKaraokePairLoaded}" Value="True">
+                                                        <Setter Property="Visibility" Value="Visible"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Border.Style>
+                                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                            <TextBlock Text="PAIR" FontSize="8" Margin="0,0,5,0"
+                                                       Foreground="{StaticResource TextBrush}"
+                                                       VerticalAlignment="Center"/>
+                                            <ItemsControl ItemsSource="{Binding PairCues.Pads}"
+                                                          VerticalAlignment="Center">
+                                                <ItemsControl.ItemsPanel>
+                                                    <ItemsPanelTemplate>
+                                                        <UniformGrid Rows="1"/>
+                                                    </ItemsPanelTemplate>
+                                                </ItemsControl.ItemsPanel>
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Button Style="{StaticResource CuePad}"
+                                                                Height="34" Width="30"
+                                                                CommandParameter="{Binding}"
+                                                                Command="{Binding DataContext.PairCues.PressCommand,
+                                                                          RelativeSource={RelativeSource AncestorType=ItemsControl}}"
+                                                                ToolTip="{Binding ToolTip}"
+                                                                AutomationProperties.Name="{Binding PadText}"/>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                            <Button MinWidth="28" Height="34" Margin="4,0,0,0"
+                                                    FontSize="8" FontWeight="Bold"
+                                                    Command="{Binding PairCues.ToggleClearModeCommand}"
+                                                    Content="{Binding PairCues.ClearModeText}"
+                                                    ToolTip="Clear mode: while on, pressing a pad removes its cue">
+                                                <Button.Style>
+                                                    <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                                        <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding PairCues.IsClearing}" Value="True">
+                                                                <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
+                                                                <Setter Property="BorderBrush" Value="{StaticResource TextDimBrush}"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </Button.Style>
+                                            </Button>
+                                        </StackPanel>
+                                    </Border>
+                </Grid>
+                <Grid x:Name="DockPageSoundboard">
+                    <Grid.Style>
+                        <Style TargetType="Grid">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsChecked, ElementName=DockTabSoundboard}" Value="True">
+                                    <Setter Property="Visibility" Value="Visible"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Grid.Style>
+<Border Style="{StaticResource Card}" Padding="0" Margin="0"
+        DataContext="{Binding Soundboard}">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <!-- Add row: local file on the left, YouTube link on the right.
+                 Both go through the same ingest path, so a URL behaves
+                 exactly like a file once it is on disk. -->
+            <DockPanel Grid.Row="0" Margin="2,0,0,8" LastChildFill="True">
+                <Button DockPanel.Dock="Left" Content="+ AUDIO FILE" FontSize="9"
+                        Padding="8,4" Margin="0,0,8,0"
+                        Command="{Binding AddFromFileCommand}"
+                        ToolTip="Copy an audio file into the soundboard folder"/>
+                <!-- The board's header used to carry this; the header is on the
+                     bottom strip now, so the action sits with the other two ways
+                     of adding a pad. -->
+                <Button DockPanel.Dock="Left" Content="+ ADD SLOT" FontSize="9"
+                        Padding="8,4" Margin="0,0,8,0"
+                        Command="{Binding AddSlotCommand}"
+                        ToolTip="Add an empty pad"/>
+                <Button DockPanel.Dock="Right" Content="ADD FROM URL" FontSize="9"
+                        Padding="8,4" Margin="8,0,0,0"
+                        Command="{Binding AddFromUrlCommand}"
+                        ToolTip="Download a YouTube (or direct audio) link as a pad"/>
+                <TextBox VerticalContentAlignment="Center" FontSize="10" Padding="6,3"
+                         Text="{Binding NewSoundUrl, UpdateSourceTrigger=PropertyChanged}"
+                         ToolTip="Paste a YouTube link">
+                    <TextBox.InputBindings>
+                        <KeyBinding Key="Return" Command="{Binding AddFromUrlCommand}"/>
+                    </TextBox.InputBindings>
+                    <TextBox.Style>
+                        <Style TargetType="TextBox">
+                            <!-- Placeholder-ish hint; WPF has no placeholder, so
+                                 a faint prefix in the empty case is enough. -->
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding NewSoundUrl}" Value="">
+                                    <Setter Property="Background" Value="{StaticResource PanelAltBrush}"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBox.Style>
+                </TextBox>
+            </DockPanel>
+
+            <!-- Status line: add results, download progress and hotkey
+                 conflicts all land here instead of in a dialog. -->
+            <TextBlock Grid.Row="1" FontSize="10" Margin="2,0,0,6"
+                       Text="{Binding StatusText}" TextTrimming="CharacterEllipsis"
+                       Foreground="{StaticResource TextDimBrush}">
+                <TextBlock.Style>
+                    <Style TargetType="TextBlock">
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding StatusText}" Value="">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </TextBlock.Style>
+            </TextBlock>
+
+            <TextBlock Grid.Row="2"
+                       Text="No sounds yet — add an audio file or paste a YouTube link."
+                       FontSize="10" Margin="2,2,0,8"
+                       Foreground="{StaticResource TextDimBrush}">
+                <TextBlock.Style>
+                    <Style TargetType="TextBlock">
+                        <Setter Property="Visibility" Value="Collapsed"/>
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding Pads.Count}" Value="0">
+                                <Setter Property="Visibility" Value="Visible"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </TextBlock.Style>
+            </TextBlock>
+
+            <ItemsControl Grid.Row="3" ItemsSource="{Binding Pads}"
+                          ItemTemplate="{StaticResource SoundboardPadTile}">
+                <ItemsControl.ItemsPanel>
+                    <ItemsPanelTemplate>
+                        <WrapPanel Orientation="Horizontal"/>
+                    </ItemsPanelTemplate>
+                </ItemsControl.ItemsPanel>
+            </ItemsControl>
+
+            <StackPanel Grid.Row="4" Orientation="Horizontal" Margin="2,2,0,0">
+                <StackPanel.Style>
+                    <Style TargetType="StackPanel">
+                        <Setter Property="Visibility" Value="Visible"/>
+                        <Style.Triggers>
+                            <!-- No pads: the tiles are already collapsed, so
+                                 the board level would float on its own. -->
+                            <DataTrigger Binding="{Binding Pads.Count}" Value="0">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </StackPanel.Style>
+                <TextBlock Text="BOARD LEVEL" FontSize="9" VerticalAlignment="Center"
+                           Margin="0,0,8,0" Foreground="{StaticResource TextDimBrush}"/>
+                <Slider Width="130" VerticalAlignment="Center"
+                        Minimum="0" Maximum="1.2" SmallChange="0.01"
+                        Value="{Binding Volume, Mode=TwoWay}"
+                        ToolTip="Level of the whole soundboard, under the master fader"/>
+                <TextBlock Text="{Binding Volume, StringFormat={}{0:0%}}"
+                           FontFamily="Consolas" FontSize="10" Width="40"
+                           Margin="8,0,0,0" VerticalAlignment="Center"
+                           Foreground="{StaticResource TextDimBrush}"/>
+            </StackPanel>
+        </Grid>
+</Border>
+<!-- ================= Strip band =================
+     The editor for the strip selected above, drawn inside the browser row rather
+     than in the mic card: a band in the card made the shell 61 px taller than a
+     900 px window, which put the console row below the fold. It is also out of
+     the flow here: the row is star-sized, so opening the band costs the window
+     nothing and never grows a scrollbar the operator has to find.
+
+     ItemsSource is BandStrip - zero items or exactly the selected strip. A
+     ContentControl would apply its template against null content; an empty
+     ItemsControl instantiates nothing at all.
+
+     Values are the engine applied parameters (SnapshotStrips, 2 Hz); writes post
+     one render-queue action each. Double-click a row to return it to neutral. -->
+                </Grid>
+                <Grid x:Name="DockPageJobs">
+                    <Grid.Style>
+                        <Style TargetType="Grid">
+                            <Setter Property="Visibility" Value="Collapsed"/>
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsChecked, ElementName=DockTabJobs}" Value="True">
+                                    <Setter Property="Visibility" Value="Visible"/>
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Grid.Style>
+<Border Style="{StaticResource Card}" Padding="0" Margin="0"
+        AutomationProperties.Name="Activity console">
+    <DockPanel>
+
+        <TabControl x:Name="ConsoleTabs">
+            <TabControl.Style>
+                <!-- 214 is the collapsed-comfortable height the console has
+                     always had. The selected-job pane needs its own room: 380
+                     keeps two or three rows above it instead of squeezing the
+                     list to nothing, and drops back the moment it closes. -->
+                <Style TargetType="TabControl" BasedOn="{StaticResource ConsoleTabs}">
+                    <Setter Property="Height" Value="214"/>
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding HasSelectedRow, Source={x:Static activity:ActivityFeed.Shared}}"
+                                     Value="True">
+                            <Setter Property="Height" Value="380"/>
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </TabControl.Style>
+
+            <!-- Jobs: every ActivityFeed row, one list -->
+            <TabItem Header="JOBS" Style="{StaticResource ConsoleTabItem}">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*"/>
+                        <RowDefinition Height="Auto"/>
+                    </Grid.RowDefinitions>
+                    <ListBox x:Name="JobList" Grid.Row="0" MinHeight="56"
+                             ItemsSource="{Binding Rows, Source={x:Static activity:ActivityFeed.Shared}}"
+                             SelectedItem="{Binding SelectedRow, Source={x:Static activity:ActivityFeed.Shared}, Mode=TwoWay}"
+                             ItemContainerStyle="{StaticResource ConsoleJobItem}"
+                             Background="Transparent" BorderThickness="0"
+                             HorizontalContentAlignment="Stretch"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             ScrollViewer.VerticalScrollBarVisibility="Auto"
+                             AutomationProperties.Name="Activity jobs">
+                            <ListBox.ItemTemplate>
+                                <DataTemplate>
+                                    <Border x:Name="jobRow" MinHeight="28" Margin="0,0,0,2" Padding="6,0"
+                                            CornerRadius="3" BorderThickness="1"
+                                            ToolTip="{Binding Detail}">
+                                        <Border.Style>
+                                            <Style TargetType="Border">
+                                                <Setter Property="Background" Value="{StaticResource PanelBrush}"/>
+                                                <Setter Property="BorderBrush" Value="Transparent"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding State}" Value="Failed">
+                                                        <Setter Property="BorderBrush" Value="{StaticResource DangerBrush}"/>
+                                                        <Setter Property="Background" Value="#241A1E"/>
+                                                    </DataTrigger>
+                                                    <!-- A standing condition, not a failed job: amber
+                                                         border and tint, so it reads as "look at this"
+                                                         without borrowing the failure colour. -->
+                                                    <DataTrigger Binding="{Binding State}" Value="Warning">
+                                                        <Setter Property="BorderBrush" Value="{StaticResource WarningBrush}"/>
+                                                        <Setter Property="Background" Value="#241F14"/>
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding State}" Value="Cancelled">
+                                                        <Setter Property="Opacity" Value="0.6"/>
+                                                    </DataTrigger>
+                                                    <!-- Selected row: the detail pane below
+                                                         is showing this one. Accent border, because
+                                                         it is a selection not a state. -->
+                                                    <DataTrigger Binding="{Binding IsSelected,
+                                                        RelativeSource={RelativeSource AncestorType=ListBoxItem}}"
+                                                                 Value="True">
+                                                        <Setter Property="BorderBrush" Value="{StaticResource AccentABrush}"/>
+                                                        <Setter Property="Background" Value="{StaticResource PanelAltBrush}"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Border.Style>
+                                        <Grid>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="*"/>
+                                                <RowDefinition Height="3"/>
+                                            </Grid.RowDefinitions>
+                                            <Grid VerticalAlignment="Center">
+                                                <Grid.RowDefinitions>
+                                                    <!-- The job's own line. -->
+                                                    <RowDefinition Height="Auto"/>
+                                                    <!-- Its message, on its own line: at 170 px
+                                                         wide the stage column cut every long
+                                                         error off before its instruction. -->
+                                                    <RowDefinition Height="Auto"/>
+                                                </Grid.RowDefinitions>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="74"/>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="170"/>
+                                                    <ColumnDefinition Width="42"/>
+                                                    <ColumnDefinition Width="50"/>
+                                                    <ColumnDefinition Width="22"/>
+                                                </Grid.ColumnDefinitions>
+
+                                                <!-- What the row is -->
+                                                <TextBlock Grid.Column="0" FontSize="9" FontWeight="Bold"
+                                                           VerticalAlignment="Center">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Text" Value="JOB"/>
+                                                            <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding Kind}" Value="Download">
+                                                                    <Setter Property="Text" Value="DOWNLOAD"/>
+                                                                </DataTrigger>
+                                                                <DataTrigger Binding="{Binding Kind}" Value="Karaoke">
+                                                                    <Setter Property="Text" Value="KARAOKE"/>
+                                                                </DataTrigger>
+                                                                <DataTrigger Binding="{Binding Kind}" Value="PlaylistLoad">
+                                                                    <Setter Property="Text" Value="PLAYLIST"/>
+                                                                </DataTrigger>
+                                                                <DataTrigger Binding="{Binding Kind}" Value="Scan">
+                                                                    <Setter Property="Text" Value="SCAN"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+
+                                                <TextBlock Grid.Column="1" FontSize="11.5"
+                                                           VerticalAlignment="Center"
+                                                           TextTrimming="CharacterEllipsis"
+                                                           Margin="0,0,8,0">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Text" Value="{Binding Title}"/>
+                                                            <Setter Property="ToolTip" Value="{Binding Title}"/>
+                                                            <Style.Triggers>
+                                                                <!-- The warning mark, not just the red border, says this failed. -->
+                                                                <DataTrigger Binding="{Binding State}" Value="Failed">
+                                                                    <Setter Property="Text" Value="{Binding Title, StringFormat={}⚠ {0}}"/>
+                                                                </DataTrigger>
+                                                                <!-- A standing condition gets the same mark: nothing
+                                                                     failed, but the operator still needs to see it. -->
+                                                                <DataTrigger Binding="{Binding State}" Value="Warning">
+                                                                    <Setter Property="Text" Value="{Binding Title, StringFormat={}⚠ {0}}"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+
+                                                <!-- The state, always as a word. The message
+                                                     itself now has its own line below. -->
+                                                <TextBlock Grid.Column="2" FontSize="10"
+                                                           VerticalAlignment="Center"
+                                                           TextTrimming="CharacterEllipsis"
+                                                           Margin="0,0,6,0">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Text" Value="{Binding StageText}"/>
+                                                            <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding State}" Value="Failed">
+                                                                    <Setter Property="Foreground" Value="{StaticResource DangerBrush}"/>
+                                                                </DataTrigger>
+                                                                <DataTrigger Binding="{Binding State}" Value="Warning">
+                                                                    <Setter Property="Foreground" Value="{StaticResource WarningBrush}"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+
+                                                <!-- The message, on its own line under the title
+                                                     and full width, so a long error keeps the
+                                                     sentence that says what to do. Wraps rather
+                                                     than trims. One line of the console for a job
+                                                     that has nothing to say, two when it does. -->
+                                                <TextBlock x:Name="jobDetail" Grid.Row="1" Grid.Column="1"
+                                                           Grid.ColumnSpan="5" FontSize="10"
+                                                           TextWrapping="Wrap" Margin="0,1,8,4"
+                                                           Text="{Binding Detail}"
+                                                           Visibility="{Binding ShowsMessage, Converter={StaticResource BoolToVisibility}}">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding State}" Value="Failed">
+                                                                    <Setter Property="Foreground" Value="{StaticResource DangerBrush}"/>
+                                                                </DataTrigger>
+                                                                <DataTrigger Binding="{Binding State}" Value="Warning">
+                                                                    <Setter Property="Foreground" Value="{StaticResource WarningBrush}"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+
+                                                <!-- Percent, or an em dash when the producer has none -->
+                                                <TextBlock Grid.Column="3" FontFamily="Consolas" FontSize="10"
+                                                           VerticalAlignment="Center" HorizontalAlignment="Right">
+                                                    <TextBlock.Style>
+                                                        <Style TargetType="TextBlock">
+                                                            <Setter Property="Text" Value="{Binding PercentText}"/>
+                                                            <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding Percent}" Value="{x:Null}">
+                                                                    <Setter Property="Text" Value="&#x2014;"/>
+                                                                </DataTrigger>
+                                                                <DataTrigger Binding="{Binding State}" Value="Failed">
+                                                                    <Setter Property="Foreground" Value="{StaticResource DangerBrush}"/>
+                                                                </DataTrigger>
+                                                                <DataTrigger Binding="{Binding State}" Value="Warning">
+                                                                    <Setter Property="Foreground" Value="{StaticResource WarningBrush}"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </TextBlock.Style>
+                                                </TextBlock>
+
+                                                <TextBlock Grid.Column="4" FontFamily="Consolas" FontSize="10"
+                                                           VerticalAlignment="Center" HorizontalAlignment="Right"
+                                                           Foreground="{StaticResource TextDimBrush}">
+                                                    <TextBlock.Text>
+                                                        <MultiBinding Converter="{StaticResource ActivityElapsed}">
+                                                            <Binding Path="Started"/>
+                                                            <Binding Path="Finished"/>
+                                                            <Binding Path="Percent"/>
+                                                        </MultiBinding>
+                                                    </TextBlock.Text>
+                                                </TextBlock>
+
+                                                <!-- Cancel exists only where the backend can stop the job -->
+                                                <Button Grid.Column="5" Content="&#x2715;"
+                                                        ToolTip="Cancel this job"
+                                                        AutomationProperties.Name="Cancel this job"
+                                                        Command="{Binding CancelActivityCommand, RelativeSource={RelativeSource AncestorType={x:Type local:MixerPanel}}}"
+                                                        CommandParameter="{Binding Id}">
+                                                    <Button.Style>
+                                                        <Style TargetType="Button" BasedOn="{StaticResource ConsoleRowAction}">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                            <Style.Triggers>
+                                                                <MultiDataTrigger>
+                                                                    <MultiDataTrigger.Conditions>
+                                                                        <Condition Binding="{Binding CanCancel}" Value="True"/>
+                                                                        <Condition Binding="{Binding IsFinished}" Value="False"/>
+                                                                    </MultiDataTrigger.Conditions>
+                                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                                </MultiDataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Button.Style>
+                                                </Button>
+                                            </Grid>
+
+                                            <!-- Progress: drawn only from a real percent -->
+                                            <ProgressBar Grid.Row="1" Minimum="0" Maximum="100"
+                                                         Value="{Binding Percent}" Margin="80,0,8,2">
+                                                <ProgressBar.Style>
+                                                    <Style TargetType="ProgressBar" BasedOn="{StaticResource SlimBar}">
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding Percent}" Value="{x:Null}">
+                                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                            </DataTrigger>
+                                                            <DataTrigger Binding="{Binding IsFinished}" Value="True">
+                                                                <Setter Property="Visibility" Value="Collapsed"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </ProgressBar.Style>
+                                            </ProgressBar>
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ListBox.ItemTemplate>
+                    </ListBox>
+
+                    <!-- Selected job detail. A tooltip only carries Detail;
+                         this carries the whole row, including what file the
+                         job produced and why it failed, and copies it. -->
+                    <Border Grid.Row="1" Margin="0,6,0,0" Padding="8,6" CornerRadius="3"
+                            Background="{StaticResource PanelAltBrush}"
+                            BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                            Visibility="{Binding HasSelectedRow, Source={x:Static activity:ActivityFeed.Shared},
+                                         Converter={StaticResource BoolToVisibility}}">
+                        <DockPanel>
+                            <DockPanel DockPanel.Dock="Top" LastChildFill="False">
+                                <TextBlock DockPanel.Dock="Left" Text="JOB DETAIL"
+                                           FontSize="10" VerticalAlignment="Center"
+                                           Foreground="{StaticResource TextDimBrush}"/>
+                                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                    <Button Content="Copy" Style="{StaticResource ConsoleAction}"
+                                            Click="CopyJobDetail_Click"
+                                            AutomationProperties.Name="Copy job detail"
+                                            ToolTip="Copy every field of this job"/>
+                                    <Button Content="Close" Style="{StaticResource ConsoleAction}"
+                                            Click="CloseJobDetail_Click"
+                                            ToolTip="Hide the detail pane"/>
+                                </StackPanel>
+                            </DockPanel>
+                            <ScrollViewer MaxHeight="170" VerticalScrollBarVisibility="Auto"
+                                          HorizontalScrollBarVisibility="Disabled">
+                                <TextBlock Text="{Binding SelectedRowDetail, Source={x:Static activity:ActivityFeed.Shared}}"
+                                           FontFamily="Consolas" FontSize="10" Margin="0,4,0,0"
+                                           TextWrapping="Wrap"
+                                           AutomationProperties.Name="Selected job detail"/>
+                            </ScrollViewer>
+                        </DockPanel>
+                    </Border>
+
+                    <!-- Empty state: says what belongs here -->
+                    <TextBlock Text="Downloads and karaoke jobs appear here while they run."
+                               Grid.Row="0"
+                               FontSize="11" Margin="4,8,0,0" VerticalAlignment="Top"
+                               Foreground="{StaticResource TextDimBrush}">
+                        <TextBlock.Style>
+                            <Style TargetType="TextBlock">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding Rows.Count, Source={x:Static activity:ActivityFeed.Shared}}"
+                                                 Value="0">
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </TextBlock.Style>
+                    </TextBlock>
+                </Grid>
+            </TabItem>
+
+            <!-- Downloads: the queue, unchanged in behaviour -->
+            <TabItem Style="{StaticResource ConsoleTabItem}">
+                <TabItem.Header>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="DOWNLOADS" FontSize="10" FontWeight="Bold"
+                                   VerticalAlignment="Center"/>
+                        <Border Background="{StaticResource AccentBBrush}" CornerRadius="6"
+                                Padding="4,0" Margin="6,0,0,0" VerticalAlignment="Center">
+                            <Border.Style>
+                                <Style TargetType="Border">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Downloads.ActiveCount}" Value="0">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Border.Style>
+                            <TextBlock Text="{Binding Downloads.ActiveCount}" FontSize="9"
+                                       FontFamily="Consolas" Foreground="{StaticResource WindowBrush}"/>
+                        </Border>
+                    </StackPanel>
+                </TabItem.Header>
+
+                <ScrollViewer VerticalScrollBarVisibility="Auto"
+                              HorizontalScrollBarVisibility="Disabled">
+                    <StackPanel>
+                        <Grid Margin="0,0,0,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0" Text="{Binding Downloads.StatusLine}"
+                                       FontSize="10.5" VerticalAlignment="Center"
+                                       TextTrimming="CharacterEllipsis"
+                                       Foreground="{StaticResource TextDimBrush}"/>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal">
+                                <Button Content="{Binding Downloads.PauseLabel}"
+                                        Command="{Binding Downloads.TogglePauseCommand}"
+                                        Style="{StaticResource ConsoleAction}"
+                                        ToolTip="Pause or resume the download workers. Queued items stay queued."/>
+                                <Button Content="Cancel all"
+                                        Command="{Binding Downloads.CancelAllCommand}"
+                                        Style="{StaticResource ConsoleAction}"
+                                        ToolTip="Cancel everything queued or running"/>
+                                <Button Content="{Binding Downloads.RetryFailedLabel}"
+                                        Command="{Binding Downloads.RetryFailedCommand}"
+                                        Style="{StaticResource ConsoleAction}"
+                                        ToolTip="Queue every failed download again"/>
+                                <Button Content="Clear done"
+                                        Command="{Binding Downloads.ClearCompletedCommand}"
+                                        Style="{StaticResource ConsoleAction}"
+                                        ToolTip="Remove finished rows from the list"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <!-- Overall progress, only while the queue holds anything -->
+                        <Grid Margin="0,0,0,4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.Style>
+                                <Style TargetType="Grid">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding Downloads.TotalCount}" Value="0">
+                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Grid.Style>
+                            <ProgressBar Grid.Column="0" Minimum="0" Maximum="100" Height="4"
+                                         Style="{StaticResource SlimBar}"
+                                         Value="{Binding Downloads.OverallProgress}"
+                                         VerticalAlignment="Center"/>
+                            <TextBlock Grid.Column="1" FontFamily="Consolas" FontSize="10"
+                                       Margin="8,0,0,0" VerticalAlignment="Center"
+                                       Foreground="{StaticResource TextDimBrush}"
+                                       Text="{Binding Downloads.OverallProgress, StringFormat={}{0:0}%}"/>
+                        </Grid>
+
+                        <DockPanel Margin="0,0,0,3">
+                            <ListBox DockPanel.Dock="Left" ItemsSource="{Binding Downloads.Filters}"
+                                     SelectedItem="{Binding Downloads.SelectedFilter}"
+                                     ItemContainerStyle="{StaticResource FilterPill}"
+                                     Background="Transparent" BorderThickness="0" Focusable="False"
+                                     AutomationProperties.Name="Download filter">
+                                <ListBox.ItemsPanel>
+                                    <ItemsPanelTemplate>
+                                        <StackPanel Orientation="Horizontal"/>
+                                    </ItemsPanelTemplate>
+                                </ListBox.ItemsPanel>
+                            </ListBox>
+                            <TextBlock Text="{Binding Downloads.EmptyHint}" FontSize="10"
+                                       VerticalAlignment="Center" Margin="8,0,0,0"
+                                       Foreground="{StaticResource TextDimBrush}"
+                                       TextTrimming="CharacterEllipsis"
+                                       Visibility="{Binding Downloads.View.IsEmpty, Converter={StaticResource BoolToVisibility}}"/>
+                        </DockPanel>
+
+                        <ItemsControl ItemsSource="{Binding Downloads.View}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Height="28" Margin="0,0,0,2" Padding="6,0"
+                                            CornerRadius="3" BorderThickness="1"
+                                            ToolTip="{Binding DetailText}">
+                                        <Border.Style>
+                                            <Style TargetType="Border">
+                                                <Setter Property="Background" Value="{StaticResource PanelBrush}"/>
+                                                <Setter Property="BorderBrush" Value="Transparent"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding State}" Value="Failed">
+                                                        <Setter Property="BorderBrush" Value="{StaticResource DangerBrush}"/>
+                                                        <Setter Property="Background" Value="#241A1E"/>
+                                                    </DataTrigger>
+                                                    <DataTrigger Binding="{Binding State}" Value="Cancelled">
+                                                        <Setter Property="Opacity" Value="0.6"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Border.Style>
+                                        <Grid VerticalAlignment="Center">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="16"/>
+                                                <ColumnDefinition Width="*"/>
+                                                <ColumnDefinition Width="240"/>
+                                                <ColumnDefinition Width="42"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+
+                                            <TextBlock Grid.Column="0" Text="{Binding StateGlyph}"
+                                                       FontSize="10" VerticalAlignment="Center"
+                                                       Foreground="{StaticResource TextDimBrush}"/>
+                                            <TextBlock Grid.Column="1" Text="{Binding Title}"
+                                                       FontSize="11.5" VerticalAlignment="Center"
+                                                       TextTrimming="CharacterEllipsis" Margin="0,0,8,0"/>
+                                            <TextBlock Grid.Column="2" Text="{Binding DetailText}"
+                                                       FontSize="10" VerticalAlignment="Center"
+                                                       TextTrimming="CharacterEllipsis" Margin="0,0,8,0">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Setter Property="Foreground" Value="{StaticResource TextDimBrush}"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding HasError}" Value="True">
+                                                                <Setter Property="Foreground" Value="{StaticResource DangerBrush}"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                            <TextBlock Grid.Column="3" Text="{Binding ProgressText}"
+                                                       FontFamily="Consolas" FontSize="10"
+                                                       VerticalAlignment="Center" HorizontalAlignment="Right"
+                                                       Foreground="{StaticResource TextDimBrush}"/>
+
+                                            <StackPanel Grid.Column="4" Orientation="Horizontal">
+                                                <Button Content="&#x21BB;" ToolTip="Retry this download"
+                                                        AutomationProperties.Name="Retry this download"
+                                                        Command="{Binding DataContext.Downloads.RetryItemCommand, RelativeSource={RelativeSource AncestorType={x:Type local:MixerPanel}}}"
+                                                        CommandParameter="{Binding}">
+                                                    <Button.Style>
+                                                        <Style TargetType="Button" BasedOn="{StaticResource ConsoleRowAction}">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding State}" Value="Failed">
+                                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Button.Style>
+                                                </Button>
+                                                <Button Content="&#x2715;" ToolTip="Cancel this download"
+                                                        AutomationProperties.Name="Cancel this download"
+                                                        Command="{Binding DataContext.Downloads.CancelItemCommand, RelativeSource={RelativeSource AncestorType={x:Type local:MixerPanel}}}"
+                                                        CommandParameter="{Binding}">
+                                                    <Button.Style>
+                                                        <Style TargetType="Button" BasedOn="{StaticResource ConsoleRowAction}">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                            <Style.Triggers>
+                                                                <MultiDataTrigger>
+                                                                    <MultiDataTrigger.Conditions>
+                                                                        <Condition Binding="{Binding State}" Value="Queued"/>
+                                                                        <Condition Binding="{Binding IsFinished}" Value="False"/>
+                                                                    </MultiDataTrigger.Conditions>
+                                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                                </MultiDataTrigger>
+                                                                <MultiDataTrigger>
+                                                                    <MultiDataTrigger.Conditions>
+                                                                        <Condition Binding="{Binding IsActive}" Value="True"/>
+                                                                    </MultiDataTrigger.Conditions>
+                                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                                </MultiDataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Button.Style>
+                                                </Button>
+                                                <Button Content="&#x2933;" ToolTip="Open the finished file"
+                                                        AutomationProperties.Name="Open the finished file"
+                                                        Command="{Binding DataContext.Downloads.OpenFileCommand, RelativeSource={RelativeSource AncestorType={x:Type local:MixerPanel}}}"
+                                                        CommandParameter="{Binding}">
+                                                    <Button.Style>
+                                                        <Style TargetType="Button" BasedOn="{StaticResource ConsoleRowAction}">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding State}" Value="Done">
+                                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Button.Style>
+                                                </Button>
+                                                <Button Content="&#x1F5D1;"
+                                                        ToolTip="Delete the downloaded file. It goes to the Recycle Bin and the library stops listing it."
+                                                        AutomationProperties.Name="Delete the downloaded file"
+                                                        Command="{Binding DataContext.Downloads.DeleteFileCommand, RelativeSource={RelativeSource AncestorType={x:Type local:MixerPanel}}}"
+                                                        CommandParameter="{Binding}">
+                                                    <Button.Style>
+                                                        <Style TargetType="Button" BasedOn="{StaticResource ConsoleRowAction}">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                            <Setter Property="Foreground" Value="{StaticResource DangerBrush}"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding State}" Value="Done">
+                                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Button.Style>
+                                                </Button>
+                                                <Button Content="&#x2715;" ToolTip="Remove this row. Any file on disk is left alone."
+                                                        AutomationProperties.Name="Remove this row from the list"
+                                                        Command="{Binding DataContext.Downloads.RemoveRowCommand, RelativeSource={RelativeSource AncestorType={x:Type local:MixerPanel}}}"
+                                                        CommandParameter="{Binding}">
+                                                    <Button.Style>
+                                                        <Style TargetType="Button" BasedOn="{StaticResource ConsoleRowAction}">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                            <Style.Triggers>
+                                                                <DataTrigger Binding="{Binding State}" Value="Failed">
+                                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                                </DataTrigger>
+                                                                <DataTrigger Binding="{Binding State}" Value="Cancelled">
+                                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                                </DataTrigger>
+                                                                <DataTrigger Binding="{Binding State}" Value="Done">
+                                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                                </DataTrigger>
+                                                            </Style.Triggers>
+                                                        </Style>
+                                                    </Button.Style>
+                                                </Button>
+                                            </StackPanel>
+                                        </Grid>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+
+                        <!-- Tools: same commands the old window carried, one quiet line -->
+                        <Border Background="{StaticResource PanelAltBrush}"
+                                BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                                CornerRadius="4" Padding="8,4" Margin="0,6,0,0">
+                            <DockPanel LastChildFill="False">
+                                <TextBlock DockPanel.Dock="Left" Text="TOOLS" FontSize="9"
+                                           FontWeight="Bold" VerticalAlignment="Center"
+                                           Foreground="{StaticResource TextDimBrush}"/>
+                                <TextBlock DockPanel.Dock="Left" Text="{Binding Downloads.ToolVersions}"
+                                           FontSize="9.5" Margin="8,0,0,0" VerticalAlignment="Center"
+                                           Foreground="{StaticResource TextDimBrush}"
+                                           TextTrimming="CharacterEllipsis"
+                                           ToolTip="{Binding Downloads.ToolVersions}"/>
+                                <TextBlock DockPanel.Dock="Left" Text="{Binding Downloads.ToolsStatus}"
+                                           FontSize="9.5" Margin="8,0,0,0" VerticalAlignment="Center"
+                                           Foreground="{StaticResource AccentABrush}"
+                                           Visibility="{Binding Downloads.IsInstallingTools, Converter={StaticResource BoolToVisibility}}"/>
+                                <StackPanel DockPanel.Dock="Right" Orientation="Horizontal">
+                                    <Button Content="Install tools"
+                                            Command="{Binding Downloads.InstallToolsCommand}"
+                                            Style="{StaticResource ConsoleAction}"/>
+                                    <Button Content="Update yt-dlp"
+                                            Command="{Binding Downloads.UpdateYtDlpCommand}"
+                                            Style="{StaticResource ConsoleAction}"/>
+                                    <Button Content="Update ffmpeg"
+                                            Command="{Binding Downloads.UpdateFfmpegCommand}"
+                                            Style="{StaticResource ConsoleAction}"/>
+                                    <Button Content="{Binding Downloads.CacheStats}"
+                                            Command="{Binding Downloads.ClearCacheCommand}"
+                                            Style="{StaticResource ConsoleAction}"
+                                            ToolTip="Clear the stream cache"/>
+                                    <Button Content="Music folder"
+                                            Command="{Binding Downloads.OpenMusicFolderCommand}"
+                                            Style="{StaticResource ConsoleAction}"/>
+                                    <Button Content="Log folder"
+                                            Command="{Binding Downloads.OpenLogFolderCommand}"
+                                            Style="{StaticResource ConsoleAction}"/>
+                                </StackPanel>
+                            </DockPanel>
+                        </Border>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <!-- Log: the app log tail, kept out of the jobs list's way.
+                 Lines are clipped horizontally, so the list is selectable
+                 and the Copy button takes the whole line. -->
+            <TabItem Header="LOG" Style="{StaticResource ConsoleTabItem}">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <DockPanel Grid.Row="0" LastChildFill="False" Margin="0,0,0,3">
+                        <TextBlock DockPanel.Dock="Left" VerticalAlignment="Center"
+                                   Text="Select a line, then copy it in full."
+                                   FontSize="10" Foreground="{StaticResource TextDimBrush}"/>
+                        <Button DockPanel.Dock="Right" Content="Copy line"
+                                Style="{StaticResource ConsoleAction}"
+                                Click="CopyLogLine_Click"
+                                AutomationProperties.Name="Copy selected log line"
+                                ToolTip="Copy the selected log line in full"/>
+                    </DockPanel>
+                    <ListBox x:Name="LogList" Grid.Row="1"
+                             Style="{StaticResource ConsoleLogList}"
+                             ItemsSource="{Binding RecentLog, Source={x:Static activity:ActivityFeed.Shared}}"
+                             SelectedItem="{Binding SelectedLogLine, Source={x:Static activity:ActivityFeed.Shared}, Mode=TwoWay}"
+                             AutomationProperties.Name="Recent log lines">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding}" TextWrapping="NoWrap"/>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Grid>
+            </TabItem>
+        </TabControl>
+    </DockPanel>
+</Border>
+                </Grid>
+        </Grid>
+        </ScrollViewer>
+    </Grid>
+</UserControl>

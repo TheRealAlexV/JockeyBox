@@ -51,6 +51,15 @@ public static class PanelCatalog
     /// window refused to shrink past 360; the dock's own caption takes the difference.</summary>
     private const double LyricsMinWidth = 320;
 
+    /// <summary>The width the mixer held as a column in the centre's bottom band. Every
+    /// strip, the EQ and the console were laid out against it, so it opens at the same
+    /// number here rather than at whatever the dock happens to default to.</summary>
+    private const double MixDefaultWidth = 420;
+
+    /// <summary>Below this the four page radios and the strip faders collide: STRIPS,
+    /// SOUNDBOARD, CUES and JOBS plus their padding need 300, and the strip fader
+    /// column needs 20 more to stay draggable.</summary>
+    private const double MixMinWidth = 320;
     /// <summary>
     /// The production panel set, in the order the shell offers them. This is a value
     /// handed to a <see cref="DockPanelHost"/>; the host itself knows nothing about
@@ -80,5 +89,18 @@ public static class PanelCatalog
             LyricsMinWidth,
             AllowsPopOut: true,
             () => new LyricsPanel { ShowPopOutButton = false }),
+
+        // The mixer was a 420 px column in the centre's bottom band, and it keeps that
+        // number here: the strips, the EQ and the console were laid out against it, so
+        // opening it at the dock's own default would re-flow every one of them. Below
+        // 320 the four page radios and the strip faders collide.
+        new PanelDefinition(
+            ShellPanelId.Mix,
+            "MIX",
+            "Mixer panel: strips, soundboard, cue bank and jobs",
+            MixDefaultWidth,
+            MixMinWidth,
+            AllowsPopOut: true,
+            () => new MixerPanel()),
     };
 }
