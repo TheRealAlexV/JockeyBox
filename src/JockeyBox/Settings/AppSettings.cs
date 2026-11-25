@@ -668,6 +668,45 @@ public class AppSettings
     public int YouTubeAutoSyncMinutes { get; set; }
     public int YouTubeSearchResults { get; set; } = 25;
 
+    /// <summary>
+    /// Every JSON member this model does not declare, kept so a load/save round
+    /// trip cannot delete it. This is what makes a settings.json written by another
+    /// tree or an older/newer build safe to open and save here: members that build
+    /// owns (for example <c>VirtualDeviceLines</c>, which only the live tree has)
+    /// pass through untouched instead of being stripped by reserialisation.
+    /// </summary>
+    /// <remarks>
+    /// Never read or write a real setting through this. A setting belongs in a
+    /// declared property with its own default; this map is a holding pen for
+    /// members this build does not implement, and nothing here is ever validated.
+    /// </remarks>
+    /// <summary>
+    /// Keys a migration deliberately retires, dropped on every save by
+    /// <c>RetireRemovedKeys</c> so the retired setting cannot survive in a file
+    /// this build writes.
+    ///
+    /// <para><b>Only effective for keys that are no longer declared properties.</b>
+    /// A declared property serialises from its own value, so an entry here is
+    /// inert while the property still exists - the extension data never holds it.
+    /// That inertness is deliberate: it makes the list safe to land before, during
+    /// or after a property removal, and safe to merge across branches that disagree
+    /// about whether the property is gone yet.</para>
+    ///
+    /// <para><b>The owner is the commit that retires a key.</b> An entry is added in
+    /// the same commit that removes the property, or in the same commit that
+    /// deliberately stops promoting a key a migration reads; nothing else should
+    /// land here.</para>
+    /// </summary>
+    private static readonly HashSet<string> RetiredKeys = new(StringComparer.Ordinal)
+    {
+        "DeckADeviceId",
+        "DeckBDeviceId",
+        "SecondOutputDeviceId",
+    };
+
+    [JsonExtensionData]
+    public Dictionary<string, JsonElement>? ExtensionData { get; set; }
+
     // ---------------------------------------------------------------
 
     private static readonly byte[] Entropy = Encoding.UTF8.GetBytes("JockeyBox.v1");
@@ -694,9 +733,37 @@ public class AppSettings
                 ? JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(SettingsPath)) ?? new AppSettings()
                 : new AppSettings();
         }
+        catch (JsonException ex)
+        {
+            // A corrupt document must not vanish into the defaults fallback: park it
+            // beside the real file so the content that broke startup is still
+            // recoverable, then keep the old behaviour and start from defaults.
+            ArchiveCorruptSettings(ex);
+            return null;
+        }
         catch { return null; }
 
         return PostProcess(settings);
+    }
+
+    /// <summary>
+    /// Move a document that will not parse out of the way, so the next save cannot
+    /// overwrite the only copy of it. Named with the UTC instant it was found, one
+    /// file per failure; best-effort, since a read-only or locked file can stop the
+    /// move and the app still has to start.
+    /// </summary>
+    private static void ArchiveCorruptSettings(JsonException ex)
+    {
+        string archive = $"{SettingsPath}.corrupt-{DateTime.UtcNow:yyyyMMdd'T'HHmmss'Z'}";
+        try
+        {
+            File.Move(SettingsPath, archive, overwrite: true);
+            Log.Warn($"settings: {SettingsPath} is not valid JSON ({ex.Message}); archived to {archive} and starting from defaults");
+        }
+        catch (Exception moveEx)
+        {
+            Log.Warn($"settings: {SettingsPath} is not valid JSON ({ex.Message}) and could not be archived to {archive}: {moveEx.Message}");
+        }
     }
 
     /// <summary>
@@ -802,6 +869,13 @@ public class AppSettings
             DeviceDelays ?? new(), StringComparer.OrdinalIgnoreCase);
         copy.DeviceOutputDelays = new Dictionary<string, double>(
             DeviceOutputDelays ?? new(), StringComparer.OrdinalIgnoreCase);
+
+        // The extension-data map is a value map too, and the purge in Save replaces
+        // it. Sharing the instance would let that replacement be invisible to the
+        // snapshot's view; a copy keeps the two independent.
+        copy.ExtensionData = ExtensionData is null
+            ? null
+            : new Dictionary<string, JsonElement>(ExtensionData, StringComparer.Ordinal);
         return copy;
     }
 
@@ -870,11 +944,14 @@ public class AppSettings
             DeckBCueEnabled = false;
         }
 
-        // Schema 4 -> 5: the per-deck send ids no longer exist as settings, so the
-        // save below rewrites the file without them. They are deliberately not
-        // promoted onto Main/Karaoke Aid: on a real profile they disagree with
-        // where the deck actually plays, so a promotion is the one migration that
-        // could move a working deck to the wrong output.
+        // Schema 4 -> 5: the per-deck send ids no longer exist as settings. They are
+        // dropped from the document by the retired-key list in Save (RetiredKeys ->
+        // RetireRemovedKeys), not by reserialising the typed model - they are
+        // undeclared, so without that list they would simply pass through the
+        // extension-data pen. They are deliberately not promoted onto Main/Karaoke
+        // Aid: on a real profile they disagree with where the deck actually plays,
+        // so a promotion is the one migration that could move a working deck to the
+        // wrong output.
 
         SettingsSchemaVersion = 5;
         Save();
@@ -981,6 +1058,43 @@ public class AppSettings
     public void Save() => Save(_home);
 
     /// <summary>
+    /// Drop every <see cref="RetiredKeys"/> entry from <see cref="ExtensionData"/>
+    /// so a key a migration deliberately retired cannot survive a save. Called at
+    /// the end of <see cref="Save(string)"/>, after the <c>.bak</c> copy: the new
+    /// file is clean and the backup still holds the pre-purge document, which is
+    /// intended.
+    ///
+    /// <para><b>The map is replaced, never removed from in place.</b>
+    /// <see cref="Clone"/> used to share the dictionary instance with the snapshot,
+    /// so an in-place purge would strip the snapshot too and make the three-way
+    /// merge believe a foreign key was deleted by the operator.</para>
+    /// </summary>
+    private void RetireRemovedKeys()
+    {
+        if (ExtensionData is not { Count: > 0 } data)
+            return;
+
+        bool found = false;
+        foreach (var key in data.Keys)
+        {
+            if (!RetiredKeys.Contains(key))
+                continue;
+            found = true;
+            break;
+        }
+        if (!found)
+            return;
+
+        var kept = new Dictionary<string, JsonElement>(data.Count, StringComparer.Ordinal);
+        foreach (var pair in data)
+        {
+            if (!RetiredKeys.Contains(pair.Key))
+                kept[pair.Key] = pair.Value;
+        }
+        ExtensionData = kept.Count == 0 ? null : kept;
+    }
+
+    /// <summary>
     /// Write to <paramref name="home"/> instead of whatever <c>JOCKEYBOX_HOME</c>
     /// holds right now. A debounced save captures its home when it is scheduled
     /// and passes it here, so a fire that lands after teardown cannot write this
@@ -995,6 +1109,22 @@ public class AppSettings
             SpotifyAccessTokenProtected = Protect(SpotifyAccessToken);
             LegacyPlaintextSecret = null; // never write plaintext back out
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+
+            // Keep the last good document beside the new one. One file, overwritten
+            // on every save: a backup chain is noise, a single previous copy is the
+            // thing an operator reaches for after a bad write.
+            try
+            {
+                if (File.Exists(path))
+                    File.Copy(path, path + ".bak", overwrite: true);
+            }
+            catch (Exception backupEx)
+            {
+                Log.Error($"settings: could not back up {path} to {path}.bak", backupEx);
+            }
+
+            RetireRemovedKeys();
+
             File.WriteAllText(path, JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
         }
         catch (Exception ex)

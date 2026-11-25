@@ -25,7 +25,13 @@ public static class SettingsMerge
 {
     private static readonly PropertyInfo[] Fields = typeof(AppSettings)
         .GetProperties(BindingFlags.Public | BindingFlags.Instance)
-        .Where(p => p.CanRead && p.CanWrite)
+        // ExtensionData must stay out of the merge. SameValue below returns false
+        // for null-vs-non-null, so a dialog-built object with no extension data
+        // would be "changed" and its null would overwrite the disk map, deleting
+        // every foreign key. Excluding it means unknown members always come from
+        // disk, which is what this class promises above for properties the dialog
+        // has no control for.
+        .Where(p => p.CanRead && p.CanWrite && p.Name != nameof(AppSettings.ExtensionData))
         .ToArray();
 
     /// <summary>
