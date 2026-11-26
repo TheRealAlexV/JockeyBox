@@ -114,6 +114,36 @@ public class MixerStripTests
     }
 
     [Fact]
+    public void Ceiling_change_on_a_built_strip_applies_without_changing_latency()
+    {
+        var strip = new MixerStrip(SampleRate);
+        strip.Apply(StripParameters.Neutral with { Limiter = new LimiterParameters(Enabled: true) });
+
+        Assert.Equal(240, strip.Limiter!.LatencyFrames);
+
+        // 6 dB over the 0 dBFS ceiling, so the limiter is firmly limiting before the retune.
+        var before = TestSignals.Sine(4800, 1000, SampleRate, 2.0);
+        strip.Process(before);
+        Assert.InRange(Peak(before), 0.95, 1.05);
+
+        // Same strip, same already-built limiter: only the ceiling moves, through Apply's retune.
+        strip.Apply(strip.Parameters with
+        {
+            Limiter = new LimiterParameters(Enabled: true, CeilingDb: -6),
+        });
+
+        var after = TestSignals.Sine(4800, 1000, SampleRate, 2.0);
+        strip.Process(after);
+
+        // Dropping the two retune assignments leaves the output at ~0 dBFS and this fails.
+        double peak = Peak(after);
+        Assert.True(peak <= 0.5012 * 1.01, $"peak after a -6 dB ceiling change was {peak:F4}, expected <= -6 dBFS");
+
+        // The half that pins "latency does not move": the lookahead buffers were never resized.
+        Assert.Equal(240, strip.Limiter!.LatencyFrames);
+    }
+
+    [Fact]
     public void Limiter_latency_is_240_frames_at_48kHz()
     {
         Assert.Equal(240, new Limiter(SampleRate).LatencyFrames);

@@ -124,8 +124,10 @@ public sealed class MixerStrip : IDisposable
     /// cutoff filters, the processors' own smoothers for EQ, gate and compressor); on/off
     /// switches take effect at the call boundary. The limiter is built here on first enable.
     /// <para>
-    /// A ceiling or release change on an already-built limiter is not applied: <see cref="Limiter"/>
-    /// takes those at construction. Rebuild the strip to change them.
+    /// A ceiling or release change on an already-built <see cref="Limiter"/> is applied in place:
+    /// its lookahead buffers are sized at construction and never resized, so the setters keep
+    /// latency and allocation flat. The retune runs whenever the limiter exists, even while
+    /// bypassed; setting a value it already holds just recomputes the coefficients.
     /// </para>
     /// </summary>
     public void Apply(StripParameters next) => ApplyInternal(next.Clamp());
