@@ -1,10 +1,12 @@
 namespace JockeyBox.Dsp;
 
+using JockeyBox.Dsp.RnNoise;
+
 /// <summary>
 /// A live channel strip for one capture endpoint: one mono chain of
-/// <see cref="HighPassFilter"/>, <see cref="LowPassFilter"/>, <see cref="TenBandEq"/>,
-/// <see cref="NoiseGate"/>, <see cref="Compressor"/>, <see cref="DeEsser"/> and an optional
-/// <see cref="Limiter"/>.
+/// <see cref="RnNoiseStage"/>, <see cref="HighPassFilter"/>, <see cref="LowPassFilter"/>,
+/// <see cref="TenBandEq"/>, <see cref="NoiseGate"/>, <see cref="Compressor"/>,
+/// <see cref="DeEsser"/> and an optional <see cref="Limiter"/>.
 /// <para>
 /// <b>Latency:</b> the limiter is the only stage here that carries latency (240 frames at
 /// 48 kHz, 5 ms of lookahead). The operator's requirement is zero added latency by default, so
@@ -25,10 +27,11 @@ namespace JockeyBox.Dsp;
 /// de-interleaves first, as <see cref="IAudioProcessor"/> already requires.
 /// </para>
 /// </summary>
-public sealed class MixerStrip
+public sealed class MixerStrip : IDisposable
 {
     private readonly double _sampleRate;
 
+    private readonly RnNoiseStage _denoise;
     private readonly HighPassFilter _highPass;
     private readonly LowPassFilter _lowPass;
     private readonly TenBandEq _eq;
@@ -40,7 +43,8 @@ public sealed class MixerStrip
 
     private StripParameters _current;
 
-    public MixerStrip(double sampleRate, string id = "strip")
+    public MixerStrip(double sampleRate, string id = "strip",
+        Func<IDenoiseFrameProcessor>? denoiseFactory = null)
     {
         if (sampleRate <= 0) throw new ArgumentOutOfRangeException(nameof(sampleRate));
         if (string.IsNullOrWhiteSpace(id)) throw new ArgumentException("Strip id is required.", nameof(id));
@@ -56,6 +60,9 @@ public sealed class MixerStrip
             id: $"{id}.highpass", rampFrames: rampFrames);
         _lowPass = new LowPassFilter(sampleRate, LowPassFilter.TransparentFrequencyHz,
             id: $"{id}.lowpass", rampFrames: rampFrames);
+        _denoise = denoiseFactory is null
+            ? new RnNoiseStage()
+            : new RnNoiseStage(denoiseFactory);
         _eq = new TenBandEq(sampleRate, id: $"{id}.eq");
         _gate = new NoiseGate(sampleRate, id: $"{id}.gate");
         _compressor = new Compressor(sampleRate, id: $"{id}.compressor");
@@ -87,10 +94,14 @@ public sealed class MixerStrip
     public Limiter? Limiter => _limiter;
 
     /// <summary>Processors in the chain, limiter included only once it exists.</summary>
-    public int ProcessorCount => _limiter is null ? 6 : 7;
+    public int ProcessorCount => _limiter is null ? 7 : 8;
 
-    /// <summary>Latency this strip adds, in frames: the limiter's 240, or 0 when it is off.</summary>
-    public int LatencyFrames => _limiter is not null && !_limiter.Bypass ? _limiter.LatencyFrames : 0;
+    /// <summary>
+    /// Latency this strip adds, in frames: the denoiser's 960 while it is active, plus the
+    /// limiter's 240 when it is on. The pitch shifter is summed by the interleaved strip.
+    /// </summary>
+    public int LatencyFrames =>
+        _denoise.LatencyFrames + (_limiter is not null && !_limiter.Bypass ? _limiter.LatencyFrames : 0);
 
     /// <summary>
     /// True when the strip cannot change the buffer at all: master bypass, or every stage is
@@ -99,7 +110,8 @@ public sealed class MixerStrip
     /// </summary>
     public bool IsPassthrough =>
         _current.MasterBypass ||
-        ((_highPass.Bypass || _highPass.IsNeutral) &&
+        ((_denoise.Bypass || _denoise.IsNeutral) &&
+         (_highPass.Bypass || _highPass.IsNeutral) &&
          (_lowPass.Bypass || _lowPass.IsNeutral) &&
          (_eq.Bypass || _eq.IsFlat) &&
          (_gate.Bypass || _gate.IsNeutral) &&
@@ -122,6 +134,9 @@ public sealed class MixerStrip
     {
         _current = p;
         bool bypassAll = p.MasterBypass;
+
+        _denoise.Apply(p.Noise);
+        _denoise.Bypass = bypassAll || p.Noise.IsNeutral;
 
         _highPass.Bypass = bypassAll || !p.HighPass.Enabled;
         _highPass.FrequencyHz = p.HighPass.FrequencyHz;
@@ -177,6 +192,9 @@ public sealed class MixerStrip
     {
         if (IsPassthrough) return;
 
+        // Denoise first: ahead of the high-pass, the EQ and the gate. See RnNoiseStage's remarks
+        // for why this is not placed after the gate.
+        _denoise.Process(samples);
         _highPass.Process(samples);
         _lowPass.Process(samples);
         _eq.Process(samples);
@@ -213,6 +231,7 @@ public sealed class MixerStrip
     /// <summary>Clears every filter and envelope state, limiter lookahead included.</summary>
     public void Reset()
     {
+        _denoise.Reset();
         _highPass.Reset();
         _lowPass.Reset();
         _eq.Reset();
@@ -220,5 +239,15 @@ public sealed class MixerStrip
         _compressor.Reset();
         _deEsser.Reset();
         _limiter?.Reset();
+    }
+
+    /// <summary>
+    /// Releases the denoiser's unmanaged state. Ordered after every other stage deliberately:
+    /// with the <c>NULL</c> model there is nothing else to free, but a future non-NULL model
+    /// must outlive and be freed after all of its states.
+    /// </summary>
+    public void Dispose()
+    {
+        _denoise.Dispose();
     }
 }

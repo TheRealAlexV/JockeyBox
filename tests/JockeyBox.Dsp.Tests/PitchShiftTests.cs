@@ -171,11 +171,28 @@ public class PitchShiftTests
     [Fact]
     public void Worst_case_strip_latency_stays_under_the_pad_ring_ceiling()
     {
-        var strip = new InterleavedMixerStrip(SampleRate, 2, BlockFrames);
-        strip.Apply(StripParameters.Neutral with { PitchShift = new PitchShiftParameters(true, -12) });
+        // The real worst case is all three latency stages at once: denoise 960, limiter 240 and
+        // the pitch shifter's largest recorded down-shift. The pitch stage reports its tonal
+        // mean (554) as a constant; white-noise down-shift was measured at 829, and using the
+        // constant would hide 275 frames of the real cost. This test uses the recorded figure.
+        var strip = new InterleavedMixerStrip(SampleRate, 2, BlockFrames,
+            () => new FixedDenoiseEngine(480, 960));
+        strip.Apply(StripParameters.Neutral with
+        {
+            Noise = new NoiseSuppressionParameters(Enabled: true, Mix: 1.0),
+            Limiter = new LimiterParameters(Enabled: true),
+            PitchShift = new PitchShiftParameters(true, -12),
+        });
 
-        Assert.True(strip.LatencyFrames <= PadRing.MaxFrames,
-            $"strip latency {strip.LatencyFrames} exceeds PadRing.MaxFrames {PadRing.MaxFrames}");
+        int reported = strip.LatencyFrames; // 960 + 240 + 554
+        int measuredWorst = reported
+            - PitchShiftStage.MeanDownDelayFramesAt48k
+            + 829; // PitchShiftStage's recorded white-noise down-shift
+        int headroom = PadRing.MaxFrames - measuredWorst;
+
+        Assert.True(headroom >= 0,
+            $"three-stage worst case {measuredWorst} frames ({reported} reported, pitch at 829) " +
+            $"leaves {headroom} of {PadRing.MaxFrames} frames of headroom");
     }
 
     [Fact]

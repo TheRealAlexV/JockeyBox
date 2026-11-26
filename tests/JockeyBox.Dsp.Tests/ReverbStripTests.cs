@@ -76,15 +76,15 @@ public class ReverbStripTests
     public void Reverb_adds_no_processor_and_no_latency()
     {
         var strip = Strip();
-        Assert.Equal(6, strip.ProcessorCount);
+        Assert.Equal(7, strip.ProcessorCount);
         Assert.Equal(0, strip.LatencyFrames);
 
         strip.SetReverb(Enabled());
-        Assert.Equal(6, strip.ProcessorCount);
+        Assert.Equal(7, strip.ProcessorCount);
         Assert.Equal(0, strip.LatencyFrames);
 
         // The limiter is the one stage that does add a processor and latency; reverb on top of
-        // it must not change the count. The base 6 -> 7 fact lives in MixerStripTests, which is
+        // it must not change the count. The base 7 -> 8 fact lives in MixerStripTests, which is
         // where the limiter is built.
         strip.Apply(StripParameters.Neutral with
         {
@@ -92,7 +92,7 @@ public class ReverbStripTests
             Reverb = Enabled(),
         });
 
-        Assert.Equal(7, strip.ProcessorCount);
+        Assert.Equal(8, strip.ProcessorCount);
     }
 
     /// <summary>

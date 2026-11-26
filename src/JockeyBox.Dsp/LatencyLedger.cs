@@ -108,11 +108,22 @@ public sealed class LatencyLedger
 public sealed class PadRing
 {
     /// <summary>
-    /// Hard ceiling on alignment padding: 40 ms at 48 kHz. The AFX frame is 480 frames and the
-    /// limiter carries 240, so a 960 ceiling left exactly zero headroom; 1920 covers AFX plus
-    /// the limiter with room to spare.
+    /// Hard ceiling on alignment padding, in frames, sized from the measured worst case rather
+    /// than a round number. Denoise 960 + limiter 240 + pitch tonal mean 554 = 1754 nominal;
+    /// with the pitch shifter's worst measured tonal down-shift (655) it is 1855; with its
+    /// white-noise down-shift (829) it is 2029, about 42 ms at 48 kHz. 4096 leaves 2067 frames
+    /// of headroom above that.
+    ///
+    /// The ceiling exists so a channel that needs aligning is padded, never left skewed: on
+    /// overrun the pad clamps and the guarantee fails silently. Raising it costs a few tens of
+    /// kilobytes per ring, and padding is only applied when two devices run different chains,
+    /// so identical chains pay nothing.
+    ///
+    /// The relationship is enforced by a test: PitchShiftTests composes all three stages and
+    /// fails if the worst case passes this number, so a future stage that pushes past it fails
+    /// a test instead of overrunning silently.
     /// </summary>
-    public const int MaxFrames = 1920;
+    public const int MaxFrames = 4096;
 
     /// <summary>A ramp covers 480 frames, so a pad change slides over 10 ms at 48 kHz.</summary>
     private const int FadeFrames = 480;

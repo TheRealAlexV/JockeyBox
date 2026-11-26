@@ -171,6 +171,7 @@ public sealed class MixerSettingsStore
             DeEsser: dto.DeEsser?.ToParameters(neutral.DeEsser) ?? neutral.DeEsser,
             Reverb: dto.Reverb?.ToParameters(neutral.Reverb) ?? neutral.Reverb,
             PitchShift: dto.PitchShift?.ToParameters(neutral.PitchShift) ?? neutral.PitchShift,
+            Noise: dto.Denoise?.ToParameters(neutral.Noise) ?? neutral.Noise,
             MasterBypass: dto.Bypass ?? false).Clamp();
     }
 
@@ -204,6 +205,7 @@ public sealed class MixerSettingsStore
         public DeEsserDto? DeEsser { get; set; }
         public ReverbDto? Reverb { get; set; }
         public PitchShiftDto? PitchShift { get; set; }
+        public DenoiseDto? Denoise { get; set; }
         public bool? Bypass { get; set; }
 
         public static DeviceDto From(StripParameters strip) => new()
@@ -223,8 +225,26 @@ public sealed class MixerSettingsStore
             DeEsser = DeEsserDto.From(strip.DeEsser),
             Reverb = ReverbDto.From(strip.Reverb),
             PitchShift = PitchShiftDto.From(strip.PitchShift),
+            Denoise = DenoiseDto.From(strip.Noise),
             Bypass = strip.MasterBypass,
         };
+    }
+
+    /// <summary>RNNoise settings: <c>on</c> and <c>mix</c>, with the neutral fallback.</summary>
+    private sealed class DenoiseDto
+    {
+        public bool? On { get; set; }
+        public double? Mix { get; set; }
+
+        public static DenoiseDto From(NoiseSuppressionParameters noise) => new()
+        {
+            On = noise.Enabled,
+            Mix = noise.Mix,
+        };
+
+        public NoiseSuppressionParameters ToParameters(NoiseSuppressionParameters fallback) => new(
+            On ?? fallback.Enabled,
+            Mix ?? fallback.Mix);
     }
 
     private sealed class GateDto

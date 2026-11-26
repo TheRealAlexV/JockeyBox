@@ -5,7 +5,7 @@ using JockeyBox.ViewModels;
 namespace JockeyBox.Views;
 
 /// <summary>
-/// The selected strip's own stages in signal order, EQ through the reverb send, for one
+/// The selected strip's own stages in signal order, noise suppression through the pitch shifter, for one
 /// channel.
 ///
 /// <para><b>Why the double-click handler lives here.</b> It reads the row's

@@ -256,6 +256,11 @@ public sealed partial class MicChannelStripViewModel : ObservableObject
     public bool PitchShiftOn { get => _p.PitchShift.On; set => Write(p => p with { PitchShift = p.PitchShift with { On = value } }); }
     public double PitchShiftSemitones { get => _p.PitchShift.Semitones; set => Write(p => p with { PitchShift = p.PitchShift with { Semitones = value } }); }
 
+    // ---------------------------------------------------------------- noise suppression
+
+    public bool NoiseSuppressionOn { get => _p.Noise.Enabled; set => Write(p => p with { Noise = p.Noise with { Enabled = value } }); }
+    public double NoiseSuppressionMix { get => _p.Noise.Mix; set => Write(p => p with { Noise = p.Noise with { Mix = value } }); }
+
     // ---------------------------------------------------------------- reset to neutral
 
     /// <summary>
@@ -323,6 +328,11 @@ public sealed partial class MicChannelStripViewModel : ObservableObject
             // Pitch ships off and centred: zero semitones is the bit-transparent state.
             case "pitch.on": PitchShiftOn = PitchShiftParameters.Neutral.On; break;
             case "pitch.semitones": PitchShiftSemitones = PitchShiftParameters.Neutral.Semitones; break;
+
+            // The denoiser ships off with the blend fully wet, so a double-click gives back
+            // the stage as the strip ships it: a plain on/off until someone dials it back.
+            case "denoise.on": NoiseSuppressionOn = NoiseSuppressionParameters.Neutral.Enabled; break;
+            case "denoise.mix": NoiseSuppressionMix = NoiseSuppressionParameters.Neutral.Mix; break;
         }
     }
 }

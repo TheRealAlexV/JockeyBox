@@ -1,4 +1,5 @@
 using JockeyBox.Dsp.Reverb;
+using JockeyBox.Dsp.RnNoise;
 
 namespace JockeyBox.Dsp;
 
@@ -38,7 +39,7 @@ namespace JockeyBox.Dsp;
 /// for the device block; reporting channel 1's 0 would under-compensate the pair.
 /// </para>
 /// </summary>
-public sealed class InterleavedMixerStrip
+public sealed class InterleavedMixerStrip : IDisposable
 {
     private readonly MixerStrip[] _strips;
     private float[] _scratch;
@@ -62,7 +63,8 @@ public sealed class InterleavedMixerStrip
     /// <param name="sampleRate">Device rate, 48 kHz in the engine.</param>
     /// <param name="channels">Interleaved channel count, 2 for stereo.</param>
     /// <param name="blockFrames">Frames per block; the scratch block is this long.</param>
-    public InterleavedMixerStrip(double sampleRate, int channels, int blockFrames)
+    public InterleavedMixerStrip(double sampleRate, int channels, int blockFrames,
+        Func<IDenoiseFrameProcessor>? denoiseFactory = null)
     {
         if (sampleRate <= 0) throw new ArgumentOutOfRangeException(nameof(sampleRate));
         if (channels != 2)
@@ -80,7 +82,7 @@ public sealed class InterleavedMixerStrip
         _wet = new float[blockFrames * channels];
         _reverb = new ReverbSend(sampleRate);
         _strips = new MixerStrip[channels];
-        for (int c = 0; c < channels; c++) _strips[c] = new MixerStrip(sampleRate, $"strip.{c}");
+        for (int c = 0; c < channels; c++) _strips[c] = new MixerStrip(sampleRate, $"strip.{c}", denoiseFactory);
 
         _pitchClock = new PitchShiftClock(PitchShiftStage.RingFramesFor(sampleRate), autoAdvance: false);
         _pitch = new PitchShiftStage[channels];
@@ -205,5 +207,14 @@ public sealed class InterleavedMixerStrip
         }
 
         _reverb.Reset();
+    }
+
+    /// <summary>
+    /// Releases every channel's denoiser state. A model, if one were ever loaded, outlives its
+    /// states and would be freed after them.
+    /// </summary>
+    public void Dispose()
+    {
+        for (int c = 0; c < _strips.Length; c++) _strips[c].Dispose();
     }
 }

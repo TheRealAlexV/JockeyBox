@@ -137,6 +137,31 @@ public readonly record struct DeEsserParameters(
         Ranges.Fix(SidechainHighHz, 20, 24000, 9000));
 }
 
+/// <summary>
+/// RNNoise denoiser settings. Disabled is the neutral state.
+/// <para>
+/// <see cref="Mix"/> is the wet amount, so an operator can dial suppression down instead of only
+/// switching it off. <see cref="Mix"/> 0 is the same as disabled: the stage passes the dry
+/// signal and makes no native call.
+/// </para>
+/// </summary>
+public readonly record struct NoiseSuppressionParameters(
+    bool Enabled,
+    double Mix = 1.0)
+{
+    public const double MinMix = 0;
+    public const double MaxMix = 1;
+
+    public static readonly NoiseSuppressionParameters Neutral = new(Enabled: false);
+
+    /// <summary>True when the stage would leave the buffer untouched.</summary>
+    public bool IsNeutral => !Enabled || Mix <= 0;
+
+    public NoiseSuppressionParameters Clamp() => new(
+        Enabled,
+        Ranges.Fix(Mix, MinMix, MaxMix, 1.0));
+}
+
 /// <summary>Compressor settings. Disabled is the neutral state.</summary>
 public readonly record struct CompressorParameters(
     bool Enabled,
@@ -188,6 +213,7 @@ public readonly record struct StripParameters(
     DeEsserParameters DeEsser,
     ReverbParameters Reverb,
     PitchShiftParameters PitchShift = default,
+    NoiseSuppressionParameters Noise = default,
     bool MasterBypass = false)
 {
     /// <summary>
@@ -204,7 +230,8 @@ public readonly record struct StripParameters(
         LimiterParameters.Neutral,
         DeEsserParameters.Neutral,
         ReverbParameters.Neutral,
-        PitchShiftParameters.Neutral);
+        PitchShiftParameters.Neutral,
+        NoiseSuppressionParameters.Neutral);
 
     /// <summary>
     /// Returns this value with every field inside its valid range. Never throws: NaN becomes
@@ -221,6 +248,7 @@ public readonly record struct StripParameters(
         DeEsser = DeEsser.Clamp(),
         Reverb = Reverb.Clamp(),
         PitchShift = PitchShift.Clamp(),
+        Noise = Noise.Clamp(),
     };
 
     /// <summary>Alias for <see cref="Clamp"/>: the spelling used by callers that mean "make this safe to apply".</summary>

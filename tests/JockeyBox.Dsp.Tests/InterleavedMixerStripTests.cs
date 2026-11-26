@@ -17,7 +17,7 @@ public class InterleavedMixerStripTests
 
         Assert.True(strip.IsPassthrough);
         Assert.Equal(0, strip.LatencyFrames);
-        Assert.Equal(6, strip.ProcessorCount);
+        Assert.Equal(7, strip.ProcessorCount);
 
         var input = TestSignals.WhiteNoise(BlockFrames * Channels, seed: 77);
         var output = (float[])input.Clone();

@@ -552,6 +552,15 @@ public sealed class MixerApiRouter
                 p => p.MasterBypass ? 1 : 0,
                 (p, v) => p with { MasterBypass = v > 0.5 }),
 
+            new("denoise.on", "Denoise", "Noise", ControlKind.Toggle, 0, 1, 1, 0, "",
+                p => p.Noise.Enabled ? 1 : 0,
+                (p, v) => p with { Noise = p.Noise with { Enabled = v > 0.5 } }),
+
+            new("denoise.mix", "Denoise mix", "Noise", ControlKind.Continuous,
+                NoiseSuppressionParameters.MinMix, NoiseSuppressionParameters.MaxMix, 0.01, 1, "",
+                p => p.Noise.Mix,
+                (p, v) => p with { Noise = p.Noise with { Mix = v } }),
+
             new("hp.on", "High-pass", "Filters", ControlKind.Toggle, 0, 1, 1, 1, "",
                 p => p.HighPass.Enabled ? 1 : 0,
                 (p, v) => p with { HighPass = p.HighPass with { Enabled = v > 0.5 } }),

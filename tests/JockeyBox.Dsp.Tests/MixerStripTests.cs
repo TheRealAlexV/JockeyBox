@@ -15,7 +15,7 @@ public class MixerStripTests
         Assert.Equal(StripParameters.Neutral, strip.Parameters);
         Assert.True(strip.IsPassthrough);
         Assert.Equal(0, strip.LatencyFrames);
-        Assert.Equal(6, strip.ProcessorCount);
+        Assert.Equal(7, strip.ProcessorCount);
 
         var input = TestSignals.WhiteNoise(4096, seed: 31);
         var output = (float[])input.Clone();
@@ -23,6 +23,25 @@ public class MixerStripTests
         strip.Process(output, 0, output.Length);
 
         TestSignals.AssertBitExact(input, output, "a neutral strip must leave the buffer untouched");
+    }
+
+    [Fact]
+    public void Latency_includes_an_active_denoiser()
+    {
+        var strip = new MixerStrip(SampleRate, "mic.denoise", () => new FixedDenoiseEngine(480, 960));
+        strip.Apply(StripParameters.Neutral with
+        {
+            Noise = new NoiseSuppressionParameters(Enabled: true, Mix: 1.0),
+        });
+
+        // 960 from the denoiser, 0 from the limiter. Removing the denoise term reads 0 here.
+        Assert.Equal(960, strip.LatencyFrames);
+        Assert.False(strip.IsPassthrough);
+
+        strip.Apply(strip.Parameters with { Limiter = new LimiterParameters(Enabled: true) });
+
+        // Additive: the denoiser's 960 plus the limiter's 240.
+        Assert.Equal(1200, strip.LatencyFrames);
     }
 
     [Fact]
@@ -107,14 +126,14 @@ public class MixerStripTests
 
         Assert.Null(strip.Limiter);
         Assert.Equal(0, strip.LatencyFrames);
-        Assert.Equal(6, strip.ProcessorCount);
+        Assert.Equal(7, strip.ProcessorCount);
 
         strip.Apply(StripParameters.Neutral with { Limiter = new LimiterParameters(Enabled: true) });
 
         Assert.NotNull(strip.Limiter);
         Assert.Equal(240, strip.Limiter!.LatencyFrames);
         Assert.Equal(240, strip.LatencyFrames);
-        Assert.Equal(7, strip.ProcessorCount);
+        Assert.Equal(8, strip.ProcessorCount);
 
         // Switching it back off restores zero latency and the transparent fast path, without
         // freeing the limiter (so toggling does not churn the heap).
