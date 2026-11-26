@@ -905,8 +905,15 @@
         <Setter Property="Margin" Value="0,3,0,0"/>
     </Style>
 
+    <!-- The readout is the data; the label beside it is scaffolding, so the value
+         reads brighter. TextBrush on PanelBrush is 14.5:1 and the labels' dim
+         TextDimBrush is 5.6:1; with no Foreground of its own RackValue fell through
+         to the WPF default black and measured 1.2:1 on the panel, making the digits
+         the least legible text in the rack. Every group's value uses this style, so
+         the hierarchy holds rack-wide. -->
     <Style x:Key="RackValue" TargetType="TextBlock">
         <Setter Property="Width" Value="34"/>
+        <Setter Property="Foreground" Value="{StaticResource TextBrush}"/>
         <Setter Property="TextAlignment" Value="Right"/>
         <Setter Property="FontFamily" Value="Consolas"/>
         <Setter Property="FontSize" Value="10"/>

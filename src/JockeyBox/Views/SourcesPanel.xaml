@@ -34,8 +34,20 @@
                     Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource BorderBrush}"
                     BorderThickness="1" CornerRadius="8" Padding="12,8"
                     Visibility="{Binding ShowStripControls, Converter={StaticResource BoolToVisibility}}">
-                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled"
-                              MaxHeight="196">
+                <!-- No height cap: 196 px hid 535 px of rack inside an 817 px pane while
+                     the rest of the pane sat empty. The rack now sizes to its content
+                     and the root scroller above takes over when the pane is too short,
+                     so Auto still scrolls a small window instead of clipping it. -->
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <!-- Group spacing is one rule, not a per-group number: every group
+                         carries a 3 px bottom gap, so a header always starts clear of
+                         whatever the group above ended with instead of inheriting
+                         whatever air that element happened to leave. Inside a group the
+                         pitch stays 3 px (RackRow) and a filter pair 6 px, both tighter
+                         than the group gap, so a header never reads as another row.
+                         Two elements end a group flush rather than in text: the LP row
+                         carries its own 6 px underneath, the same clearance HP has above
+                         it, and the NOISE caption's 10 px is the paragraph's lead. -->
                     <ItemsControl ItemsSource="{Binding BandStrip}">
                         <ItemsControl.ItemTemplate>
                             <DataTemplate>
@@ -49,7 +61,7 @@
                                          delay, so its caption warns like the pitch group's. StripParameters
                                          declares the stage last, after the pitch shifter; the rack reads in
                                          signal order, and the view model's section follows the declaration. -->
-                                    <StackPanel Width="180" Margin="0,0,10,0">
+                                    <StackPanel Width="180" Margin="0,0,10,10">
                                         <DockPanel Tag="denoise.on" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
                                             <TextBlock Text="NOISE" Style="{StaticResource RackGroupTitle}"/>
                                             <ToggleButton HorizontalAlignment="Left" Style="{StaticResource RackBandGate}"
@@ -68,15 +80,20 @@
                                             <Slider Width="56" Minimum="0" Maximum="1" SmallChange="0.01" LargeChange="0.1"
                                                     Value="{Binding NoiseSuppressionMix, Mode=TwoWay}" AutomationProperties.Name="Noise suppression mix"/>
                                         </DockPanel>
+                                        <!-- Inset to the row column and given room underneath, so the
+                                             note hangs off the NOISE rows instead of floating between
+                                             two groups: it sits closer to the mix row it explains than
+                                             to the EQ title below it. A standing note on the stage's
+                                             20 ms of latency, not a warning about the switch. -->
                                         <TextBlock Style="{StaticResource RackCaption}" TextWrapping="Wrap"
-                                                   Margin="0,6,0,0"
+                                                   Margin="30,6,0,0"
                                                    Text="Vocal lands about 20 ms late: the model holds two frames."/>
                                     </StackPanel>
 
                                     <!-- EQ: ten ISO octave bands, -15..+15 dB (the DSP's own limit,
                                          not the -12 a casual read would assume). Two columns of
                                          five keep the band short enough to sit under the row. -->
-                                    <StackPanel Width="244" Margin="0,0,10,0">
+                                    <StackPanel Width="244" Margin="0,0,10,3">
                                         <TextBlock Text="EQ (dB)" Style="{StaticResource RackGroupTitle}"/>
                                         <Grid Margin="0,3,0,0">
                                             <Grid.ColumnDefinitions>
@@ -153,37 +170,48 @@
                                     </StackPanel>
 
                                     <!-- Band limits. Neutral is wide open; the fader is log so a voice
-                                         filter's useful band is not two pixels wide. -->
-                                    <StackPanel Width="190" Margin="0,0,10,0">
+                                         filter's useful band is not two pixels wide. Each limit is one
+                                         row like every other parameter: switch, readout, fader. The
+                                         switch sits in the row but carries no reset, because a switch is
+                                         a switch and a double click on it does nothing; the reset stays
+                                         on the fader, where it was before. The readout used to be the
+                                         row's last child, so DockPanel centred it in the leftover width
+                                         and it floated ~89 px off its own switch, in no column at all. -->
+                                    <StackPanel Width="190" Margin="0,0,10,3">
                                         <TextBlock Text="FILTERS (Hz)" Style="{StaticResource RackGroupTitle}"/>
                                         <DockPanel Style="{StaticResource RackRow}">
                                             <TextBlock Text="HP" Style="{StaticResource RackRowLabel}"/>
                                             <ToggleButton Style="{StaticResource RackBandGate}" Margin="0,0,6,0"
                                                           IsChecked="{Binding HighPassOn, Mode=TwoWay}"
                                                           AutomationProperties.Name="High-pass on"/>
-                                            <TextBlock Text="{Binding HighPassHz, StringFormat={}{0:0}}" Style="{StaticResource RackValue}" Width="52"/>
-                                        </DockPanel>
-                                        <DockPanel Style="{StaticResource RackRow}" Tag="hp.freq" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
-                                            <Slider Minimum="0" Maximum="1" SmallChange="0.01" LargeChange="0.05"
+                                            <!-- Empty unit gutter: the group title already says Hz, and
+                                                 the gutter keeps the slider on the same x as LP's. -->
+                                            <TextBlock Style="{StaticResource RackUnit}"/>
+                                            <TextBlock Text="{Binding HighPassHz, StringFormat={}{0:0}}" Style="{StaticResource RackValue}"/>
+                                            <Slider Width="56" Minimum="0" Maximum="1" SmallChange="0.01" LargeChange="0.05"
+                                                    Tag="hp.freq" PreviewMouseLeftButtonDown="OnStripValueDoubleClick"
                                                     Value="{Binding HighPassSlider, Mode=TwoWay}"
                                                     AutomationProperties.Name="High-pass corner"/>
                                         </DockPanel>
-                                        <DockPanel Style="{StaticResource RackRow}" Margin="0,6,0,0">
+                                        <!-- 6 px above from the pair gap and 6 px below so the
+                                             row is not left flush against the GATE header: a
+                                             solid switch ends a group harder than text does. -->
+                                        <DockPanel Style="{StaticResource RackRow}" Margin="0,6,0,6">
                                             <TextBlock Text="LP" Style="{StaticResource RackRowLabel}"/>
                                             <ToggleButton Style="{StaticResource RackBandGate}" Margin="0,0,6,0"
                                                           IsChecked="{Binding LowPassOn, Mode=TwoWay}"
                                                           AutomationProperties.Name="Low-pass on"/>
-                                            <TextBlock Text="{Binding LowPassHz, StringFormat={}{0:0}}" Style="{StaticResource RackValue}" Width="52"/>
-                                        </DockPanel>
-                                        <DockPanel Style="{StaticResource RackRow}" Tag="lp.freq" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
-                                            <Slider Minimum="0" Maximum="1" SmallChange="0.01" LargeChange="0.05"
+                                            <TextBlock Style="{StaticResource RackUnit}"/>
+                                            <TextBlock Text="{Binding LowPassHz, StringFormat={}{0:0}}" Style="{StaticResource RackValue}"/>
+                                            <Slider Width="56" Minimum="0" Maximum="1" SmallChange="0.01" LargeChange="0.05"
+                                                    Tag="lp.freq" PreviewMouseLeftButtonDown="OnStripValueDoubleClick"
                                                     Value="{Binding LowPassSlider, Mode=TwoWay}"
                                                     AutomationProperties.Name="Low-pass corner"/>
                                         </DockPanel>
                                     </StackPanel>
 
                                     <!-- Gate: off is neutral, so the pill reads OFF on a fresh strip. -->
-                                    <StackPanel Width="290" Margin="0,0,10,0">
+                                    <StackPanel Width="290" Margin="0,0,10,3">
                                         <DockPanel>
                                             <TextBlock Text="GATE" Style="{StaticResource RackGroupTitle}"/>
                                             <ToggleButton HorizontalAlignment="Left" Style="{StaticResource RackBandGate}"
@@ -248,7 +276,7 @@
                                     </StackPanel>
 
                                     <!-- Compressor. -->
-                                    <StackPanel Width="290" Margin="0,0,10,0">
+                                    <StackPanel Width="290" Margin="0,0,10,3">
                                         <DockPanel>
                                             <TextBlock Text="COMP" Style="{StaticResource RackGroupTitle}"/>
                                             <ToggleButton HorizontalAlignment="Left" Style="{StaticResource RackBandGate}"
@@ -326,7 +354,7 @@
                                          band is two ordinary rows whose bounds come from each other:
                                          LO's maximum is HI's position and HI's minimum is LO's, which
                                          stops the pair crossing without inventing a control. -->
-                                    <StackPanel Width="290" Margin="0,0,10,0">
+                                    <StackPanel Width="290" Margin="0,0,10,3">
                                         <DockPanel Tag="deess.on" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
                                             <TextBlock Text="DE-ESS" Style="{StaticResource RackGroupTitle}"/>
                                             <ToggleButton HorizontalAlignment="Left" Style="{StaticResource RackBandGate}"
@@ -424,7 +452,7 @@
 
                                     <!-- Limiter: the one stage that costs latency, and the CHAIN column
                                          says so the moment it is switched on. -->
-                                    <StackPanel Width="180" Margin="0,0,10,0">
+                                    <StackPanel Width="180" Margin="0,0,10,3">
                                         <DockPanel>
                                             <TextBlock Text="LIMITER" Style="{StaticResource RackGroupTitle}"/>
                                             <ToggleButton HorizontalAlignment="Left" Style="{StaticResource RackBandGate}"
@@ -455,7 +483,7 @@
                                          Off is neutral, so the pill reads OFF on a fresh
                                          strip. Wet ends at 0.4 because the engine clamps there: the
                                          slider's right edge is the real ceiling, not a display choice. -->
-                                    <StackPanel Width="180" Margin="0,0,10,0">
+                                    <StackPanel Width="180" Margin="0,0,10,3">
                                         <DockPanel Tag="rev.on" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
                                             <TextBlock Text="REVERB" Style="{StaticResource RackGroupTitle}"/>
                                             <ToggleButton HorizontalAlignment="Left" Style="{StaticResource RackBandGate}"
@@ -490,7 +518,7 @@
                                          (11.5 ms) shifting down at 48 kHz. A deep down-shift peaks near
                                          22 ms, but that is the splice catching up, not the steady
                                          latency, so the caption names the means only. -->
-                                    <StackPanel Width="180" Margin="0,0,10,0">
+                                    <StackPanel Width="180" Margin="0,0,10,3">
                                         <DockPanel Tag="pitch.on" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
                                             <TextBlock Text="PITCH" Style="{StaticResource RackGroupTitle}"/>
                                             <ToggleButton HorizontalAlignment="Left" Style="{StaticResource RackBandGate}"
