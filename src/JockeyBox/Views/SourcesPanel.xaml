@@ -419,8 +419,8 @@
                                                    Margin="0,6,0,0"/>
                                     </StackPanel>
 
-                                    <!-- Reverb send. Last stage in StripParameters, so it sits last in
-                                         the rack. Off is neutral, so the pill reads OFF on a fresh
+                                    <!-- Reverb send. Sits after the dynamics and de-esser because StripParameters puts it there; the pitch shifter follows it.
+                                         Off is neutral, so the pill reads OFF on a fresh
                                          strip. Wet ends at 0.4 because the engine clamps there: the
                                          slider's right edge is the real ceiling, not a display choice. -->
                                     <StackPanel Width="180" Margin="0,0,10,0">
@@ -448,6 +448,39 @@
                                                     Value="{Binding ReverbWet, Mode=TwoWay}" AutomationProperties.Name="Reverb wet"/>
                                         </DockPanel>
                                         <TextBlock Text="Wet stops at 0.40: that is the send's ceiling, not the slider's."
+                                                   Style="{StaticResource RackCaption}" TextWrapping="Wrap"
+                                                   Margin="0,6,0,0"/>
+                                    </StackPanel>
+
+                                    <!-- Pitch shifter: last stage in StripParameters, so it sits after
+                                         REVERB. It is not free the way the filters are: measured mean
+                                         delay is 448 frames (9.3 ms) shifting up and 554 frames
+                                         (11.5 ms) shifting down at 48 kHz. A deep down-shift peaks near
+                                         22 ms, but that is the splice catching up, not the steady
+                                         latency, so the caption names the means only. -->
+                                    <StackPanel Width="180" Margin="0,0,10,0">
+                                        <DockPanel Tag="pitch.on" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
+                                            <TextBlock Text="PITCH" Style="{StaticResource RackGroupTitle}"/>
+                                            <ToggleButton HorizontalAlignment="Left" Style="{StaticResource RackBandGate}"
+                                                          Margin="6,0,0,0"
+                                                          IsChecked="{Binding PitchShiftOn, Mode=TwoWay}"
+                                                          AutomationProperties.Name="Pitch shift on"/>
+                                        </DockPanel>
+                                        <DockPanel Style="{StaticResource RackRow}" Tag="pitch.semitones" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
+                                            <TextBlock Text="SEMI" Style="{StaticResource RackRowLabel}"/>
+                                            <!-- Semitones is already the label, so the unit gutter stays
+                                                 empty and the slider keeps the shared x. -->
+                                            <TextBlock Style="{StaticResource RackUnit}"/>
+                                            <!-- Signed, three sections. The EQ rows use the same format:
+                                                 an explicit + makes direction readable, and zero falls
+                                                 through to the last section as "0.0" rather than "+0.0".
+                                                 "+12.0" and "-12.0" are both five glyphs, so a 40 px box
+                                                 holds the extremes with room to spare. -->
+                                            <TextBlock Text="{Binding PitchShiftSemitones, StringFormat={}{0:+0.0;-0.0;0.0}}" Style="{StaticResource RackValue}" Width="40"/>
+                                            <Slider Width="56" Minimum="-12" Maximum="12" SmallChange="0.1" LargeChange="1"
+                                                    Value="{Binding PitchShiftSemitones, Mode=TwoWay}" AutomationProperties.Name="Pitch shift semitones"/>
+                                        </DockPanel>
+                                        <TextBlock Text="Vocal lands about 9 ms late shifting up, 11 ms down."
                                                    Style="{StaticResource RackCaption}" TextWrapping="Wrap"
                                                    Margin="0,6,0,0"/>
                                     </StackPanel>

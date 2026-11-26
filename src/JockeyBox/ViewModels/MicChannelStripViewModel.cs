@@ -251,6 +251,11 @@ public sealed partial class MicChannelStripViewModel : ObservableObject
     public double ReverbSize { get => _p.Reverb.Size; set => Write(p => p with { Reverb = p.Reverb with { Size = value } }); }
     public double ReverbWet { get => _p.Reverb.Wet; set => Write(p => p with { Reverb = p.Reverb with { Wet = value } }); }
 
+    // ---------------------------------------------------------------- pitch shifter
+
+    public bool PitchShiftOn { get => _p.PitchShift.On; set => Write(p => p with { PitchShift = p.PitchShift with { On = value } }); }
+    public double PitchShiftSemitones { get => _p.PitchShift.Semitones; set => Write(p => p with { PitchShift = p.PitchShift with { Semitones = value } }); }
+
     // ---------------------------------------------------------------- reset to neutral
 
     /// <summary>
@@ -314,6 +319,10 @@ public sealed partial class MicChannelStripViewModel : ObservableObject
             case "rev.on": ReverbOn = ReverbParameters.Neutral.On; break;
             case "rev.size": ReverbSize = ReverbParameters.Neutral.Size; break;
             case "rev.wet": ReverbWet = ReverbParameters.Neutral.Wet; break;
+
+            // Pitch ships off and centred: zero semitones is the bit-transparent state.
+            case "pitch.on": PitchShiftOn = PitchShiftParameters.Neutral.On; break;
+            case "pitch.semitones": PitchShiftSemitones = PitchShiftParameters.Neutral.Semitones; break;
         }
     }
 }

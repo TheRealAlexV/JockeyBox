@@ -47,6 +47,15 @@ public sealed class InterleavedMixerStrip
     /// <summary>This device's reverb send. One per device is what keeps a duet's tails separate.</summary>
     private readonly ReverbSend _reverb;
 
+    /// <summary>
+    /// One write head for both channel shifters. Advancing each channel on its own index would
+    /// let the two delay windows drift apart, which is a wandering stereo image.
+    /// </summary>
+    private readonly PitchShiftClock _pitchClock;
+
+    /// <summary>One pitch shifter per channel: the stage is mono, like every chain processor.</summary>
+    private readonly PitchShiftStage[] _pitch;
+
     /// <summary>Interleaved wet return, <c>frames × channels</c> at the constructed block size.</summary>
     private float[] _wet;
 
@@ -72,6 +81,11 @@ public sealed class InterleavedMixerStrip
         _reverb = new ReverbSend(sampleRate);
         _strips = new MixerStrip[channels];
         for (int c = 0; c < channels; c++) _strips[c] = new MixerStrip(sampleRate, $"strip.{c}");
+
+        _pitchClock = new PitchShiftClock(PitchShiftStage.RingFramesFor(sampleRate), autoAdvance: false);
+        _pitch = new PitchShiftStage[channels];
+        for (int c = 0; c < channels; c++)
+            _pitch[c] = new PitchShiftStage(sampleRate, _pitchClock, id: $"pitch.{c}");
     }
 
     /// <summary>Interleaved channel count.</summary>
@@ -86,6 +100,10 @@ public sealed class InterleavedMixerStrip
         get
         {
             if (!_reverb.IsNeutral) return false;
+            for (int c = 0; c < _pitch.Length; c++)
+            {
+                if (!_pitch[c].IsNeutral) return false;
+            }
 
             for (int c = 0; c < _strips.Length; c++)
             {
@@ -100,7 +118,7 @@ public sealed class InterleavedMixerStrip
     /// Processing latency of the device block, taken from channel 0. See the class remarks on
     /// why the pair mirrors channel 0 rather than reporting each channel separately.
     /// </summary>
-    public int LatencyFrames => _strips[0].LatencyFrames;
+    public int LatencyFrames => _strips[0].LatencyFrames + _pitch[0].LatencyFrames;
 
     /// <summary>Processor count of channel 0, the same shape every channel is built from.</summary>
     public int ProcessorCount => _strips[0].ProcessorCount;
@@ -114,10 +132,18 @@ public sealed class InterleavedMixerStrip
     /// <summary>Retunes the send in place: the delay lines are not reallocated.</summary>
     public void SetReverb(ReverbParameters parameters) => _reverb.SetParameters(parameters);
 
+    /// <summary>Pitch shifter parameters shared by both channels (channel 0 is authoritative).</summary>
+    public PitchShiftParameters PitchShift => _pitch[0].Parameters;
+
     /// <summary>Applies the same parameters to every channel.</summary>
     public void Apply(StripParameters parameters)
     {
-        for (int c = 0; c < _strips.Length; c++) _strips[c].Apply(parameters);
+        for (int c = 0; c < _strips.Length; c++)
+        {
+            _strips[c].Apply(parameters);
+            _pitch[c].SetParameters(parameters.PitchShift);
+        }
+
         _reverb.SetParameters(parameters.Reverb);
     }
 
@@ -147,10 +173,15 @@ public sealed class InterleavedMixerStrip
             for (int i = 0; i < frames; i++, index += _channels) scratch[i] = buffer[index];
 
             _strips[c].Process(scratch);
+            _pitch[c].Process(scratch);
 
             index = offset + c;
             for (int i = 0; i < frames; i++, index += _channels) buffer[index] = scratch[i];
         }
+
+        // Both channels ran against the same start position; one block advance keeps their rings
+        // in lockstep. Neutral stages ignore the position, so this costs nothing while off.
+        _pitchClock.Advance(frames);
 
         // Wet return is summed after the channels are re-interleaved: this is the strip's output,
         // and both mic send points are soft-limited downstream (recording and monitor buses), so
@@ -167,7 +198,12 @@ public sealed class InterleavedMixerStrip
     /// <summary>Clears filter and envelope state on every channel, limiter lookahead included.</summary>
     public void Reset()
     {
-        for (int c = 0; c < _strips.Length; c++) _strips[c].Reset();
+        for (int c = 0; c < _strips.Length; c++)
+        {
+            _strips[c].Reset();
+            _pitch[c].Reset();
+        }
+
         _reverb.Reset();
     }
 }

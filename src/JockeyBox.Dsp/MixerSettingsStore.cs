@@ -170,6 +170,7 @@ public sealed class MixerSettingsStore
             Limiter: dto.Limiter?.ToParameters(neutral.Limiter) ?? neutral.Limiter,
             DeEsser: dto.DeEsser?.ToParameters(neutral.DeEsser) ?? neutral.DeEsser,
             Reverb: dto.Reverb?.ToParameters(neutral.Reverb) ?? neutral.Reverb,
+            PitchShift: dto.PitchShift?.ToParameters(neutral.PitchShift) ?? neutral.PitchShift,
             MasterBypass: dto.Bypass ?? false).Clamp();
     }
 
@@ -202,6 +203,7 @@ public sealed class MixerSettingsStore
         public LimiterDto? Limiter { get; set; }
         public DeEsserDto? DeEsser { get; set; }
         public ReverbDto? Reverb { get; set; }
+        public PitchShiftDto? PitchShift { get; set; }
         public bool? Bypass { get; set; }
 
         public static DeviceDto From(StripParameters strip) => new()
@@ -220,6 +222,7 @@ public sealed class MixerSettingsStore
             Limiter = LimiterDto.From(strip.Limiter),
             DeEsser = DeEsserDto.From(strip.DeEsser),
             Reverb = ReverbDto.From(strip.Reverb),
+            PitchShift = PitchShiftDto.From(strip.PitchShift),
             Bypass = strip.MasterBypass,
         };
     }
@@ -361,5 +364,21 @@ public sealed class MixerSettingsStore
             Size = Size ?? fallback.Size,
             Wet = Wet ?? fallback.Wet,
         };
+    }
+
+    private sealed class PitchShiftDto
+    {
+        public bool? On { get; set; }
+        public double? Semitones { get; set; }
+
+        public static PitchShiftDto From(PitchShiftParameters pitch) => new()
+        {
+            On = pitch.On,
+            Semitones = pitch.Semitones,
+        };
+
+        public PitchShiftParameters ToParameters(PitchShiftParameters fallback) => new(
+            On ?? fallback.On,
+            Semitones ?? fallback.Semitones);
     }
 }

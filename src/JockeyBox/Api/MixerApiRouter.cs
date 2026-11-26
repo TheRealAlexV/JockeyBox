@@ -680,6 +680,16 @@ public sealed class MixerApiRouter
                 p => p.Reverb.Wet,
                 (p, v) => p with { Reverb = p.Reverb with { Wet = v } }),
 
+            new("pitch.on", "Pitch shift", "Pitch", ControlKind.Toggle, 0, 1, 1, 0, "",
+                p => p.PitchShift.On ? 1 : 0,
+                (p, v) => p with { PitchShift = p.PitchShift with { On = v > 0.5 } }),
+
+            new("pitch.semitones", "Semitones", "Pitch", ControlKind.Continuous,
+                PitchShiftParameters.MinSemitones, PitchShiftParameters.MaxSemitones, 0.1,
+                PitchShiftParameters.Neutral.Semitones, "",
+                p => p.PitchShift.Semitones,
+                (p, v) => p with { PitchShift = p.PitchShift with { Semitones = v } }),
+
             new("limiter.on", "Limiter", "Dynamics", ControlKind.Toggle, 0, 1, 1, 0, "",
                 p => p.Limiter.Enabled ? 1 : 0,
                 (p, v) => p with { Limiter = p.Limiter with { Enabled = v > 0.5 } }),
