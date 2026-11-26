@@ -285,8 +285,16 @@
                                          OFF on a fresh strip. The split slider is log like the filters:
                                          sibilance lives at 4-8 kHz, and a linear fader would spend most
                                          of its travel above 12 kHz where nothing is being controlled.
-                                         Its ends are the engine's own 1 kHz floor and 20 kHz ceiling. -->
-                                    <StackPanel Width="180" Margin="0,0,10,0">
+                                         Its ends are the engine's own 1 kHz floor and 20 kHz ceiling.
+
+                                         Eight values in one 180 column would tower over GATE and COMP,
+                                         so the group takes their two-column 290 shape: the four that
+                                         decide how much and where sit left, timing and the sidechain
+                                         band sit right. This panel has no dual-handle slider, so the
+                                         band is two ordinary rows whose bounds come from each other:
+                                         LO's maximum is HI's position and HI's minimum is LO's, which
+                                         stops the pair crossing without inventing a control. -->
+                                    <StackPanel Width="290" Margin="0,0,10,0">
                                         <DockPanel Tag="deess.on" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
                                             <TextBlock Text="DE-ESS" Style="{StaticResource RackGroupTitle}"/>
                                             <ToggleButton HorizontalAlignment="Left" Style="{StaticResource RackBandGate}"
@@ -294,30 +302,92 @@
                                                           IsChecked="{Binding DeEsserOn, Mode=TwoWay}"
                                                           AutomationProperties.Name="De-esser on"/>
                                         </DockPanel>
-                                        <DockPanel Style="{StaticResource RackRow}" Tag="deess.threshold" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
-                                            <TextBlock Text="THR" Style="{StaticResource RackRowLabel}"/>
-                                            <TextBlock Text="dB" Style="{StaticResource RackUnit}"/>
-                                            <TextBlock Text="{Binding DeEsserThresholdDb, StringFormat={}{0:0.0}}" Style="{StaticResource RackValue}" Width="40"/>
-                                            <Slider Width="56" Minimum="-60" Maximum="0" SmallChange="1" LargeChange="6"
-                                                    Value="{Binding DeEsserThresholdDb, Mode=TwoWay}"
-                                                    AutomationProperties.Name="De-esser threshold"/>
-                                        </DockPanel>
-                                        <DockPanel Style="{StaticResource RackRow}" Tag="deess.amount" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
-                                            <TextBlock Text="AMT" Style="{StaticResource RackRowLabel}"/>
-                                            <TextBlock Text=":1" Style="{StaticResource RackUnit}"/>
-                                            <TextBlock Text="{Binding DeEsserRatio, StringFormat={}{0:0.0}}" Style="{StaticResource RackValue}" Width="40"/>
-                                            <Slider Width="56" Minimum="1" Maximum="20" SmallChange="0.5" LargeChange="2"
-                                                    Value="{Binding DeEsserRatio, Mode=TwoWay}"
-                                                    AutomationProperties.Name="De-esser amount"/>
-                                        </DockPanel>
-                                        <DockPanel Style="{StaticResource RackRow}" Tag="deess.split" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
-                                            <TextBlock Text="SPLIT" Style="{StaticResource RackRowLabel}"/>
-                                            <TextBlock Text="Hz" Style="{StaticResource RackUnit}"/>
-                                            <TextBlock Text="{Binding DeEsserFrequencyHz, StringFormat={}{0:0}}" Style="{StaticResource RackValue}" Width="40"/>
-                                            <Slider Width="56" Minimum="0" Maximum="1" SmallChange="0.01" LargeChange="0.05"
-                                                    Value="{Binding DeEsserSplitSlider, Mode=TwoWay}"
-                                                    AutomationProperties.Name="De-esser split"/>
-                                        </DockPanel>
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto"/>
+                                                <ColumnDefinition Width="Auto"/>
+                                            </Grid.ColumnDefinitions>
+
+                                            <!-- How much and where: the four an operator reaches for first. -->
+                                            <StackPanel Grid.Column="0" Margin="0,0,8,0">
+                                                <TextBlock Text="SHAPE" Style="{StaticResource RackCaption}" Margin="0,4,0,0"/>
+                                                <DockPanel Style="{StaticResource RackRow}" Tag="deess.threshold" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
+                                                    <TextBlock Text="THR" Style="{StaticResource RackRowLabel}"/>
+                                                    <TextBlock Text="dB" Style="{StaticResource RackUnit}"/>
+                                                    <TextBlock Text="{Binding DeEsserThresholdDb, StringFormat={}{0:0.0}}" Style="{StaticResource RackValue}" Width="40"/>
+                                                    <Slider Width="56" Minimum="-60" Maximum="0" SmallChange="1" LargeChange="6"
+                                                            Value="{Binding DeEsserThresholdDb, Mode=TwoWay}"
+                                                            AutomationProperties.Name="De-esser threshold"/>
+                                                </DockPanel>
+                                                <DockPanel Style="{StaticResource RackRow}" Tag="deess.amount" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
+                                                    <TextBlock Text="AMT" Style="{StaticResource RackRowLabel}"/>
+                                                    <TextBlock Text=":1" Style="{StaticResource RackUnit}"/>
+                                                    <TextBlock Text="{Binding DeEsserRatio, StringFormat={}{0:0.0}}" Style="{StaticResource RackValue}" Width="40"/>
+                                                    <Slider Width="56" Minimum="1" Maximum="20" SmallChange="0.5" LargeChange="2"
+                                                            Value="{Binding DeEsserRatio, Mode=TwoWay}"
+                                                            AutomationProperties.Name="De-esser amount"/>
+                                                </DockPanel>
+                                                <DockPanel Style="{StaticResource RackRow}" Tag="deess.split" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
+                                                    <TextBlock Text="SPLIT" Style="{StaticResource RackRowLabel}"/>
+                                                    <TextBlock Text="Hz" Style="{StaticResource RackUnit}"/>
+                                                    <TextBlock Text="{Binding DeEsserFrequencyHz, StringFormat={}{0:0}}" Style="{StaticResource RackValue}" Width="40"/>
+                                                    <Slider Width="56" Minimum="0" Maximum="1" SmallChange="0.01" LargeChange="0.05"
+                                                            Value="{Binding DeEsserSplitSlider, Mode=TwoWay}"
+                                                            AutomationProperties.Name="De-esser split"/>
+                                                </DockPanel>
+                                                <DockPanel Style="{StaticResource RackRow}" Tag="deess.maxred" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
+                                                    <TextBlock Text="DEPTH" Style="{StaticResource RackRowLabel}"/>
+                                                    <TextBlock Text="dB" Style="{StaticResource RackUnit}"/>
+                                                    <TextBlock Text="{Binding DeEsserMaxReductionDb, StringFormat={}{0:0.0}}" Style="{StaticResource RackValue}" Width="40"/>
+                                                    <Slider Width="56" Minimum="0" Maximum="60" SmallChange="0.5" LargeChange="2"
+                                                            Value="{Binding DeEsserMaxReductionDb, Mode=TwoWay}"
+                                                            AutomationProperties.Name="De-esser depth"/>
+                                                </DockPanel>
+                                            </StackPanel>
+
+                                            <!-- How fast it moves, and which band it listens to. The band's
+                                                 two bounds are each slider's limit, so the pair cannot cross. -->
+                                            <StackPanel Grid.Column="1">
+                                                <TextBlock Text="TIMING" Style="{StaticResource RackCaption}" Margin="0,4,0,0"/>
+                                                <DockPanel Style="{StaticResource RackRow}" Tag="deess.attack" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
+                                                    <TextBlock Text="ATT" Style="{StaticResource RackRowLabel}"/>
+                                                    <TextBlock Text="ms" Style="{StaticResource RackUnit}"/>
+                                                    <TextBlock Text="{Binding DeEsserAttackMs, StringFormat={}{0:0.##}}" Style="{StaticResource RackValue}"/>
+                                                    <Slider Width="56" Minimum="0" Maximum="1" SmallChange="0.01" LargeChange="0.05"
+                                                            Value="{Binding DeEsserAttackSlider, Mode=TwoWay}"
+                                                            AutomationProperties.Name="De-esser attack"/>
+                                                </DockPanel>
+                                                <DockPanel Style="{StaticResource RackRow}" Tag="deess.release" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
+                                                    <TextBlock Text="REL" Style="{StaticResource RackRowLabel}"/>
+                                                    <TextBlock Text="ms" Style="{StaticResource RackUnit}"/>
+                                                    <TextBlock Text="{Binding DeEsserReleaseMs, StringFormat={}{0:0.##}}" Style="{StaticResource RackValue}"/>
+                                                    <Slider Width="56" Minimum="0" Maximum="1" SmallChange="0.01" LargeChange="0.05"
+                                                            Value="{Binding DeEsserReleaseSlider, Mode=TwoWay}"
+                                                            AutomationProperties.Name="De-esser release"/>
+                                                </DockPanel>
+                                                <TextBlock Text="BAND" Style="{StaticResource RackCaption}" Margin="0,6,0,0"/>
+                                                <DockPanel Style="{StaticResource RackRow}" Tag="deess.sidechain.low" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
+                                                    <TextBlock Text="LO" Style="{StaticResource RackRowLabel}"/>
+                                                    <TextBlock Text="Hz" Style="{StaticResource RackUnit}"/>
+                                                    <TextBlock Text="{Binding DeEsserSidechainLowHz, StringFormat={}{0:0}}" Style="{StaticResource RackValue}"/>
+                                                    <Slider Width="56" Minimum="0"
+                                                            Maximum="{Binding DeEsserSidechainLowSliderMax, Mode=OneWay}"
+                                                            SmallChange="0.01" LargeChange="0.05"
+                                                            Value="{Binding DeEsserSidechainLowSlider, Mode=TwoWay}"
+                                                            AutomationProperties.Name="De-esser sidechain low"/>
+                                                </DockPanel>
+                                                <DockPanel Style="{StaticResource RackRow}" Tag="deess.sidechain.high" PreviewMouseLeftButtonDown="OnStripValueDoubleClick">
+                                                    <TextBlock Text="HI" Style="{StaticResource RackRowLabel}"/>
+                                                    <TextBlock Text="Hz" Style="{StaticResource RackUnit}"/>
+                                                    <TextBlock Text="{Binding DeEsserSidechainHighHz, StringFormat={}{0:0}}" Style="{StaticResource RackValue}"/>
+                                                    <Slider Width="56"
+                                                            Minimum="{Binding DeEsserSidechainHighSliderMin, Mode=OneWay}"
+                                                            Maximum="1" SmallChange="0.01" LargeChange="0.05"
+                                                            Value="{Binding DeEsserSidechainHighSlider, Mode=TwoWay}"
+                                                            AutomationProperties.Name="De-esser sidechain high"/>
+                                                </DockPanel>
+                                            </StackPanel>
+                                        </Grid>
                                     </StackPanel>
 
                                     <!-- Limiter: the one stage that costs latency, and the CHAIN column

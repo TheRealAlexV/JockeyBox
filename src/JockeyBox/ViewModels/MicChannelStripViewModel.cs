@@ -158,6 +158,49 @@ public sealed partial class MicChannelStripViewModel : ObservableObject
         set => DeEsserFrequencyHz = ValueOf(value, 1000, 20000);
     }
 
+    public double DeEsserAttackSlider
+    {
+        get => PositionOf(_p.DeEsser.AttackMs, 0.01, 1000);
+        set => DeEsserAttackMs = ValueOf(value, 0.01, 1000);
+    }
+
+    public double DeEsserReleaseSlider
+    {
+        get => PositionOf(_p.DeEsser.ReleaseMs, 0.01, 5000);
+        set => DeEsserReleaseMs = ValueOf(value, 0.01, 5000);
+    }
+
+    /// <summary>
+    /// The sidechain band, as two sliders that cannot cross. Each slider's bound is derived
+    /// from the other's current value, so WPF's own coercion stops an overlap before it is
+    /// written; the setter clamps once more for the drag that lands exactly on the bound.
+    /// The panel has no dual-handle slider, and adding one would mean a new control template,
+    /// so the pair is two ordinary RackRows with a moving bound.
+    /// </summary>
+    public double DeEsserSidechainLowSlider
+    {
+        get => PositionOf(_p.DeEsser.SidechainLowHz, 20, 20000);
+        set
+        {
+            DeEsserSidechainLowHz = Math.Min(ValueOf(value, 20, 20000), _p.DeEsser.SidechainHighHz);
+            OnPropertyChanged(nameof(DeEsserSidechainHighSliderMin));
+        }
+    }
+
+    public double DeEsserSidechainLowSliderMax => PositionOf(_p.DeEsser.SidechainHighHz, 20, 20000);
+
+    public double DeEsserSidechainHighSlider
+    {
+        get => PositionOf(_p.DeEsser.SidechainHighHz, 20, 24000);
+        set
+        {
+            DeEsserSidechainHighHz = Math.Max(ValueOf(value, 20, 24000), _p.DeEsser.SidechainLowHz);
+            OnPropertyChanged(nameof(DeEsserSidechainLowSliderMax));
+        }
+    }
+
+    public double DeEsserSidechainHighSliderMin => PositionOf(_p.DeEsser.SidechainLowHz, 20, 24000);
+
     private static double PositionOf(double value, double min, double max) =>
         Math.Log(Math.Clamp(value, min, max) / min) / Math.Log(max / min);
 
@@ -257,6 +300,11 @@ public sealed partial class MicChannelStripViewModel : ObservableObject
             case "deess.threshold": DeEsserThresholdDb = DeEsserParameters.Neutral.ThresholdDb; break;
             case "deess.amount": DeEsserRatio = DeEsserParameters.Neutral.Ratio; break;
             case "deess.split": DeEsserFrequencyHz = DeEsserParameters.Neutral.FrequencyHz; break;
+            case "deess.attack": DeEsserAttackMs = DeEsserParameters.Neutral.AttackMs; break;
+            case "deess.release": DeEsserReleaseMs = DeEsserParameters.Neutral.ReleaseMs; break;
+            case "deess.maxred": DeEsserMaxReductionDb = DeEsserParameters.Neutral.MaxReductionDb; break;
+            case "deess.sidechain.low": DeEsserSidechainLowHz = DeEsserParameters.Neutral.SidechainLowHz; break;
+            case "deess.sidechain.high": DeEsserSidechainHighHz = DeEsserParameters.Neutral.SidechainHighHz; break;
 
             case "limiter.ceiling": LimiterCeilingDb = new LimiterParameters(Enabled: false).CeilingDb; break;
             case "limiter.release": LimiterReleaseMs = new LimiterParameters(Enabled: false).ReleaseMs; break;

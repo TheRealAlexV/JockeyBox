@@ -644,6 +644,26 @@ public sealed class MixerApiRouter
                 p => p.DeEsser.FrequencyHz,
                 (p, v) => p with { DeEsser = p.DeEsser with { FrequencyHz = v } }),
 
+            new("deess.attack", "Attack", "DeEsser", ControlKind.Continuous, 0.01, 1000, 0.01, 0.5, "ms",
+                p => p.DeEsser.AttackMs,
+                (p, v) => p with { DeEsser = p.DeEsser with { AttackMs = v } }),
+
+            new("deess.release", "Release", "DeEsser", ControlKind.Continuous, 0.01, 5000, 0.1, 50, "ms",
+                p => p.DeEsser.ReleaseMs,
+                (p, v) => p with { DeEsser = p.DeEsser with { ReleaseMs = v } }),
+
+            new("deess.maxred", "Depth", "DeEsser", ControlKind.Continuous, 0, 60, 0.5, 12, "dB",
+                p => p.DeEsser.MaxReductionDb,
+                (p, v) => p with { DeEsser = p.DeEsser with { MaxReductionDb = v } }),
+
+            new("deess.sidechain.low", "Sidechain low", "DeEsser", ControlKind.Continuous, 20, 20000, 10, 4500, "Hz",
+                p => p.DeEsser.SidechainLowHz,
+                (p, v) => p with { DeEsser = p.DeEsser with { SidechainLowHz = v } }),
+
+            new("deess.sidechain.high", "Sidechain high", "DeEsser", ControlKind.Continuous, 20, 24000, 10, 9000, "Hz",
+                p => p.DeEsser.SidechainHighHz,
+                (p, v) => p with { DeEsser = p.DeEsser with { SidechainHighHz = v } }),
+
             new("rev.on", "Reverb", "Reverb", ControlKind.Toggle, 0, 1, 1, 0, "",
                 p => p.Reverb.On ? 1 : 0,
                 (p, v) => p with { Reverb = p.Reverb with { On = v > 0.5 } }),
