@@ -7,4 +7,13 @@
     <IsPackable>false</IsPackable>
   </PropertyGroup>
 
+  <!-- Windows x64 RNNoise denoiser. Copied beside JockeyBox.Dsp.dll so the app and
+       tests/JockeyBox.Dsp.Tests resolve it without a DllImportResolver. The copy also
+       lands in Linux output, where it is inert: nothing loads it there. -->
+  <ItemGroup>
+    <None Include="../../third_party/rnnoise/win-x64/rnnoise.dll"
+          Link="rnnoise.dll"
+          CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>
